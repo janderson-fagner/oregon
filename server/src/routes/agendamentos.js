@@ -67,6 +67,7 @@ router.get("/agendamentos", async (req, res) => {
       dup = false,
     } = req.query;
     const user = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!user.role || user.abilitys.length === 0) {
       return res.status(400).json({ message: "Sem permissão!" });
@@ -79,8 +80,8 @@ router.get("/agendamentos", async (req, res) => {
       return res.status(400).json({ message: "Sem permissão!" });
     }
 
-    let query = "SELECT * FROM AGENDAMENTO WHERE age_ativo = 1";
-    let values = [];
+    let query = "SELECT * FROM AGENDAMENTO WHERE age_ativo = 1 AND empresa_id = ?";
+    let values = [empresa_id];
 
     if (fun_id && can("view-all", "agendamento", user.abilitys)) {
       query += " AND fun_id = ?";
@@ -244,46 +245,51 @@ router.get("/agendamentos", async (req, res) => {
 router.get("/agendamento/single/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
-    let query = "SELECT * FROM AGENDAMENTO WHERE age_id = ?";
-    let values = [id];
+    let query = "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?";
+    let values = [id, empresa_id];
 
     const agendamentos = await dbQuery(query, values);
 
     for (let agendamento of agendamentos) {
       agendamento.cliente = await dbQuery(
-        "SELECT * FROM CLIENTES WHERE cli_Id = ?",
-        [agendamento.cli_id]
+        "SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?",
+        [agendamento.cli_id, empresa_id]
       );
       agendamento.funcionario = await dbQuery(
-        "SELECT * FROM User WHERE id = ?",
-        [agendamento.fun_id]
+        "SELECT * FROM User WHERE id = ? AND empresa_id = ?",
+        [agendamento.fun_id, empresa_id]
       );
 
       if (agendamento.age_type == "bloqueio") {
         let bkColor = await dbQuery(
-          'SELECT * FROM Options WHERE type = "cor_bloqueio"'
+          'SELECT * FROM Options WHERE type = "cor_bloqueio" AND empresa_id = ?',
+          [empresa_id]
         );
 
         agendamento.bkColor = bkColor.length > 0 ? bkColor[0].value : "#000000";
       } else if (agendamento.ast_id === 3) {
         //Atendido
         let bkColor = await dbQuery(
-          'SELECT * FROM Options WHERE type = "cor_atendido"'
+          'SELECT * FROM Options WHERE type = "cor_atendido" AND empresa_id = ?',
+          [empresa_id]
         );
 
         agendamento.bkColor = bkColor.length > 0 ? bkColor[0].value : "#A8A8A8";
       } else if (agendamento.ast_id === 6) {
         //Cancelado
         let bkColor = await dbQuery(
-          'SELECT * FROM Options WHERE type = "cor_cancelado"'
+          'SELECT * FROM Options WHERE type = "cor_cancelado" AND empresa_id = ?',
+          [empresa_id]
         );
 
         agendamento.bkColor = bkColor.length > 0 ? bkColor[0].value : "#AA0000";
       } else if (agendamento.ast_id === 7) {
         //Remarcado
         let bkColor = await dbQuery(
-          'SELECT * FROM Options WHERE type = "cor_remarcado"'
+          'SELECT * FROM Options WHERE type = "cor_remarcado" AND empresa_id = ?',
+          [empresa_id]
         );
 
         agendamento.bkColor = bkColor.length > 0 ? bkColor[0].value : "#FF4500";
@@ -304,10 +310,11 @@ router.get("/agendamento/single/:id", async (req, res) => {
 router.get("/agendamento/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     const agendamentos = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [id, empresa_id]
     );
 
     if (agendamentos.length === 0) {
@@ -317,7 +324,8 @@ router.get("/agendamento/:id", async (req, res) => {
     const agendamento = agendamentos[0];
 
     const funcionarios = await dbQuery(
-      "SELECT * FROM User WHERE ativo = 1 AND podeAgendamento = 1"
+      "SELECT * FROM User WHERE ativo = 1 AND podeAgendamento = 1 AND empresa_id = ?",
+      [empresa_id]
     );
 
     agendamento.funcionarios = funcionarios;
@@ -341,6 +349,7 @@ router.post(
         return res.status(403).json({ message: "Sem permissão" });
       }
 
+      const empresa_id = req.user.empresa_id;
       let inseridas = [];
 
       for (let file of req.files) {
@@ -348,8 +357,8 @@ router.post(
         let url = `/uploads/fotos-agendamento/${age_id}/${filename}`;
 
         let img_inserida = await dbQuery(
-          "INSERT INTO IMAGENS_AGE (age_id, url, filename) VALUES (?, ?, ?)",
-          [age_id, url, filename]
+          "INSERT INTO IMAGENS_AGE (age_id, url, filename, empresa_id) VALUES (?, ?, ?, ?)",
+          [age_id, url, filename, empresa_id]
         );
 
         inseridas.push({
@@ -360,9 +369,10 @@ router.post(
         });
       }
 
-      await dbQuery("UPDATE AGENDAMENTO SET updated_by = ? WHERE age_id = ?", [
+      await dbQuery("UPDATE AGENDAMENTO SET updated_by = ? WHERE age_id = ? AND empresa_id = ?", [
         userData.fullName,
         age_id,
+        empresa_id,
       ]);
 
       setHistoricoAgendamento(age_id, {
@@ -389,9 +399,10 @@ router.delete("/remove-image/:img_id", async (req, res) => {
   try {
     const { img_id } = req.params;
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
-    const imagem = await dbQuery("SELECT * FROM IMAGENS_AGE WHERE img_id = ?", [
-      img_id,
+    const imagem = await dbQuery("SELECT * FROM IMAGENS_AGE WHERE img_id = ? AND empresa_id = ?", [
+      img_id, empresa_id,
     ]);
     if (imagem.length === 0) {
       return res.status(404).json({ message: "Imagem não encontrada" });
@@ -408,7 +419,7 @@ router.delete("/remove-image/:img_id", async (req, res) => {
       )
     );
 
-    await dbQuery("DELETE FROM IMAGENS_AGE WHERE img_id = ?", [img_id]);
+    await dbQuery("DELETE FROM IMAGENS_AGE WHERE img_id = ? AND empresa_id = ?", [img_id, empresa_id]);
 
     if (userData && userData.fullName) {
       setHistoricoAgendamento(age_id, {
@@ -431,6 +442,7 @@ router.get("/funcionarios", async (req, res) => {
   const { ativo = 1, fun_id = null, all = false } = req.query;
 
   const userData = req.user;
+  const empresa_id = req.user.empresa_id;
 
   if (!userData || !userData.id || !userData.fullName) {
     return res.status(403).json({ message: "Sem permissão" });
@@ -441,8 +453,8 @@ router.get("/funcionarios", async (req, res) => {
   }
 
   try {
-    let query = "SELECT * FROM User WHERE 1 = 1";
-    let params = [];
+    let query = "SELECT * FROM User WHERE empresa_id = ?";
+    let params = [empresa_id];
 
     if (ativo) {
       query += " AND ativo = ?";
@@ -471,6 +483,7 @@ router.get("/funcionarios", async (req, res) => {
 
 router.get("/funcionariosCalendar", async (req, res) => {
   const { data } = req.query;
+  const empresa_id = req.user.empresa_id;
 
   // Verificar se o parâmetro data foi fornecido
   if (!data) {
@@ -480,8 +493,8 @@ router.get("/funcionariosCalendar", async (req, res) => {
   try {
     const userId = data;
     const funcionarios = await dbQuery(
-      "SELECT * FROM User WHERE id = ? AND ativo = 1 AND podeAgendamento = 1",
-      [userId]
+      "SELECT * FROM User WHERE id = ? AND ativo = 1 AND podeAgendamento = 1 AND empresa_id = ?",
+      [userId, empresa_id]
     );
 
     res.status(200).json(funcionarios);
@@ -494,6 +507,7 @@ router.get("/funcionariosCalendar", async (req, res) => {
 router.post("/funcionariosOrder", async (req, res) => {
   try {
     const { funcionarios } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     if (!funcionarios || !Array.isArray(funcionarios)) {
       return res.status(400).json({ message: "Funcionários não encontrados" });
@@ -504,9 +518,10 @@ router.post("/funcionariosOrder", async (req, res) => {
     }
 
     for (let funcionario of funcionarios) {
-      await dbQuery("UPDATE User SET ordemCalendar = ? WHERE id = ?", [
+      await dbQuery("UPDATE User SET ordemCalendar = ? WHERE id = ? AND empresa_id = ?", [
         funcionario.ordemCalendar,
         funcionario.id,
+        empresa_id,
       ]);
     }
 
@@ -521,14 +536,15 @@ router.post("/setDiscount", async (req, res) => {
   try {
     const { age_id, discount } = req.body;
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
     }
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET age_desconto = ?, updated_by = ? WHERE age_id = ?",
-      [discount, userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET age_desconto = ?, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [discount, userData.fullName, age_id, empresa_id]
     );
 
     setHistoricoAgendamento(age_id, {
@@ -551,10 +567,12 @@ router.post("/setDiscount", async (req, res) => {
 router.post("/setComissao", async (req, res) => {
   try {
     const { age_id, comissao } = req.body;
+    const empresa_id = req.user.empresa_id;
 
-    await dbQuery("UPDATE AGENDAMENTO SET age_comissao = ? WHERE age_id = ?", [
+    await dbQuery("UPDATE AGENDAMENTO SET age_comissao = ? WHERE age_id = ? AND empresa_id = ?", [
       comissao,
       age_id,
+      empresa_id,
     ]);
 
     setHistoricoAgendamento(age_id, {
@@ -579,21 +597,22 @@ router.post("/changeStatus", async (req, res) => {
     const { age_id, status } = req.body;
 
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
     }
 
     let ast_Query = await dbQuery(
-      "SELECT * FROM AGENDAMENTO_STATUS WHERE ast_descricao = ?",
-      [status]
+      "SELECT * FROM AGENDAMENTO_STATUS WHERE ast_descricao = ? AND empresa_id = ?",
+      [status, empresa_id]
     );
 
     let ast_id = ast_Query.length > 0 ? ast_Query[0].ast_id : 1;
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET ast_id = ?, updated_by = ? WHERE age_id = ?",
-      [ast_id, userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET ast_id = ?, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [ast_id, userData.fullName, age_id, empresa_id]
     );
 
     setHistoricoAgendamento(age_id, {
@@ -607,8 +626,8 @@ router.post("/changeStatus", async (req, res) => {
     // Disparar fluxos de alteração de status
     try {
       const agendamentoAtualizado = await getAgendamentos(
-        "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-        [age_id]
+        "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+        [age_id, empresa_id]
       );
       if (agendamentoAtualizado && agendamentoAtualizado.length > 0) {
         await triggerAgendamentoFlows("status_agendamento", {
@@ -631,6 +650,7 @@ router.post("/changeStatus", async (req, res) => {
 router.post("/remarcar", async (req, res) => {
   try {
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
     const {
       age_id,
       age_data,
@@ -648,8 +668,8 @@ router.post("/remarcar", async (req, res) => {
     }
 
     let agendamento = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamento.length === 0) {
@@ -722,6 +742,7 @@ router.post("/remarcar", async (req, res) => {
       created_at: createdAt,
       created_by: userData.fullName,
       updated_by: userData.fullName,
+      empresa_id: empresa_id,
     };
 
     // console.log(objCreate);
@@ -760,19 +781,20 @@ router.post("/remarcar", async (req, res) => {
               ? JSON.stringify(servico.ser_data)
               : servico.ser_data
             : null,
+          empresa_id: empresa_id,
         };
 
         await dbQuery("INSERT INTO AXS SET ?", objAx);
       }
     }
 
-    let comissao = await dbQuery("SELECT * FROM COMISSOES WHERE age_id = ?", [
-      age_id,
+    let comissao = await dbQuery("SELECT * FROM COMISSOES WHERE age_id = ? AND empresa_id = ?", [
+      age_id, empresa_id,
     ]);
 
     if (comissao.length > 0) {
       let query =
-        "INSERT INTO COMISSOES (age_id, com_valor, com_paga, com_paga_data, fun_id, created_at) VALUES (?, ?, ?, ?, ?, ?)";
+        "INSERT INTO COMISSOES (age_id, com_valor, com_paga, com_paga_data, fun_id, created_at, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
       let values = [
         newAgendamento.insertId,
         comissao[0].com_valor,
@@ -780,13 +802,14 @@ router.post("/remarcar", async (req, res) => {
         comissao[0].com_paga_data,
         newAge_fun_id,
         createdAt,
+        empresa_id,
       ];
 
       await dbQuery(query, values);
     }
 
-    let pagamento = await dbQuery("SELECT * FROM PAGAMENTO WHERE age_id = ?", [
-      age_id,
+    let pagamento = await dbQuery("SELECT * FROM PAGAMENTO WHERE age_id = ? AND empresa_id = ?", [
+      age_id, empresa_id,
     ]);
 
     if (pagamento.length > 0) {
@@ -802,34 +825,34 @@ router.post("/remarcar", async (req, res) => {
       }
 
       let query =
-        "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_data) VALUES (?, ?, ?)";
-      let values = [newAgendamento.insertId, valor, createdAt];
+        "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_data, empresa_id) VALUES (?, ?, ?, ?)";
+      let values = [newAgendamento.insertId, valor, createdAt, empresa_id];
 
       await dbQuery(query, values);
     }
 
-    let imagens = await dbQuery("SELECT * FROM IMAGENS_AGE WHERE age_id = ?", [
-      age_id,
+    let imagens = await dbQuery("SELECT * FROM IMAGENS_AGE WHERE age_id = ? AND empresa_id = ?", [
+      age_id, empresa_id,
     ]);
 
     if (imagens.length > 0) {
       for (let imagem of imagens) {
         let query =
-          "INSERT INTO IMAGENS_AGE (age_id, url, filename) VALUES (?, ?, ?)";
-        let values = [newAgendamento.insertId, imagem.url, imagem.filename];
+          "INSERT INTO IMAGENS_AGE (age_id, url, filename, empresa_id) VALUES (?, ?, ?, ?)";
+        let values = [newAgendamento.insertId, imagem.url, imagem.filename, empresa_id];
 
         await dbQuery(query, values);
       }
     }
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET ast_id = 7, updated_by = ? WHERE age_id = ?",
-      [userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET ast_id = 7, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [userData.fullName, age_id, empresa_id]
     );
 
     const agendamentoInsertQuery = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [newAgendamento.insertId]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [newAgendamento.insertId, empresa_id]
     );
 
     if (agendamentoInsertQuery.length === 0) {
@@ -839,7 +862,8 @@ router.post("/remarcar", async (req, res) => {
     const agendamentoInsert = agendamentoInsertQuery[0];
 
     const funcionarios = await dbQuery(
-      "SELECT * FROM User WHERE ativo = 1 AND podeAgendamento = 1"
+      "SELECT * FROM User WHERE ativo = 1 AND podeAgendamento = 1 AND empresa_id = ?",
+      [empresa_id]
     );
 
     agendamentoInsert.funcionarios = funcionarios;
@@ -875,13 +899,14 @@ router.post("/changeFuncionario", async (req, res) => {
   try {
     const { age_id, fun_id } = req.body;
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
     }
 
-    const funcionarioQuery = await dbQuery("SELECT * FROM User WHERE id = ?", [
-      fun_id,
+    const funcionarioQuery = await dbQuery("SELECT * FROM User WHERE id = ? AND empresa_id = ?", [
+      fun_id, empresa_id,
     ]);
     const funcionarioNome =
       funcionarioQuery.length > 0
@@ -889,8 +914,8 @@ router.post("/changeFuncionario", async (req, res) => {
         : "Funcionário";
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET fun_id = ?, updated_by = ? WHERE age_id = ?",
-      [fun_id, userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET fun_id = ?, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [fun_id, userData.fullName, age_id, empresa_id]
     );
 
     setHistoricoAgendamento(age_id, {
@@ -921,14 +946,15 @@ router.post("/changeHorarios", async (req, res) => {
     } = req.body;
 
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
     }
 
     let agendamento = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamento.length === 0) {
@@ -1005,8 +1031,9 @@ router.post("/changeHorarios", async (req, res) => {
       }
     }
 
-    query += " WHERE age_id = ?";
+    query += " WHERE age_id = ? AND empresa_id = ?";
     values.push(age_id);
+    values.push(empresa_id);
 
     await dbQuery(query, values);
 
@@ -1030,6 +1057,7 @@ router.post("/create", async (req, res) => {
     const { agendamentoData } = req.body;
 
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
@@ -1086,8 +1114,8 @@ router.post("/create", async (req, res) => {
 
     if (age_endereco && endereco) {
       const enderecoExistQuery = await dbQuery(
-        "SELECT * FROM ENDERECO WHERE end_id = ?",
-        [age_endereco]
+        "SELECT * FROM ENDERECO WHERE end_id = ? AND empresa_id = ?",
+        [age_endereco, empresa_id]
       );
 
       if (enderecoExistQuery.length > 0) {
@@ -1116,6 +1144,7 @@ router.post("/create", async (req, res) => {
         end_cidade: endereco.cidade,
         end_estado: endereco.estado,
         cli_id: cli_id,
+        empresa_id: empresa_id,
       };
 
       let newEnd = await dbQuery("INSERT INTO ENDERECO SET ?", objEnd);
@@ -1145,6 +1174,7 @@ router.post("/create", async (req, res) => {
       created_at: createdAt,
       updated_by: userData.fullName,
       created_by: userData.fullName,
+      empresa_id: empresa_id,
     };
 
     let agendamento = await dbQuery("INSERT INTO AGENDAMENTO SET ?", objCreate);
@@ -1162,8 +1192,8 @@ router.post("/create", async (req, res) => {
     // Disparar fluxos de novo agendamento
     try {
       const agendamentoCompleto = await getAgendamentos(
-        "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-        [agendamento.insertId]
+        "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+        [agendamento.insertId, empresa_id]
       );
       if (agendamentoCompleto && agendamentoCompleto.length > 0) {
         await triggerAgendamentoFlows("novo_agendamento", {
@@ -1185,6 +1215,7 @@ router.post("/update", async (req, res) => {
   try {
     const { data } = req.body;
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
@@ -1210,8 +1241,8 @@ router.post("/update", async (req, res) => {
 
     // Buscar agendamento atual para comparar alterações
     const agendamentoAtualQuery = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
     const agendamentoAtual =
       agendamentoAtualQuery.length > 0 ? agendamentoAtualQuery[0] : null;
@@ -1223,8 +1254,8 @@ router.post("/update", async (req, res) => {
 
     if (age_endereco) {
       const enderecoExistQuery = await dbQuery(
-        "SELECT * FROM ENDERECO WHERE end_id = ?",
-        [age_endereco]
+        "SELECT * FROM ENDERECO WHERE end_id = ? AND empresa_id = ?",
+        [age_endereco, empresa_id]
       );
 
       if (enderecoExistQuery.length > 0) {
@@ -1253,13 +1284,14 @@ router.post("/update", async (req, res) => {
         end_cidade: endereco.end_cidade,
         end_estado: endereco.end_estado,
         cli_id: cli_id,
+        empresa_id: empresa_id,
       };
 
       let newEnd = await dbQuery("INSERT INTO ENDERECO SET ?", objEnd);
       age_endereco = newEnd.insertId;
     }
 
-    await dbQuery("DELETE FROM AXS WHERE age_id = ?", [age_id]);
+    await dbQuery("DELETE FROM AXS WHERE age_id = ? AND empresa_id = ?", [age_id, empresa_id]);
 
     let valor = 0;
     if (servicos.length > 0) {
@@ -1270,15 +1302,15 @@ router.post("/update", async (req, res) => {
 
         if (servico.isSub || servico.ser_sub_id) {
           let servicoQuery = await dbQuery(
-            "SELECT * FROM SERVICOS_SUBS WHERE ser_id = ?",
-            [servico.ser_sub_id]
+            "SELECT * FROM SERVICOS_SUBS WHERE ser_id = ? AND empresa_id = ?",
+            [servico.ser_sub_id, empresa_id]
           );
 
           servicoDB = servicoQuery.length > 0 ? servicoQuery[0] : null;
         } else {
           let servicoQuery = await dbQuery(
-            "SELECT * FROM SERVICOS_NEW WHERE ser_id = ?",
-            [servico.ser_id]
+            "SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND empresa_id = ?",
+            [servico.ser_id, empresa_id]
           );
 
           servicoDB = servicoQuery.length > 0 ? servicoQuery[0] : null;
@@ -1319,6 +1351,7 @@ router.post("/update", async (req, res) => {
               metragem_total: null,
             }
           ),
+          empresa_id: empresa_id,
         };
 
         await dbQuery("INSERT INTO AXS SET ?", objAXS);
@@ -1347,9 +1380,10 @@ router.post("/update", async (req, res) => {
       updated_by: userData.fullName,
     };
 
-    await dbQuery("UPDATE AGENDAMENTO SET ? WHERE age_id = ?", [
+    await dbQuery("UPDATE AGENDAMENTO SET ? WHERE age_id = ? AND empresa_id = ?", [
       objUpdate,
       age_id,
+      empresa_id,
     ]);
 
     // Mapear alterações específicas
@@ -1525,6 +1559,7 @@ router.post("/setAtendido", async (req, res) => {
     const { data } = req.body;
 
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
@@ -1551,13 +1586,13 @@ router.post("/setAtendido", async (req, res) => {
     }
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET ast_id = 3, atendido_date = ?, updated_by = ? WHERE age_id = ?",
-      [moment().format("YYYY-MM-DD"), userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET ast_id = 3, atendido_date = ?, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [moment().format("YYYY-MM-DD"), userData.fullName, age_id, empresa_id]
     );
 
     let agendamento = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     let pagamento = null;
@@ -1591,6 +1626,7 @@ router.post("/desetAtendido", async (req, res) => {
     const { age_id } = req.body;
 
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
 
     if (!userData || !userData.id || !userData.fullName) {
       return res.status(403).json({ message: "Sem permissão" });
@@ -1605,12 +1641,12 @@ router.post("/desetAtendido", async (req, res) => {
     }
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET ast_id = 2, atendido_date = NULL, updated_by = ? WHERE age_id = ?",
-      [userData.fullName, age_id]
+      "UPDATE AGENDAMENTO SET ast_id = 2, atendido_date = NULL, updated_by = ? WHERE age_id = ? AND empresa_id = ?",
+      [userData.fullName, age_id, empresa_id]
     );
 
     //Excluir todos os pagamentos do agendamento
-    await dbQuery("DELETE FROM PAGAMENTO WHERE age_id = ?", [age_id]);
+    await dbQuery("DELETE FROM PAGAMENTO WHERE age_id = ? AND empresa_id = ?", [age_id, empresa_id]);
 
     res.status(200).json({ message: "Agendamento desatendido com sucesso" });
   } catch (error) {
@@ -1621,10 +1657,11 @@ router.post("/desetAtendido", async (req, res) => {
 
 router.post("/getPagamentos", async (req, res) => {
   const { age_id } = req.body;
+  const empresa_id = req.user.empresa_id;
 
   try {
-    let pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ?`, [
-      age_id,
+    let pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND empresa_id = ?`, [
+      age_id, empresa_id,
     ]);
 
     if (!pagamentos.length) {
@@ -1654,7 +1691,8 @@ router.post("/getPagamentos", async (req, res) => {
           ? await dbQuery(
               `SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id IN (${pags
                 .map((pag) => pag.fpg_id)
-                .join(",")})`
+                .join(",")}) AND empresa_id = ?`,
+              [empresa_id]
             )
           : [];
       pagamento.fpg_name =
@@ -1671,8 +1709,8 @@ router.post("/getPagamentos", async (req, res) => {
     }
 
     let agendamento = await getAgendamentos(
-      `SELECT * FROM AGENDAMENTO WHERE age_id = ?`,
-      [age_id]
+      `SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?`,
+      [age_id, empresa_id]
     );
 
     //console.log('agendamento valor: ', agendamento[0].age_valor);
@@ -1706,10 +1744,11 @@ router.post("/addPagamento", async (req, res) => {
     }
 
     const { age_id } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     let agendamento = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamento.length === 0) {
@@ -1719,7 +1758,8 @@ router.post("/addPagamento", async (req, res) => {
     let valor = agendamento[0].age_valor - (agendamento[0].age_desconto ?? 0);
 
     let pagamentos = await dbQuery(
-      `SELECT * FROM PAGAMENTO WHERE age_id = ${age_id}`
+      `SELECT * FROM PAGAMENTO WHERE age_id = ? AND empresa_id = ?`,
+      [age_id, empresa_id]
     );
 
     if (pagamentos.length > 0) {
@@ -1757,7 +1797,7 @@ router.post("/addPagamento", async (req, res) => {
       }
     }
 
-    let formasPagamento = await dbQuery("SELECT * FROM FORMAS_PAGAMENTO");
+    let formasPagamento = await dbQuery("SELECT * FROM FORMAS_PAGAMENTO WHERE empresa_id = ?", [empresa_id]);
     let fpg_id =
       formasPagamento.find((f) => f.fpg_descricao.toLowerCase() === "dinheiro")
         ?.fpg_id ??
@@ -1772,8 +1812,8 @@ router.post("/addPagamento", async (req, res) => {
     ];
 
     let pagamento = await dbQuery(
-      "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json) VALUES (?, ?, ?)",
-      [age_id, valor, JSON.stringify(objF)]
+      "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json, empresa_id) VALUES (?, ?, ?, ?)",
+      [age_id, valor, JSON.stringify(objF), empresa_id]
     );
 
     res.status(200).json(pagamento.insertId);
@@ -1786,6 +1826,7 @@ router.post("/addPagamento", async (req, res) => {
 router.post("/getCertificate", async (req, res) => {
   try {
     const { age_id } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     if (!age_id) {
       return res
@@ -1794,8 +1835,8 @@ router.post("/getCertificate", async (req, res) => {
     }
 
     const agendamentoQuery = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamentoQuery.length === 0) {
@@ -1884,8 +1925,8 @@ router.post("/getCertificate", async (req, res) => {
 
     //Atualizar no banco que o certificado foi gerado
     await dbQuery(
-      "UPDATE AGENDAMENTO SET age_certificado = ? WHERE age_id = ?",
-      [url, age_id]
+      "UPDATE AGENDAMENTO SET age_certificado = ? WHERE age_id = ? AND empresa_id = ?",
+      [url, age_id, empresa_id]
     );
 
     res.status(200).json(url);
@@ -1898,10 +1939,11 @@ router.post("/getCertificate", async (req, res) => {
 router.post("/getRecibo", async (req, res) => {
   try {
     const { age_id } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     const agendamentoQuery = await getAgendamentos(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamentoQuery.length === 0) {
@@ -1950,9 +1992,10 @@ router.post("/getRecibo", async (req, res) => {
     let url = `/download/docs/recibos/${agendamento.age_id}/${recibo.fileName}`;
 
     //Atualizar no banco que o recibo foi gerado
-    await dbQuery("UPDATE AGENDAMENTO SET age_recibo = ? WHERE age_id = ?", [
+    await dbQuery("UPDATE AGENDAMENTO SET age_recibo = ? WHERE age_id = ? AND empresa_id = ?", [
       url,
       age_id,
+      empresa_id,
     ]);
 
     res.status(200).json(url);
@@ -1977,6 +2020,7 @@ router.post("/duplicar", async (req, res) => {
   } = req.body;
 
   const userData = req.user;
+  const empresa_id = req.user.empresa_id;
 
   if (!userData || !userData.id || !userData.fullName) {
     return res.status(403).json({ message: "Sem permissão" });
@@ -1984,8 +2028,8 @@ router.post("/duplicar", async (req, res) => {
 
   try {
     let agendamentoQuery = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamentoQuery.length === 0) {
@@ -1995,11 +2039,11 @@ router.post("/duplicar", async (req, res) => {
     let agendamento = agendamentoQuery[0];
 
     let endereco = agendamento.age_endereco
-      ? await dbQuery("SELECT * FROM ENDERECO WHERE end_id = ?", [
-          agendamento.age_endereco,
+      ? await dbQuery("SELECT * FROM ENDERECO WHERE end_id = ? AND empresa_id = ?", [
+          agendamento.age_endereco, empresa_id,
         ])
-      : await dbQuery("SELECT * FROM ENDERECO WHERE cli_id = ?", [
-          agendamento.cli_id,
+      : await dbQuery("SELECT * FROM ENDERECO WHERE cli_id = ? AND empresa_id = ?", [
+          agendamento.cli_id, empresa_id,
         ]);
 
     let createdAt = moment().format("YYYY-MM-DD HH:mm:ss");
@@ -2033,6 +2077,7 @@ router.post("/duplicar", async (req, res) => {
       created_by: userData.fullName,
       updated_by: userData.fullName,
       updated_at: null,
+      empresa_id: empresa_id,
     };
 
     let newAgendamento = await dbQuery(
@@ -2043,7 +2088,7 @@ router.post("/duplicar", async (req, res) => {
     let newAge_fun_id = fun_id ? fun_id : agendamento.fun_id;
 
     if (options.servicos) {
-      let axs = await dbQuery("SELECT * FROM AXS WHERE age_id = ?", [age_id]);
+      let axs = await dbQuery("SELECT * FROM AXS WHERE age_id = ? AND empresa_id = ?", [age_id, empresa_id]);
 
       if (axs.length > 0) {
         for (let ax of axs) {
@@ -2055,6 +2100,7 @@ router.post("/duplicar", async (req, res) => {
             ser_descricao: ax.ser_descricao,
             ser_valor: ax.ser_valor,
             ser_data: ax.ser_data,
+            empresa_id: empresa_id,
           };
 
           await dbQuery("INSERT INTO AXS SET ?", objAX);
@@ -2063,13 +2109,13 @@ router.post("/duplicar", async (req, res) => {
     }
 
     if (options.comissao) {
-      let comissao = await dbQuery("SELECT * FROM COMISSOES WHERE age_id = ?", [
-        age_id,
+      let comissao = await dbQuery("SELECT * FROM COMISSOES WHERE age_id = ? AND empresa_id = ?", [
+        age_id, empresa_id,
       ]);
 
       if (comissao.length > 0) {
         let query =
-          "INSERT INTO COMISSOES (age_id, com_valor, com_paga, com_paga_data, fun_id, created_at) VALUES (?, ?, ?, ?, ?, ?)";
+          "INSERT INTO COMISSOES (age_id, com_valor, com_paga, com_paga_data, fun_id, created_at, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
         let values = [
           newAgendamento.insertId,
           comissao[0].com_valor,
@@ -2077,6 +2123,7 @@ router.post("/duplicar", async (req, res) => {
           comissao[0].com_paga_data,
           newAge_fun_id,
           createdAt,
+          empresa_id,
         ];
 
         await dbQuery(query, values);
@@ -2085,17 +2132,18 @@ router.post("/duplicar", async (req, res) => {
 
     if (options.pagamentos) {
       let pagamento = await dbQuery(
-        "SELECT * FROM PAGAMENTO WHERE age_id = ?",
-        [age_id]
+        "SELECT * FROM PAGAMENTO WHERE age_id = ? AND empresa_id = ?",
+        [age_id, empresa_id]
       );
 
       if (pagamento.length > 0) {
         let query =
-          "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_data) VALUES (?, ?, ?)";
+          "INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_data, empresa_id) VALUES (?, ?, ?, ?)";
         let values = [
           newAgendamento.insertId,
           pagamento[0].pgt_valor,
           createdAt,
+          empresa_id,
         ];
 
         await dbQuery(query, values);
@@ -2104,15 +2152,15 @@ router.post("/duplicar", async (req, res) => {
 
     if (options.imagens) {
       let imagens = await dbQuery(
-        "SELECT * FROM IMAGENS_AGE WHERE age_id = ?",
-        [age_id]
+        "SELECT * FROM IMAGENS_AGE WHERE age_id = ? AND empresa_id = ?",
+        [age_id, empresa_id]
       );
 
       if (imagens.length > 0) {
         for (let imagem of imagens) {
           let query =
-            "INSERT INTO IMAGENS_AGE (age_id, url, filename) VALUES (?, ?, ?)";
-          let values = [newAgendamento.insertId, imagem.url, imagem.filename];
+            "INSERT INTO IMAGENS_AGE (age_id, url, filename, empresa_id) VALUES (?, ?, ?, ?)";
+          let values = [newAgendamento.insertId, imagem.url, imagem.filename, empresa_id];
 
           await dbQuery(query, values);
         }
@@ -2154,6 +2202,7 @@ router.get("/getRetrabalhos", async (req, res) => {
     page = 1,
     orderBy = "asc",
   } = req.query;
+  const empresa_id = req.user.empresa_id;
 
   let offset = (page - 1) * itemsPerPage;
 
@@ -2162,7 +2211,7 @@ router.get("/getRetrabalhos", async (req, res) => {
     itemsPerPage = 1000000;
   }
 
-  let baseQuery = `FROM AGENDAMENTO WHERE age_retrabalho = 1`;
+  let baseQuery = `FROM AGENDAMENTO WHERE age_retrabalho = 1 AND empresa_id = ${Number(empresa_id)}`;
 
   if (q) {
     baseQuery += ` AND (
@@ -2207,8 +2256,8 @@ router.get("/getRetrabalhos", async (req, res) => {
     for (let agendamento of agendamentos) {
       try {
         agendamento.agendamentoAnterior = await getAgendamentos(
-          "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-          [agendamento.age_retrabalho_id]
+          "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+          [agendamento.age_retrabalho_id, empresa_id]
         );
       } catch (error) {
         console.error("Erro ao encontrar agendamento em retrabaçhps: ", error);
@@ -2240,6 +2289,7 @@ router.get("/getAgendamentosGarantia", async (req, res) => {
     page = 1,
     orderBy = "asc",
   } = req.query;
+  const empresa_id = req.user.empresa_id;
 
   let offset = (page - 1) * itemsPerPage;
 
@@ -2248,7 +2298,7 @@ router.get("/getAgendamentosGarantia", async (req, res) => {
     itemsPerPage = 1000000;
   }
 
-  let baseQuery = `FROM AGENDAMENTO WHERE age_garantia IS NOT NULL AND age_garantia != '' AND ast_id = 3 AND atendido_date IS NOT NULL`;
+  let baseQuery = `FROM AGENDAMENTO WHERE age_garantia IS NOT NULL AND age_garantia != '' AND ast_id = 3 AND atendido_date IS NOT NULL AND empresa_id = ${Number(empresa_id)}`;
 
   if (q) {
     baseQuery += ` AND (
@@ -2390,6 +2440,7 @@ router.get("/getAgendamentosByCliente", async (req, res) => {
     page = 1,
     orderBy = "asc",
   } = req.query;
+  const empresa_id = req.user.empresa_id;
 
   //console.log('Query: ', req.query);
 
@@ -2400,7 +2451,7 @@ router.get("/getAgendamentosByCliente", async (req, res) => {
     itemsPerPage = 1000000;
   }
 
-  let baseQuery = `FROM AGENDAMENTO WHERE 1 = 1`;
+  let baseQuery = `FROM AGENDAMENTO WHERE empresa_id = ${Number(empresa_id)}`;
   // let queryParams = [];
 
   if (q) {
@@ -2465,9 +2516,10 @@ router.post("/salvarOrdemServico", async (req, res) => {
 
   try {
     const userData = req.user;
+    const empresa_id = req.user.empresa_id;
     const agendamento = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamento.length === 0) {
@@ -2475,8 +2527,8 @@ router.post("/salvarOrdemServico", async (req, res) => {
     }
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET age_ordemservico = ? WHERE age_id = ?",
-      [JSON.stringify(ordemData), age_id]
+      "UPDATE AGENDAMENTO SET age_ordemservico = ? WHERE age_id = ? AND empresa_id = ?",
+      [JSON.stringify(ordemData), age_id, empresa_id]
     );
 
     if (userData && userData.fullName) {
@@ -2506,9 +2558,10 @@ router.post("/gerarOrdemServico", async (req, res) => {
   }
 
   try {
+    const empresa_id = req.user.empresa_id;
     const agendamento = await dbQuery(
-      "SELECT * FROM AGENDAMENTO WHERE age_id = ?",
-      [age_id]
+      "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
+      [age_id, empresa_id]
     );
 
     if (agendamento.length === 0) {
@@ -2545,8 +2598,8 @@ router.post("/gerarOrdemServico", async (req, res) => {
     };
 
     await dbQuery(
-      "UPDATE AGENDAMENTO SET age_ordemServico = ? WHERE age_id = ?",
-      [JSON.stringify(ordemData), agendamento[0].age_id]
+      "UPDATE AGENDAMENTO SET age_ordemServico = ? WHERE age_id = ? AND empresa_id = ?",
+      [JSON.stringify(ordemData), agendamento[0].age_id, empresa_id]
     );
 
     const userData = req.user;
