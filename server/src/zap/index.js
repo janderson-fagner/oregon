@@ -51,7 +51,8 @@ async function setupClientListeners(clientId) {
                     emitToEmpresa(empresaId, `nova-mensagem-${clientId}`, mappedMsg);
 
                     // Integra ao motor de fluxos quando houver mensagem do usuário (não do sistema)
-                    if (!message.fromMe && clientId === 'atendimento_1') {
+                    // Verifica se este client é do tipo "atendimento" (qualquer empresa)
+                    if (!message.fromMe && clientId.startsWith('atendimento_')) {
                         try {
                             const { handleIncomingMessage } = require('../flows/core/flowEngine');
                             let phone;
@@ -148,17 +149,13 @@ async function initDefaultClient() {
         
         const dbQuery = require('../utils/dbHelper');
         
-        // IDs dos clients que podem ser auto-inicializados
-        const clientIds = ['atendimento_1', 'disparos_1', 'default'];
-        
-        for (const clientId of clientIds) {
-            try {
-                const clientData = await dbQuery(
-                    'SELECT * FROM Clients WHERE id = ?',
-                    [clientId]
-                );
+        // Buscar TODOS os clients que estavam conectados (multi-tenant SaaS)
+        const allClients = await dbQuery('SELECT * FROM Clients WHERE status = ?', ['connected']);
 
-                if (clientData.length > 0 && clientData[0].status === 'connected') {
+        for (const clientRow of allClients) {
+            const clientId = clientRow.id;
+            try {
+                if (true) {
                     console.log(`🚀 Auto-inicializando client ${clientId}...`);
                     const result = await clientFunctions.initClient(clientId);
                     

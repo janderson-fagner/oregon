@@ -4,8 +4,11 @@
  */
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const path = require('path');
 const dbQuery = require('../utils/dbHelper');
 const { emitToEmpresa } = require('../socket');
+
+const SESSION_PATH = path.resolve(__dirname, '..', 'session-zap');
 
 // Armazena as instâncias dos clients ativos
 const clients = new Map();
@@ -132,7 +135,7 @@ async function initClient(clientId) {
         const client = new Client({
             authStrategy: new LocalAuth({
                 clientId: clientId,
-                dataPath: './session-zap',
+                dataPath: SESSION_PATH,
             }),
             puppeteer: {
                 args: ['--no-sandbox', '--disable-setuid-sandbox'],
