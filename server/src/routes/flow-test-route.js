@@ -18,6 +18,29 @@ const TEST_EMPRESA_ID = 1;
 // Cache de sessões de simulação (em memória)
 const simulationSessions = new Map();
 
+// Lock por telefone para garantir processamento sequencial nas rotas de teste
+const phoneLocks = new Map();
+
+/**
+ * Garante processamento sequencial por telefone
+ * @param {string} phone - Número do telefone
+ * @param {Function} fn - Função async a executar
+ * @returns {Promise<*>} Resultado da função
+ */
+async function withPhoneLock(phone, fn) {
+    const key = phone.replace(/\D/g, '');
+    const prev = phoneLocks.get(key) || Promise.resolve();
+    let release;
+    const lock = new Promise(resolve => { release = resolve; });
+    phoneLocks.set(key, prev.then(() => lock));
+    try {
+        await prev;
+        return await fn();
+    } finally {
+        release();
+    }
+}
+
 /**
  * Obtém ou cria uma sessão de simulação para um telefone
  * @param {String} phone - Número de telefone
@@ -101,10 +124,14 @@ router.post('/simulate-message', async (req, res) => {
             });
         }
 
+        const cleanPhone = phone.replace(/\D/g, '');
+
+        // Processar com lock por telefone para evitar race conditions
+        const lockResult = await withPhoneLock(cleanPhone, async () => {
+
         // Armazenar opções de áudio na sessão
         const audioOptions = { ttsEnabled, fullAudio };
 
-        const cleanPhone = phone.replace(/\D/g, '');
         const session = getOrCreateSession(cleanPhone);
 
         // Adicionar mensagem do usuário ao histórico
@@ -199,7 +226,7 @@ router.post('/simulate-message', async (req, res) => {
             simulatedResponses: responses
         });
 
-        res.json({
+        return {
             success: true,
             flowStarted: true,
             flowId,
@@ -209,7 +236,11 @@ router.post('/simulate-message', async (req, res) => {
             botResponses: responses,
             waitingFor,
             conversationHistory: session.conversationHistory
-        });
+        };
+
+        }); // fim withPhoneLock
+
+        res.json(lockResult);
 
     } catch (error) {
         console.error('Erro em simulate-message:', error);
@@ -236,6 +267,10 @@ router.post('/respond', async (req, res) => {
         }
 
         const cleanPhone = phone.replace(/\D/g, '');
+
+        // Processar com lock por telefone para evitar race conditions
+        const lockResult = await withPhoneLock(cleanPhone, async () => {
+
         const session = getOrCreateSession(cleanPhone);
 
         // Opções de áudio
@@ -256,11 +291,11 @@ router.post('/respond', async (req, res) => {
         `, [`%${cleanPhone.slice(-8)}%`, TEST_EMPRESA_ID, TEST_EMPRESA_ID]);
 
         if (runs.length === 0) {
-            return res.json({
+            return {
                 success: false,
                 error: 'Nenhum fluxo aguardando resposta para este telefone',
                 suggestion: 'Use /flow-test/simulate-message para iniciar um novo fluxo'
-            });
+            };
         }
 
         const run = runs[0];
@@ -292,7 +327,7 @@ router.post('/respond', async (req, res) => {
             simulatedResponses: result.responses
         });
 
-        res.json({
+        return {
             success: true,
             runId: run.id,
             flowName: run.flow_name,
@@ -300,7 +335,11 @@ router.post('/respond', async (req, res) => {
             botResponses: result.responses || [],
             waitingFor: result.waitingFor,
             conversationHistory: session.conversationHistory
-        });
+        };
+
+        }); // fim withPhoneLock
+
+        res.json(lockResult);
 
     } catch (error) {
         console.error('Erro em respond:', error);
@@ -709,19 +748,22 @@ async function startFlowInSimulation(flow, phone, text, clientId, initialContext
 
         const startNode = startNodes[0];
 
-        // Buscar ou criar cliente pelo telefone para garantir cli_Id válido
+        // Buscar cliente existente pelo telefone; criar só se não existir
         let cliente = null;
         try {
-            cliente = await createOrUpdateCliente(phone, 'Cliente Simulação', {}, TEST_EMPRESA_ID);
+            const { getClienteByPhone } = require('../flows/actions/clienteActions');
+            cliente = await getClienteByPhone(phone, TEST_EMPRESA_ID);
+            if (!cliente || !cliente.cli_Id) {
+                // Cliente não encontrado, criar um novo
+                cliente = await createOrUpdateCliente(phone, null, {}, TEST_EMPRESA_ID);
+            }
             console.log('✅ Cliente para simulação:', cliente?.cli_Id, cliente?.cli_nome);
         } catch (clienteError) {
             console.error('⚠️ Erro ao buscar/criar cliente para simulação:', clienteError.message);
-            // Criar objeto cliente mínimo com telefone (sem cli_Id)
             cliente = {
                 cli_celular: phone,
                 telefone: phone,
-                phone: phone,
-                cli_nome: 'Cliente Simulação'
+                phone: phone
             };
         }
 

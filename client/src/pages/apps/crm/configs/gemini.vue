@@ -428,6 +428,7 @@ const servicoEdit = ref({
   subservicoId: null,
   nome: "",
   descricao: "",
+  modoAtendimento: "regras",
   regrasPrecificacao: [],
   observacoes: "",
   isSub: false,
@@ -482,6 +483,7 @@ const addServico = () => {
     subservicoId: null,
     nome: "",
     descricao: "",
+    modoAtendimento: "regras",
     regrasPrecificacao: [],
     observacoes: "",
     isSub: false,
@@ -498,6 +500,11 @@ const editServico = (index) => {
   // Garantir que regrasPrecificacao existe
   if (!servicoEdit.value.regrasPrecificacao) {
     servicoEdit.value.regrasPrecificacao = [];
+  }
+
+  // Backward compat: default para "regras" se campo nao existir
+  if (!servicoEdit.value.modoAtendimento) {
+    servicoEdit.value.modoAtendimento = "regras";
   }
 
   dialogServico.value = true;
@@ -548,13 +555,14 @@ const saveServico = () => {
     return;
   }
 
-  // Validar que tem pelo menos uma regra
+  // Validar que tem pelo menos uma regra (so para modo "regras")
   if (
-    !servicoEdit.value.regrasPrecificacao ||
-    servicoEdit.value.regrasPrecificacao.length === 0
+    servicoEdit.value.modoAtendimento === "regras" &&
+    (!servicoEdit.value.regrasPrecificacao ||
+    servicoEdit.value.regrasPrecificacao.length === 0)
   ) {
     setAlert(
-      "Adicione pelo menos uma regra de precificação",
+      "Adicione pelo menos uma regra de precificacao",
       "warning",
       "tabler-alert-circle",
       3000
@@ -1061,14 +1069,23 @@ const diasSemana = [
                           <h5 class="text-subtitle-2 mb-0">
                             {{ servico.isSub ? '↳ ' : '' }}{{ servico.nome }}
                           </h5>
-                          <VChip
-                            size="x-small"
-                            :color="servico.isSub ? 'secondary' : 'primary'"
-                            variant="tonal"
-                            class="mt-1"
-                          >
-                            {{ servico.isSub ? 'Subserviço' : 'Serviço' }}
-                          </VChip>
+                          <div class="d-flex gap-1 mt-1">
+                            <VChip
+                              size="x-small"
+                              :color="servico.isSub ? 'secondary' : 'primary'"
+                              variant="tonal"
+                            >
+                              {{ servico.isSub ? 'Subservico' : 'Servico' }}
+                            </VChip>
+                            <VChip
+                              v-if="servico.modoAtendimento && servico.modoAtendimento !== 'regras'"
+                              size="x-small"
+                              :color="servico.modoAtendimento === 'calculadora' ? 'success' : 'warning'"
+                              variant="tonal"
+                            >
+                              {{ servico.modoAtendimento === 'calculadora' ? 'Calculadora' : 'Encaminhar' }}
+                            </VChip>
+                          </div>
                         </div>
                       </div>
                       <div class="d-flex gap-1">
@@ -1863,7 +1880,56 @@ const diasSemana = [
             </VAlert>
           </VCol>
 
-          <VCol cols="12">
+          <!-- Modo de Atendimento -->
+          <VCol cols="12" v-if="servicoEdit.servicoId">
+            <VDivider class="my-2" />
+            <h4 class="text-subtitle-1 mb-2">Modo de Atendimento</h4>
+            <p class="text-caption mb-3">
+              Define como a IA deve tratar este serviço quando o cliente demonstrar interesse
+            </p>
+            <VRadioGroup
+              v-model="servicoEdit.modoAtendimento"
+              inline
+            >
+              <VRadio
+                label="Usar regras de preço (manual)"
+                value="regras"
+                color="primary"
+              />
+              <VRadio
+                label="Usar calculadora de preço"
+                value="calculadora"
+                color="success"
+              />
+              <VRadio
+                label="Encaminhar para atendente"
+                value="encaminhar"
+                color="warning"
+              />
+            </VRadioGroup>
+
+            <VAlert
+              v-if="servicoEdit.modoAtendimento === 'calculadora'"
+              color="success"
+              variant="tonal"
+              class="mt-2"
+            >
+              <VIcon icon="tabler-calculator" class="mr-2" />
+              A IA usará a calculadora de preços para gerar orçamentos dinâmicos baseados na configuração da empresa.
+            </VAlert>
+
+            <VAlert
+              v-if="servicoEdit.modoAtendimento === 'encaminhar'"
+              color="warning"
+              variant="tonal"
+              class="mt-2"
+            >
+              <VIcon icon="tabler-arrow-forward" class="mr-2" />
+              Quando o cliente demonstrar interesse neste serviço, a IA encaminhará automaticamente para um atendente humano.
+            </VAlert>
+          </VCol>
+
+          <VCol cols="12" v-if="servicoEdit.modoAtendimento === 'regras'">
             <VDivider class="my-2" />
             <div class="d-flex justify-space-between align-center mb-3">
               <div>
@@ -1928,7 +1994,7 @@ const diasSemana = [
                     </div>
                     <div class="mb-1">
                       <VIcon icon="tabler-currency-real" size="14" class="mr-1" />
-                      <strong>R$ {{ regra.preco?.toFixed(2) || "0,00" }}</strong>
+                      <strong>R$ {{ regra.preco?.toFixed(2) || "0.00" }}</strong>
                     </div>
                     <div class="mb-1">
                       <VIcon icon="tabler-clock" size="14" class="mr-1" />
@@ -2005,23 +2071,21 @@ const diasSemana = [
           </VCol>
 
           <VCol cols="12" md="6">
-            <AppTextField
+            <Dinheiro
               v-model.number="regraEdit.preco"
-              label="Preço (R$)*"
-              type="number"
-              placeholder="0.00"
-              step="0.01"
-              active
+              label="Preço (R$)"
+              required
             />
           </VCol>
 
           <VCol cols="12" md="6">
             <AppTextField
               v-model.number="regraEdit.duracaoMinutos"
-              label="Duração (minutos)*"
+              label="Duração (minutos)"
               type="number"
               placeholder="60"
               active
+              required
             />
           </VCol>
 

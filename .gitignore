@@ -64,9 +64,8 @@ src/uploads/
 session-zap/
 .wwebjs_cache/
 
-#core
-core
-src/core
+#core dumps
+core.[0-9]*
 
 # Dependency directories
 src/node_modules/

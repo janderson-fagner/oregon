@@ -642,6 +642,36 @@ const toolDefinitions = [
             },
             required: ["nomeServico"]
         }
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 💰 CALCULADORA DE ORCAMENTO (para servicos com modoAtendimento = "calculadora")
+    // ═══════════════════════════════════════════════════════════════════
+    {
+        name: "calcularOrcamentoIA",
+        description: "Calcula orcamento dinamico usando a calculadora de precos da empresa. Use para servicos com modo 'calculadora'. Retorna valor final calculado.",
+        parameters: {
+            type: "object",
+            properties: {
+                nomeServico: {
+                    type: "string",
+                    description: "Nome do servico (ex: 'limpeza de sofa', 'higienizacao de colchao')"
+                },
+                detalhes: {
+                    type: "string",
+                    description: "Detalhes do servico: tamanho, condicao, quantidade (ex: 'sofa 3 lugares com manchas')"
+                },
+                horasEstimadas: {
+                    type: "number",
+                    description: "Horas estimadas de trabalho (ex: 2.5)"
+                },
+                enderecoCliente: {
+                    type: "string",
+                    description: "Endereco do cliente para calculo de deslocamento"
+                }
+            },
+            required: ["nomeServico", "detalhes"]
+        }
     }
 ];
 
@@ -1511,13 +1541,13 @@ async function executeToolFunction(functionName, args, context = {}) {
                     return { error: 'Contexto necessário para encaminhar', success: false };
                 }
                 
-                const mensagem = args.mensagem || 'Vou transferir você para um atendente humano. Aguarde um momento! 👨‍💼';
+                // args.mensagem é INTERNA (motivo do encaminhamento) - NUNCA enviar ao cliente
+                const mensagemInterna = args.mensagem || 'Encaminhado para atendimento humano';
                 const clienteId = context.cliente.cli_Id || context.cliente.id;
-                
+
                 try {
-                    // Enviar mensagem ao cliente
-                    const { sendWhatsAppMessage } = require('../flows/actions/messageActions');
-                    await sendWhatsAppMessage({ message: mensagem }, context);
+                    // NÃO enviar mensagem ao cliente aqui - a IA já envia sua própria resposta conversacional
+                    // A mensagem interna vai apenas para o log de encaminhamento
                     
                     // Bloquear fluxos automáticos
                     await dbQuery(`
@@ -1896,7 +1926,112 @@ async function executeToolFunction(functionName, args, context = {}) {
                 console.log(`📋 Serviços encontrados: ${servicosEncontrados.length}`);
 
                 if (servicosEncontrados.length === 0) {
-                    console.log('❌ Nenhum serviço encontrado');
+                    console.log('⚠️ Não encontrado no Options, buscando no banco de dados...');
+
+                    // Fallback: buscar em SERVICOS_SUBS (subserviços) e SERVICOS_NEW (serviços pai)
+                    const dbServicos = await dbQuery(`
+                        SELECT ss.ser_id as sub_id, ss.ser_pai, ss.ser_nome as sub_nome, ss.ser_valor as sub_valor,
+                               sn.ser_id as pai_id, sn.ser_nome as pai_nome
+                        FROM SERVICOS_SUBS ss
+                        JOIN SERVICOS_NEW sn ON ss.ser_pai = sn.ser_id
+                        WHERE ss.empresa_id = ?
+                          AND LOWER(ss.ser_nome) LIKE ?
+                    `, [empresa_id, `%${termoBusca}%`]);
+
+                    if (dbServicos && dbServicos.length > 0) {
+                        console.log(`✅ Encontrados ${dbServicos.length} subserviço(s) no banco`);
+                        const servicosDB = dbServicos.map(s => ({
+                            servicoId: s.ser_pai,
+                            subservicoId: s.sub_id,
+                            nome: s.sub_nome,
+                            categoriaPai: s.pai_nome,
+                            regrasPreco: [{
+                                titulo: s.sub_nome,
+                                preco: s.sub_valor,
+                                duracao: null,
+                                descricao: `${s.sub_nome} (categoria: ${s.pai_nome})`
+                            }],
+                            regraEscolhida: {
+                                titulo: s.sub_nome,
+                                preco: s.sub_valor,
+                                duracao: null
+                            },
+                            // Sem config no Options = modo regras padrão (encaminhar se preço null)
+                            modoAtendimento: s.sub_valor ? 'regras' : 'encaminhar'
+                        }));
+
+                        const semPreco = servicosDB.filter(s => !s.regraEscolhida.preco);
+                        if (semPreco.length === servicosDB.length) {
+                            return {
+                                success: true,
+                                encontrado: true,
+                                modoAtendimento: 'encaminhar',
+                                acao: 'encaminharParaAtendente',
+                                nome: servicosDB[0].nome,
+                                servicoId: servicosDB[0].servicoId,
+                                subservicoId: servicosDB[0].subservicoId,
+                                mensagem: `O serviço "${servicosDB[0].nome}" requer atendimento especializado para precificação.`,
+                                contextUpdates: {
+                                    servico_id: servicosDB[0].servicoId,
+                                    subservico_id: servicosDB[0].subservicoId,
+                                    servico_nome: servicosDB[0].nome,
+                                    servico_modo: 'encaminhar'
+                                }
+                            };
+                        }
+
+                        return {
+                            success: true,
+                            encontrado: true,
+                            modoAtendimento: 'regras',
+                            quantidade: servicosDB.length,
+                            servicos: servicosDB,
+                            servicoPrincipal: servicosDB[0],
+                            contextUpdates: {
+                                servico_id: servicosDB[0].servicoId,
+                                subservico_id: servicosDB[0].subservicoId,
+                                servico_nome: servicosDB[0].nome,
+                                servico_modo: 'regras'
+                            }
+                        };
+                    }
+
+                    // Tentar também por nome do serviço pai
+                    const dbServicosPai = await dbQuery(`
+                        SELECT sn.ser_id, sn.ser_nome, sn.ser_valor
+                        FROM SERVICOS_NEW sn
+                        WHERE sn.empresa_id = ?
+                          AND LOWER(sn.ser_nome) LIKE ?
+                    `, [empresa_id, `%${termoBusca}%`]);
+
+                    if (dbServicosPai && dbServicosPai.length > 0) {
+                        // Buscar todos os subserviços deste pai
+                        const paiId = dbServicosPai[0].ser_id;
+                        const subs = await dbQuery(`
+                            SELECT ser_id, ser_nome, ser_valor FROM SERVICOS_SUBS
+                            WHERE ser_pai = ? AND empresa_id = ?
+                        `, [paiId, empresa_id]);
+
+                        return {
+                            success: true,
+                            encontrado: true,
+                            modoAtendimento: 'regras',
+                            nome: dbServicosPai[0].ser_nome,
+                            servicoId: paiId,
+                            subservicos: (subs || []).map(s => ({
+                                subservicoId: s.ser_id,
+                                nome: s.ser_nome,
+                                preco: s.ser_valor
+                            })),
+                            mensagem: `Encontrei a categoria "${dbServicosPai[0].ser_nome}". Há ${(subs || []).length} opções de subserviço.`,
+                            contextUpdates: {
+                                servico_id: paiId,
+                                servico_nome: dbServicosPai[0].ser_nome
+                            }
+                        };
+                    }
+
+                    console.log('❌ Nenhum serviço encontrado no Options nem no banco');
                     return {
                         success: false,
                         encontrado: false,
@@ -1937,12 +2072,55 @@ async function executeToolFunction(functionName, args, context = {}) {
                     };
                 });
 
-                console.log(`✅ Encontrados ${servicosComPreco.length} serviço(s)`);
+                console.log(`✅ Encontrados ${servicosComPreco.length} servico(s)`);
 
-                // Se só encontrou um serviço, facilitar uso
+                // Se so encontrou um servico, facilitar uso
                 const servicoPrincipal = servicosComPreco[0];
 
-                // Determinar preço: regra escolhida > primeira regra
+                // Verificar modoAtendimento do servico original
+                const servicoOriginal = servicosEncontrados[0];
+                const modoAtendimento = servicoOriginal.modoAtendimento || 'regras';
+                console.log(`🔧 Modo atendimento: ${modoAtendimento}`);
+
+                // Se modo "encaminhar", retornar instrucao para encaminhar
+                if (modoAtendimento === 'encaminhar') {
+                    return {
+                        success: true,
+                        encontrado: true,
+                        modoAtendimento: 'encaminhar',
+                        acao: 'encaminharParaAtendente',
+                        nome: servicoPrincipal.nome,
+                        servicoId: servicoPrincipal.servicoId,
+                        mensagem: `O servico "${servicoPrincipal.nome}" requer atendimento especializado. Use encaminharParaAtendente para direcionar o cliente.`,
+                        contextUpdates: {
+                            servico_id: servicoPrincipal.servicoId,
+                            servico_nome: servicoPrincipal.nome,
+                            servico_modo: 'encaminhar'
+                        }
+                    };
+                }
+
+                // Se modo "calculadora", retornar instrucao para usar calculadora
+                if (modoAtendimento === 'calculadora') {
+                    return {
+                        success: true,
+                        encontrado: true,
+                        modoAtendimento: 'calculadora',
+                        acao: 'calcularOrcamentoIA',
+                        nome: servicoPrincipal.nome,
+                        servicoId: servicoPrincipal.servicoId,
+                        subservicoId: servicoPrincipal.subservicoId,
+                        mensagem: `Para obter o preco de "${servicoPrincipal.nome}", use calcularOrcamentoIA com os detalhes do cliente.`,
+                        contextUpdates: {
+                            servico_id: servicoPrincipal.servicoId,
+                            subservico_id: servicoPrincipal.subservicoId,
+                            servico_nome: servicoPrincipal.nome,
+                            servico_modo: 'calculadora'
+                        }
+                    };
+                }
+
+                // Modo "regras" (padrao): retornar precos das regras
                 const precoFinal = servicoPrincipal.regraEscolhida?.preco ||
                                    servicoPrincipal.regrasPreco?.[0]?.preco ||
                                    0;
@@ -1951,14 +2129,14 @@ async function executeToolFunction(functionName, args, context = {}) {
                                      servicoPrincipal.regrasPreco?.[0]?.duracao ||
                                      60;
 
-                console.log(`💰 Serviço principal: "${servicoPrincipal.nome}" (ID: ${servicoPrincipal.servicoId}, SubID: ${servicoPrincipal.subservicoId}) - R$ ${precoFinal}`);
+                console.log(`💰 Servico principal: "${servicoPrincipal.nome}" (ID: ${servicoPrincipal.servicoId}, SubID: ${servicoPrincipal.subservicoId}) - R$ ${precoFinal}`);
 
                 return {
                     success: true,
                     encontrado: true,
+                    modoAtendimento: 'regras',
                     total: servicosComPreco.length,
                     servicos: servicosComPreco,
-                    // Dados do serviço principal para facilitar uso
                     servicoId: servicoPrincipal.servicoId,
                     subservicoId: servicoPrincipal.subservicoId,
                     nome: servicoPrincipal.nome,
@@ -1970,7 +2148,115 @@ async function executeToolFunction(functionName, args, context = {}) {
                         subservico_id: servicoPrincipal.subservicoId,
                         servico_nome: servicoPrincipal.nome,
                         servico_preco: precoFinal,
-                        servico_duracao: duracaoFinal
+                        servico_duracao: duracaoFinal,
+                        servico_modo: 'regras'
+                    }
+                };
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 💰 CALCULADORA DE ORCAMENTO IA
+            // ═══════════════════════════════════════════════════════════════════
+            case 'calcularOrcamentoIA': {
+                console.log('\n💰 ========== CALCULADORA DE ORCAMENTO IA ==========');
+                console.log(`📥 Servico: "${args.nomeServico}" | Detalhes: "${args.detalhes}"`);
+
+                // Buscar config da calculadora para a empresa
+                const calcConfigResult = await dbQuery(
+                    `SELECT * FROM Calculadora_Config WHERE ` + ew.sql + ` LIMIT 1`,
+                    [...ew.params]
+                );
+
+                if (!calcConfigResult || calcConfigResult.length === 0) {
+                    return {
+                        success: false,
+                        mensagem: 'Calculadora de precos nao configurada para esta empresa. Use buscarServicoPorNome para regras de preco.'
+                    };
+                }
+
+                const calcConfig = calcConfigResult[0];
+                let materiais = [];
+                try {
+                    materiais = typeof calcConfig.materiais === 'string' ? JSON.parse(calcConfig.materiais) : (calcConfig.materiais || []);
+                } catch (e) {
+                    materiais = [];
+                }
+
+                // Calcular custo de materiais (match por nome do servico)
+                const nomeServicoLower = (args.nomeServico || '').toLowerCase();
+                let custoMateriais = 0;
+                const materiaisUsados = [];
+
+                for (const mat of materiais) {
+                    const matNome = (mat.nome || '').toLowerCase();
+                    const matServicos = (mat.servicos_aplicaveis || mat.servico || '').toLowerCase();
+                    if (matNome.includes(nomeServicoLower) || matServicos.includes(nomeServicoLower) || nomeServicoLower.includes(matNome)) {
+                        const custoUnit = parseFloat(mat.custo_por_uso || mat.custo || 0);
+                        custoMateriais += custoUnit;
+                        materiaisUsados.push({ nome: mat.nome, custo: custoUnit });
+                    }
+                }
+
+                // Calcular custo de mao de obra
+                const metaMensal = parseFloat(calcConfig.meta_mensal || 10000);
+                const diasTrabalhados = parseInt(calcConfig.dias_trabalhados_mes || 22);
+                const horasPorDia = parseInt(calcConfig.horas_por_dia || 8);
+                const custoPorHora = metaMensal / (diasTrabalhados * horasPorDia);
+                const horasEstimadas = parseFloat(args.horasEstimadas || 2);
+                const custoMaoObra = custoPorHora * horasEstimadas;
+
+                // Calcular deslocamento
+                let custoDeslocamento = 0;
+                if (args.enderecoCliente && calcConfig.endereco_base) {
+                    try {
+                        const { geocodificarEnderecoComMaps, calcularTaxaDeslocamento } = require('../flows/helpers/availabilityHelper');
+                        const coordsBase = await geocodificarEnderecoComMaps(calcConfig.endereco_base);
+                        const coordsCliente = await geocodificarEnderecoComMaps(args.enderecoCliente);
+                        if (coordsBase && coordsCliente) {
+                            const combustivelLitro = parseFloat(calcConfig.combustivel_custo_litro || 6);
+                            const kmPorLitro = parseFloat(calcConfig.veiculo_km_por_litro || 10);
+                            const taxaResult = await calcularTaxaDeslocamento(coordsBase, coordsCliente, {
+                                combustivelLitro,
+                                kmPorLitro
+                            });
+                            custoDeslocamento = taxaResult?.taxa || 0;
+                        }
+                    } catch (distErr) {
+                        console.log('⚠️ Nao foi possivel calcular deslocamento:', distErr.message);
+                    }
+                }
+
+                // Rateio de custos fixos
+                const custoFixoMensal = parseFloat(calcConfig.custos_fixos_mensais || 0);
+                const servicosPorDia = horasPorDia / horasEstimadas;
+                const custoFixoRateado = custoFixoMensal / (diasTrabalhados * servicosPorDia);
+
+                // Subtotal
+                const custoTotal = custoMateriais + custoMaoObra + custoDeslocamento + custoFixoRateado;
+
+                // Aplicar margem
+                const margemPadrao = parseFloat(calcConfig.margem_padrao || 30);
+                const valorFinal = custoTotal * (1 + margemPadrao / 100);
+
+                console.log(`💰 Calculo: materiais=${custoMateriais.toFixed(2)}, maoObra=${custoMaoObra.toFixed(2)}, deslocamento=${custoDeslocamento.toFixed(2)}, fixo=${custoFixoRateado.toFixed(2)}, margem=${margemPadrao}%`);
+                console.log(`💰 Valor final: R$ ${valorFinal.toFixed(2)}`);
+
+                return {
+                    success: true,
+                    nomeServico: args.nomeServico,
+                    detalhes: args.detalhes,
+                    valorFinal: Math.round(valorFinal * 100) / 100,
+                    horasEstimadas: horasEstimadas,
+                    servicosIncluidos: materiaisUsados.length > 0
+                        ? materiaisUsados.map(m => m.nome).join(', ')
+                        : args.nomeServico,
+                    temDeslocamento: custoDeslocamento > 0,
+                    taxaDeslocamento: Math.round(custoDeslocamento * 100) / 100,
+                    mensagem: `Orcamento calculado: R$ ${valorFinal.toFixed(2)} para ${args.nomeServico}. ${custoDeslocamento > 0 ? `Inclui taxa de deslocamento de R$ ${custoDeslocamento.toFixed(2)}.` : ''}`,
+                    contextUpdates: {
+                        orcamento_valor: Math.round(valorFinal * 100) / 100,
+                        orcamento_servico: args.nomeServico,
+                        orcamento_calculado: true
                     }
                 };
             }
@@ -2000,7 +2286,7 @@ function getToolDefinitions(capabilities = null) {
     
     // Filtrar por capacidades
     const capabilityMap = {
-        'agendamentos': ['buscarDisponibilidades', 'verificarHorarioDisponivel', 'consultarAgendamentosCliente', 'criarAgendamento', 'atualizarAgendamento', 'cancelarAgendamento', 'buscarServicoPorNome', 'analisarImagemCliente'],
+        'agendamentos': ['buscarDisponibilidades', 'verificarHorarioDisponivel', 'consultarAgendamentosCliente', 'criarAgendamento', 'atualizarAgendamento', 'cancelarAgendamento', 'buscarServicoPorNome', 'analisarImagemCliente', 'calcularOrcamentoIA'],
         'crm': ['criarNegocio', 'atualizarNegocio', 'atualizarCliente', 'marcarNegocioGanho', 'marcarNegocioPerdido'],
         'fluxo': ['aguardarResposta', 'agendarAcaoFutura', 'bloquearClienteFluxos', 'encaminharParaAtendente', 'redirecionarFluxo'],
         'comunicacao': ['enviarMensagem', 'enviarEmail'],
