@@ -206,11 +206,18 @@ function convertMp3ToOgg(inputPath) {
  * @param {string} clientId - ID do client
  * @param {string} originalNumber - Número original do destinatário
  * @param {Function} sendFunction - Função de envio a ser executada
+ * @param {number|null} empresa_id - ID da empresa (opcional)
  * @returns {Promise<boolean>} True se enviado com sucesso
  */
-async function checkDevModeAndSend(clientId, originalNumber, sendFunction) {
+async function checkDevModeAndSend(clientId, originalNumber, sendFunction, empresa_id = null) {
     try {
-        const options = await dbQuery('SELECT * FROM Options');
+        let optionsQuery = 'SELECT * FROM Options';
+        let optionsParams = [];
+        if (empresa_id) {
+            optionsQuery += ' WHERE empresa_id = ?';
+            optionsParams.push(empresa_id);
+        }
+        const options = await dbQuery(optionsQuery, optionsParams);
 
         if (options.length > 0) {
             let devMode = options.filter(option => option.type == 'modo_dev')[0]?.value;

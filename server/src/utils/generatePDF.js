@@ -29,9 +29,180 @@ const formatValor = (valor) => {
     return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
+const dbQuery = require('./dbHelper');
+
+/**
+ * Busca os dados da empresa pelo empresa_id para uso nos PDFs
+ * @param {number} empresa_id
+ * @returns {Object} { nome, documento, telefone, email, endereco, numero, bairro, cidade, estado, cep, logo }
+ */
+async function getEmpresaData(empresa_id) {
+    if (!empresa_id) return null;
+    try {
+        const rows = await dbQuery('SELECT * FROM Empresas WHERE id = ? AND deleted_at IS NULL', [empresa_id]);
+        return rows.length > 0 ? rows[0] : null;
+    } catch (e) {
+        console.error('Erro ao buscar empresa para PDF:', e.message);
+        return null;
+    }
+}
+
+/**
+ * Formata o documento (CPF/CNPJ) com máscara
+ */
+const formatDocumento = (doc) => {
+    if (!doc) return '';
+    const d = doc.replace(/\D/g, '');
+    if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+    if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+    return doc;
+}
+
+/**
+ * Monta o endereço completo da empresa
+ */
+const formatEnderecoEmpresa = (emp) => {
+    if (!emp) return '';
+    const parts = [];
+    if (emp.endereco) parts.push(emp.endereco);
+    if (emp.numero) parts.push(emp.numero);
+    if (emp.bairro) parts.push(emp.bairro);
+    let str = parts.join(', ');
+    if (emp.cidade) str += ` - ${emp.cidade}`;
+    if (emp.estado) str += `/${emp.estado}`;
+    return str;
+}
+
+/**
+ * Renderiza o header padrão "pequeno" (logo 80px) nos PDFs
+ * Usado por: Recibo, RelatorioSaida, RelatorioReceber, RelatorioServicosTecnicos
+ */
+function renderHeaderPequeno(doc, emp) {
+    if (emp?.logo) {
+        try {
+            const logoData = emp.logo.startsWith('data:') ? Buffer.from(emp.logo.split(',')[1], 'base64') : emp.logo;
+            doc.image(logoData, 50, 50, { width: 80 });
+        } catch (e) {
+            if (fs.existsSync(logoPath)) doc.image(logoPath, 50, 50, { width: 80 });
+        }
+    } else if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, 50, 50, { width: 80 });
+    }
+
+    doc.fontSize(14).text(emp?.nome || '', 150, 50);
+    const docFormatado = formatDocumento(emp?.documento || emp?.cnpj || emp?.cpf || '');
+    if (docFormatado) doc.fontSize(10).text(`CNPJ: ${docFormatado}`, 150, 69);
+    if (emp?.telefone) doc.fontSize(10).text(`Contato: ${emp.telefone}`, 150, 84);
+    if (emp?.email) doc.fontSize(10).text(`E-mail: ${emp.email}`, 150, 98);
+}
+
+/**
+ * Renderiza o header padrão "grande" (logo 150px) nos PDFs
+ * Usado por: RelatorioComissoes, OrdemServico, Orcamento
+ */
+function renderHeaderGrande(doc, emp) {
+    if (emp?.logo) {
+        try {
+            const logoData = emp.logo.startsWith('data:') ? Buffer.from(emp.logo.split(',')[1], 'base64') : emp.logo;
+            doc.image(logoData, 50, 0, { width: 150 });
+        } catch (e) {
+            if (fs.existsSync(logoPath)) doc.image(logoPath, 50, 0, { width: 150 });
+        }
+    } else if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, 50, 0, { width: 150 });
+    }
+
+    const xHeader = 200;
+    doc.fontSize(14).text(emp?.nome || '', xHeader, 40);
+    const docFormatado = formatDocumento(emp?.documento || emp?.cnpj || emp?.cpf || '');
+    if (docFormatado) doc.fontSize(10).text(`CNPJ: ${docFormatado}`, xHeader, 58);
+    if (emp?.telefone) doc.fontSize(10).text(`Contato: ${emp.telefone}`, xHeader, 72);
+    const endereco = formatEnderecoEmpresa(emp);
+    if (endereco) doc.fontSize(10).text(`Endereço: ${endereco}`, xHeader, 86);
+    if (emp?.email) doc.fontSize(10).text(`E-mail: ${emp.email}`, xHeader, 100);
+}
+
+/**
+ * Renderiza o background do certificado programaticamente para empresas que não são Oregon.
+ * Replica o layout visual do bg-certificado.png: bordas diagonais azuis, header com dados da empresa,
+ * título "CERTIFICADO DE GARANTIA", marca d'água central e selo dourado.
+ */
+function _renderCertificadoBg(doc, emp) {
+    const pageW = doc.page.width;   // 842 (A4 landscape)
+    const pageH = doc.page.height;  // 595
+
+    const corPrimaria = '#16375b';
+    const corSecundaria = '#2a6496';
+    const corClara = '#d6e4f0';
+
+    // --- Bordas diagonais (canto superior-esquerdo e inferior-direito) ---
+    // Superior esquerdo
+    doc.save();
+    doc.moveTo(0, 0).lineTo(140, 0).lineTo(0, 200).closePath().fill(corPrimaria);
+    doc.moveTo(0, 0).lineTo(170, 0).lineTo(0, 240).closePath().fill(corSecundaria);
+    doc.restore();
+
+    // Inferior direito
+    doc.save();
+    doc.moveTo(pageW, pageH).lineTo(pageW - 140, pageH).lineTo(pageW, pageH - 200).closePath().fill(corPrimaria);
+    doc.moveTo(pageW, pageH).lineTo(pageW - 170, pageH).lineTo(pageW, pageH - 240).closePath().fill(corSecundaria);
+    doc.restore();
+
+    // --- Borda retangular interna ---
+    doc.save();
+    doc.rect(25, 25, pageW - 50, pageH - 50).lineWidth(1.5).strokeColor(corPrimaria).stroke();
+    doc.rect(30, 30, pageW - 60, pageH - 60).lineWidth(0.5).strokeColor(corClara).stroke();
+    doc.restore();
+
+    // --- Header: logo + dados da empresa ---
+    const headerY = 45;
+    let logoEndX = 50; // posição X após a logo
+
+    if (emp?.logo) {
+        try {
+            const logoData = emp.logo.startsWith('data:') ? Buffer.from(emp.logo.split(',')[1], 'base64') : emp.logo;
+            doc.image(logoData, 55, headerY, { height: 90 });
+            logoEndX = 160;
+        } catch (e) {
+            // Se falhar a logo, segue sem ela
+        }
+    }
+
+    // Dados da empresa ao lado da logo
+    const infoX = logoEndX + 15;
+    doc.font(montserratBoldFont).fontSize(14).fillColor(corPrimaria);
+    doc.text((emp?.razao_social || emp?.nome || '').toUpperCase(), infoX, headerY + 5);
+
+    doc.font(montserratFont).fontSize(11).fillColor('#333');
+    const docFormatado = formatDocumento(emp?.documento || emp?.cnpj || emp?.cpf || '');
+    if (docFormatado) {
+        const tipoDoc = (emp?.documento || emp?.cnpj || '').replace(/\D/g, '').length === 14 ? 'CNPJ' : 'CPF';
+        doc.text(`${tipoDoc}: ${docFormatado}`, infoX, doc.y + 2);
+    }
+    const enderecoEmp = formatEnderecoEmpresa(emp);
+    if (enderecoEmp) doc.text(`ENDEREÇO: ${enderecoEmp.toUpperCase()}`, infoX, doc.y + 1);
+    if (emp?.telefone) doc.text(`FONE: ${emp.telefone}`, infoX, doc.y + 1);
+
+    // --- Título "CERTIFICADO DE GARANTIA" ---
+    doc.font(montserratBoldFont).fontSize(28).fillColor(corPrimaria);
+    doc.text('CERTIFICADO DE GARANTIA', 0, 160, { align: 'center', width: pageW });
+
+    // --- Marca d'água central (nome da empresa em grande, semi-transparente) ---
+    doc.save();
+    doc.opacity(0.06);
+    doc.font(montserratBoldFont).fontSize(60).fillColor(corSecundaria);
+    doc.text((emp?.nome || '').toUpperCase(), 0, 220, { align: 'center', width: pageW });
+    doc.restore();
+
+    // Posicionar o cursor Y para o conteúdo do texto do certificado
+    doc.y = 280;
+}
+
 async function createCertificate(data) {
     try {
         console.log('Criando certificado: ', data);
+        // Buscar dados da empresa se não vieram no data
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPath, data.age_id.toString());
         if (!fs.existsSync(certDir)) {
@@ -58,23 +229,20 @@ async function createCertificate(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        doc
-            .image(bgCertificado, 0, 0, { width: doc.page.width });
+        const isOregon = data.empresa_id == 1;
 
+        if (isOregon) {
+            // Empresa Oregon: usa background fixo com dados da empresa embutidos
+            doc.image(bgCertificado, 0, 0, { width: doc.page.width });
+        } else {
+            // Outras empresas: gera certificado programaticamente
+            _renderCertificadoBg(doc, data.empresa);
+        }
 
-        let isCPF = data.cpf.includes('/') ? 'CNPJ' : 'CPF';
-
-        /* .text(`Certificamos que ${capitalizeName(data.name)
-            }${data.cpf ? `, portadora do ${isCPF}: ${data.cpf
-                }` : ''}, localizada(o) na ${data.endereco
-            }, realizou ${data.services.length == 1 ? 'o serviço' : 'os serviços'
-            } de ${data.services.join(', ')}.`,
-            100, doc.y, { align: 'center', continued: true, width: doc.page.width - 200 })
-*/
+        let isCPF = data.cpf && data.cpf.includes('/') ? 'CNPJ' : 'CPF';
 
         const margin = 100;
         const width = doc.page.width - margin * 2;
-
 
         doc
             .font(montserratFont)
@@ -94,15 +262,10 @@ async function createCertificate(data) {
             .font(montserratFont).text('.', { width });
 
         if (data.dataAplicacao || data.dataGarantia) {
-            // Add the dates
             doc
                 .moveDown(2)
                 .font(montserratFont)
                 .fillColor('#16375b')
-            /* .text(
-                `${data.dataAplicacao ? 'Aplicação: ' + data.dataAplicacao : ''}
-                ${data.dataGarantia ? 'Validade: ' + data.dataGarantia : ''}`,  
-                0, doc.y, { align: 'center' })*/
             if (data.dataAplicacao) {
                 doc.text(
                     `${data.dataAplicacao ? 'Aplicação: ' + data.dataAplicacao : ''}`,
@@ -117,20 +280,13 @@ async function createCertificate(data) {
             doc.moveDown(.2)
         }
 
-        /*  if (data.dataGarantia) {
-             doc
-                 .font(montserratFont)
-                 .fillColor('#16375b')
-                 .text(`VALIDADE: ${data.dataGarantia}`, 0, doc.y, { align: 'center' });
-         } */
-
         doc.moveDown(2);
 
-        // Add the footer
+        // Footer com cidade e data
         doc
             .fontSize(15)
             .font(montserratFont)
-            .text(`São José, ${data.date}`, 0, 410, { align: 'center' });
+            .text(`${data.empresa?.cidade || ''}, ${data.date}`, 0, 410, { align: 'center' });
 
 
         // Finalize the PDF and end the stream
@@ -152,6 +308,7 @@ async function createCertificate(data) {
 async function createRecibo(data) {
     try {
         console.log('Criando recibo: ', data);
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPathRecibos, data.age_id.toString());
@@ -178,17 +335,8 @@ async function createRecibo(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo
-        doc.image(logoPath, 50, 50, { width: 80 });
-
-        // Add the header
-        doc
-            .fontSize(14)
-            .text('Oregon Higienização de estofados e Ambientes', 150, 50)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', 150, 69)
-            .text('Contato: (48) 99174-9762', 150, 84)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', 150, 98);
+        // Add the header com dados da empresa
+        renderHeaderPequeno(doc, data.empresa);
 
         doc.moveDown();
 
@@ -241,7 +389,7 @@ async function createRecibo(data) {
         doc
             .moveDown(3)
             .fontSize(12)
-            .text(`Biguaçu, ${data.dataRecibo}`, doc.x - 10, doc.y, { align: 'right', lineBreak: false });
+            .text(`${data.empresa?.cidade || ''}, ${data.dataRecibo}`, doc.x - 10, doc.y, { align: 'right', lineBreak: false });
 
         // Finalize the PDF and end the stream
         doc.end();
@@ -262,6 +410,7 @@ async function createRecibo(data) {
 async function createRelatorioSaida(data) {
     try {
         console.log('Criando relatório de saída: ', data);
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPathRelatorios);
@@ -292,17 +441,8 @@ async function createRelatorioSaida(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo
-        doc.image(logoPath, 50, 50, { width: 80 });
-
-        // Add the header
-        doc
-            .fontSize(14)
-            .text('Oregon Higienização de estofados e Ambientes', 150, 50)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', 150, 69)
-            .text('Contato: (48) 99174-9762', 150, 84)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', 150, 98);
+        // Add the header com dados da empresa
+        renderHeaderPequeno(doc, data.empresa);
 
         doc.moveDown();
 
@@ -401,6 +541,7 @@ async function createRelatorioSaida(data) {
 async function createRelatorioReceber(data) {
     try {
         console.log('Criando relatório de recebimento: ', data);
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPathRelatorios);
@@ -431,17 +572,8 @@ async function createRelatorioReceber(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo
-        doc.image(logoPath, 50, 50, { width: 80 });
-
-        // Add the header
-        doc
-            .fontSize(14)
-            .text('Oregon Higienização de estofados e Ambientes', 150, 50)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', 150, 69)
-            .text('Contato: (48) 99174-9762', 150, 84)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', 150, 98);
+        // Add the header com dados da empresa
+        renderHeaderPequeno(doc, data.empresa);
 
         doc.moveDown();
 
@@ -572,6 +704,7 @@ async function createRelatorioReceber(data) {
 async function createRelatorioComissoes(data) {
     try {
         console.log('Criando relatório de comissões: ', data);
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPathRelatorios);
@@ -602,19 +735,8 @@ async function createRelatorioComissoes(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo (header igual ao createOrdemServico)
-        doc.image(logoPath, 50, 0, { width: 150 });
-
-        // Add the header
-        let xHeader = 200;
-        doc
-            .fontSize(14)
-            .text('Oregon Serviços Especializados LTDA', xHeader, 40)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', xHeader, 58)
-            .text('Contato: (48) 99106-6656', xHeader, 72)
-            .text('Endereço: Amarildo Rohling Guizoni, 240, Serraria - São José/SC', xHeader, 86)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', xHeader, 100);
+        // Add the header com dados da empresa
+        renderHeaderGrande(doc, data.empresa);
 
         doc.moveDown(2);
 
@@ -737,6 +859,7 @@ async function createRelatorioComissoes(data) {
 async function createRelatorioServicosTecnicos(data) {
     try {
         console.log('Criando relatório de serviços por técnico: ', data);
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         // Certifique-se de que o diretório de saída existe
         const certDir = path.join(outputPathRelatorios);
@@ -767,17 +890,8 @@ async function createRelatorioServicosTecnicos(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo
-        doc.image(logoPath, 50, 50, { width: 80 });
-
-        // Add the header
-        doc
-            .fontSize(14)
-            .text('Oregon Higienização de estofados e Ambientes', 150, 50)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', 150, 69)
-            .text('Contato: (48) 99174-9762', 150, 84)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', 150, 98);
+        // Add the header com dados da empresa
+        renderHeaderPequeno(doc, data.empresa);
 
         doc.moveDown();
 
@@ -889,6 +1003,7 @@ async function createRelatorioServicosTecnicos(data) {
 async function createOrdemServico(data) {
     try {
         if(!data || !data.age_id) throw new Error('Dados inválidos');
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
 
         console.log('Criando ordem de serviço: ', data);
 
@@ -916,19 +1031,8 @@ async function createOrdemServico(data) {
         const writeStream = fs.createWriteStream(filePath);
         doc.pipe(writeStream);
 
-        // Add the logo
-        doc.image(logoPath, 50, 0, { width: 150 });
-
-        // Add the header
-        let xHeader = 200;
-        doc
-            .fontSize(14)
-            .text('Oregon Serviços Especializados LTDA', xHeader, 40)
-            .fontSize(10)
-            .text('CNPJ: 37.503.611/0001-62', xHeader, 58)
-            .text('Contato: (48) 99106-6656', xHeader, 72)
-            .text('Endereço: Amarildo Rohling Guizoni, 240, Serraria - São José/SC', xHeader, 86)
-            .text('E-mail: oregon.hiegienizacao@gmail.com', xHeader, 100);
+        // Add the header com dados da empresa
+        renderHeaderGrande(doc, data.empresa);
 
         doc.moveDown(2);
 
@@ -1142,13 +1246,636 @@ async function inserirAssinaturaDigitalDoc(dados, pathAssinatura, coordsRaw) {
 }
 
 
-module.exports = { 
-    createCertificate, 
-    createRecibo, 
-    createRelatorioSaida, 
-    createRelatorioReceber, 
-    createRelatorioComissoes, 
+/**
+ * Gera PDF de orçamento da calculadora de precificação
+ * @param {Object} data - Dados do orçamento
+ * @returns {Object} { filePath, fileName }
+ */
+/**
+ * Substitui variáveis de template no texto HTML do orçamento
+ * Ex: {{cliente_nome}}, {{valor_total}}, {{data_hoje}}
+ */
+function substituirVariaveisTemplate(texto, data) {
+    if (!texto) return '';
+    return texto
+        .replace(/\{\{cliente_nome\}\}/g, data.cliente_nome || '')
+        .replace(/\{\{cliente_telefone\}\}/g, data.cliente_telefone || '')
+        .replace(/\{\{cliente_endereco\}\}/g, data.cliente_endereco || '')
+        .replace(/\{\{valor_total\}\}/g, formatValor(data.valor_final || 0))
+        .replace(/\{\{valor_original\}\}/g, formatValor(data.valor_original || data.valor_final || 0))
+        .replace(/\{\{desconto\}\}/g, data.desconto ? `${data.desconto}${data.desconto_tipo === 'percentual' ? '%' : ''}` : '0')
+        .replace(/\{\{data_hoje\}\}/g, moment().format('DD/MM/YYYY'))
+        .replace(/\{\{validade_dias\}\}/g, String(data.validade_dias || 30))
+        .replace(/\{\{orcamento_id\}\}/g, String(data.id || ''));
+}
+
+/**
+ * Converte HTML simples para texto formatado para PDFKit
+ */
+function htmlParaTexto(html) {
+    if (!html) return '';
+    return html
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<li>/gi, '  - ')
+        .replace(/<\/h[1-6]>/gi, '\n\n')
+        .replace(/<h[1-6][^>]*>/gi, '')
+        .replace(/<strong>/gi, '')
+        .replace(/<\/strong>/gi, '')
+        .replace(/<em>/gi, '')
+        .replace(/<\/em>/gi, '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+async function createOrcamento(data) {
+    try {
+        if (!data.empresa && data.empresa_id) data.empresa = await getEmpresaData(data.empresa_id);
+        const emp = data.empresa;
+        const outputPathOrcamentos = path.join(__dirname, '../files/orcamentos');
+        if (!fs.existsSync(outputPathOrcamentos)) {
+            fs.mkdirSync(outputPathOrcamentos, { recursive: true });
+        }
+
+        const fileName = `Orcamento-${data.id}.pdf`;
+        const filePath = path.join(outputPathOrcamentos, fileName);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+
+        const pageW = 595.28;
+        const marginL = 50;
+        const marginR = 50;
+        const contentW = pageW - marginL - marginR;
+
+        const doc = new PDFTable({
+            size: 'A4',
+            margins: { top: 40, bottom: 50, left: marginL, right: marginR },
+            bufferPages: true
+        });
+
+        const writeStream = fs.createWriteStream(filePath);
+        doc.pipe(writeStream);
+
+        // === HEADER DA EMPRESA ===
+        let logoRendered = false;
+        const headerTop = 40;
+        const logoW = 100;
+
+        if (emp?.logo) {
+            try {
+                const logoData = emp.logo.startsWith('data:') ? Buffer.from(emp.logo.split(',')[1], 'base64') : emp.logo;
+                doc.image(logoData, marginL, headerTop, { width: logoW });
+                logoRendered = true;
+            } catch (e) {
+                if (fs.existsSync(logoPath)) { doc.image(logoPath, marginL, headerTop, { width: logoW }); logoRendered = true; }
+            }
+        } else if (fs.existsSync(logoPath)) {
+            doc.image(logoPath, marginL, headerTop, { width: logoW });
+            logoRendered = true;
+        }
+
+        const xEmpresa = logoRendered ? marginL + logoW + 15 : marginL;
+        const wEmpresa = pageW - marginR - xEmpresa;
+        let yEmp = headerTop;
+
+        if (emp?.nome) {
+            doc.font(montserratBoldFont).fontSize(13).fillColor('#222')
+               .text(emp.nome, xEmpresa, yEmp, { width: wEmpresa });
+            yEmp += 18;
+        }
+
+        doc.font(montserratFont).fontSize(8.5).fillColor('#555');
+        const docFormatado = formatDocumento(emp?.documento || emp?.cnpj || emp?.cpf || '');
+        if (docFormatado) { doc.text(`CNPJ/CPF: ${docFormatado}`, xEmpresa, yEmp, { width: wEmpresa }); yEmp += 12; }
+        const enderecoEmp = formatEnderecoEmpresa(emp);
+        if (enderecoEmp) { doc.text(enderecoEmp, xEmpresa, yEmp, { width: wEmpresa }); yEmp += 12; }
+        if (emp?.telefone) { doc.text(`Tel: ${emp.telefone}`, xEmpresa, yEmp, { width: wEmpresa, continued: !!emp?.email }); }
+        if (emp?.email) { doc.text(`  |  ${emp.email}`, { width: wEmpresa }); }
+
+        const headerEndY = Math.max(yEmp + 20, headerTop + 75);
+        doc.strokeColor('#2196F3').lineWidth(1.5)
+           .moveTo(marginL, headerEndY).lineTo(pageW - marginR, headerEndY).stroke();
+
+        doc.y = headerEndY + 15;
+        doc.x = marginL;
+
+        // === TÍTULO ===
+        doc.font(montserratBoldFont).fontSize(15).fillColor('#1a1a1a')
+           .text(`ORÇAMENTO`, { align: 'center' });
+
+        doc.font(montserratFont).fontSize(9).fillColor('#666')
+           .text(`${data.data || moment().format('DD/MM/YYYY')}`, { align: 'center' });
+
+        doc.moveDown(0.8);
+
+        // === DADOS DO CLIENTE ===
+        if (data.cliente_nome) {
+            const boxY = doc.y;
+            const boxPad = 12;
+            doc.save();
+            doc.roundedRect(marginL, boxY, contentW, 55, 4).fillColor('#F5F7FA').fill();
+            doc.restore();
+
+            let yDados = boxY + boxPad;
+            const col1X = marginL + boxPad;
+            const col2X = marginL + contentW / 2 + boxPad;
+
+            doc.font(montserratBoldFont).fontSize(9).fillColor('#333')
+               .text('Cliente:', col1X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555')
+               .text(`  ${data.cliente_nome}`);
+            yDados += 14;
+
+            if (data.cliente_telefone) {
+                doc.font(montserratBoldFont).fillColor('#333')
+                   .text('Telefone:', col1X, yDados, { continued: true })
+                   .font(montserratFont).fillColor('#555')
+                   .text(`  ${data.cliente_telefone}`);
+                yDados += 14;
+            }
+
+            if (data.cliente_endereco) {
+                doc.font(montserratBoldFont).fillColor('#333')
+                   .text('Endereço:', col1X, yDados, { continued: true })
+                   .font(montserratFont).fillColor('#555')
+                   .text(`  ${data.cliente_endereco}`);
+                yDados += 14;
+            }
+
+            doc.y = boxY + 55 + 10;
+        }
+
+        // === CONTEÚDO HTML DO MODELO ===
+        if (data.conteudo_html_customizado) {
+            doc.strokeColor('#e0e0e0').lineWidth(0.5)
+               .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+            doc.moveDown(0.8);
+
+            let textoHtml = substituirVariaveisTemplate(data.conteudo_html_customizado, data);
+            let texto = htmlParaTexto(textoHtml);
+
+            doc.font(montserratFont).fontSize(10).fillColor('#333')
+               .text(texto, { align: 'justify', lineGap: 4 });
+
+            doc.moveDown(0.8);
+        }
+
+        // === TABELA DE SERVIÇOS ===
+        const servicos = data.servicos || [];
+        if (servicos.length > 0) {
+            doc.strokeColor('#e0e0e0').lineWidth(0.5)
+               .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+            doc.moveDown(0.5);
+
+            doc.font(montserratBoldFont).fontSize(11).fillColor('#1a1a1a')
+               .text('SERVIÇOS', marginL, doc.y);
+
+            doc.moveDown(0.5);
+
+            const table = {
+                headers: [
+                    { label: 'Serviço', width: 280 },
+                    { label: 'Unidade', width: 80 },
+                    { label: 'Valor', width: 120 },
+                ],
+                rows: servicos.map(s => {
+                    const isValor = s.tipo === 'valor';
+                    const valor = s.valor_final || (isValor ? (parseFloat(s.valor) || 0) : (parseFloat(s.valor_ref) || 0));
+                    return [
+                        s.nome || '-',
+                        isValor ? '1' : `${parseFloat(s.horas) || 0}h`,
+                        formatValor(valor)
+                    ];
+                })
+            };
+
+            await doc.table(table, {
+                x: marginL,
+                y: doc.y,
+                padding: 5,
+                columnSpacing: 5,
+                minRowHeight: 22,
+                prepareHeader: () => doc.fontSize(9).font(montserratBoldFont).fillColor('#333'),
+                prepareRow: (row, indexColumn, indexRow, rectRow, rectCell) => {
+                    doc.fontSize(9);
+                    doc.fillColor('#000000');
+                    doc.font(montserratFont);
+                    if (indexRow % 2 === 0) {
+                        doc.fillColor('#000000');
+                        doc.addBackground(rectCell, '#f3f3f3', 1);
+                    }
+                }
+            });
+
+            doc.moveDown(0.5);
+        } else if (data.tipo_servico) {
+            doc.font(montserratBoldFont).fontSize(11).fillColor('#1a1a1a')
+               .text('SERVIÇO', marginL, doc.y);
+            doc.moveDown(0.3);
+            doc.font(montserratFont).fontSize(10).fillColor('#333')
+               .text(`${data.tipo_servico || '-'}`, marginL, doc.y);
+            doc.moveDown(1);
+        }
+
+        // === VALOR FINAL (com desconto se aplicável) ===
+        doc.strokeColor('#2196F3').lineWidth(1)
+           .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+        doc.moveDown(0.8);
+
+        if (data.desconto && parseFloat(data.desconto) > 0 && data.valor_original) {
+            // Mostrar valor original riscado
+            doc.font(montserratFont).fontSize(10).fillColor('#999')
+               .text('Valor original:', marginL, doc.y, { continued: true });
+
+            // Simular texto riscado (desenhar linha sobre o texto)
+            const valorOrigStr = `  ${formatValor(data.valor_original)}`;
+            const xValOrig = doc.x;
+            const yValOrig = doc.y;
+            doc.text(valorOrigStr, { continued: false });
+            // Linha de risco sobre o valor original
+            doc.save();
+            doc.strokeColor('#999').lineWidth(1)
+               .moveTo(xValOrig, yValOrig + 5).lineTo(xValOrig + doc.widthOfString(valorOrigStr), yValOrig + 5).stroke();
+            doc.restore();
+
+            doc.moveDown(0.3);
+
+            // Mostrar desconto
+            const descontoLabel = data.desconto_tipo === 'percentual'
+                ? `${data.desconto}% de desconto`
+                : `Desconto de ${formatValor(data.desconto)}`;
+            doc.font(montserratFont).fontSize(9).fillColor('#4CAF50')
+               .text(descontoLabel, marginL, doc.y);
+
+            doc.moveDown(0.3);
+        }
+
+        // Valor final em destaque
+        doc.font(montserratFont).fontSize(11).fillColor('#333')
+           .text('Valor total:', marginL, doc.y, { continued: true })
+           .font(montserratBoldFont).fontSize(18).fillColor('#1a1a1a')
+           .text(`  ${formatValor(data.valor_final)}`, { continued: false });
+
+        doc.moveDown(0.8);
+        doc.strokeColor('#2196F3').lineWidth(1)
+           .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+
+        // === CONDIÇÕES DE PAGAMENTO ===
+        if (data.condicoes_pagamento) {
+            doc.moveDown(0.8);
+            doc.font(montserratBoldFont).fontSize(10).fillColor('#1a1a1a')
+               .text('CONDIÇÕES DE PAGAMENTO', marginL, doc.y);
+            doc.moveDown(0.3);
+            doc.font(montserratFont).fontSize(9).fillColor('#444')
+               .text(data.condicoes_pagamento, marginL, doc.y, { width: contentW, lineGap: 3 });
+        }
+
+        // === VALIDADE ===
+        if (data.validade_dias) {
+            doc.moveDown(0.8);
+            doc.font(montserratFont).fontSize(9).fillColor('#666')
+               .text(`Este orçamento é válido por ${data.validade_dias} dias a partir da data de emissão.`, marginL, doc.y, { width: contentW });
+        }
+
+        // === OBSERVAÇÕES ===
+        if (data.observacoes) {
+            doc.moveDown(0.8);
+            doc.font(montserratBoldFont).fontSize(10).fillColor('#1a1a1a')
+               .text('Observações:', marginL, doc.y);
+            doc.moveDown(0.2);
+            doc.font(montserratFont).fontSize(9).fillColor('#444')
+               .text(data.observacoes, marginL, doc.y, { width: contentW, lineGap: 2 });
+        }
+
+        // === ASSINATURAS ===
+        if (doc.y > 650) {
+            doc.addPage();
+        }
+
+        doc.moveDown(2);
+        doc.strokeColor('#e0e0e0').lineWidth(0.5)
+           .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+        doc.moveDown(1);
+
+        // Data e local
+        doc.font(montserratFont).fontSize(9).fillColor('#555')
+           .text(`${emp?.cidade || ''}${emp?.cidade && emp?.estado ? '/' : ''}${emp?.estado || ''}, ${moment().format('DD [de] MMMM [de] YYYY')}`, { align: 'center' });
+
+        doc.moveDown(2);
+
+        const assinaturaY = doc.y;
+
+        doc.strokeColor('#999').lineWidth(0.5)
+           .moveTo(80, assinaturaY + 50).lineTo(280, assinaturaY + 50).stroke();
+        doc.font(montserratBoldFont).fontSize(8).fillColor('#444')
+           .text('Assinatura do Cliente', 80, assinaturaY + 55, { width: 200, align: 'center' });
+        if (data.cliente_nome) {
+            doc.font(montserratFont).fontSize(7.5).fillColor('#888')
+               .text(data.cliente_nome, 80, assinaturaY + 66, { width: 200, align: 'center' });
+        }
+
+        doc.strokeColor('#999').lineWidth(0.5)
+           .moveTo(310, assinaturaY + 50).lineTo(510, assinaturaY + 50).stroke();
+        doc.font(montserratBoldFont).fontSize(8).fillColor('#444')
+           .text('Responsável', 310, assinaturaY + 55, { width: 200, align: 'center' });
+        if (emp?.nome) {
+            doc.font(montserratFont).fontSize(7.5).fillColor('#888')
+               .text(emp.nome, 310, assinaturaY + 66, { width: 200, align: 'center' });
+        }
+
+        // === RODAPÉ ===
+        const pages = doc.bufferedPageRange();
+        for (let i = 0; i < pages.count; i++) {
+            doc.switchToPage(i);
+            doc.font(montserratFont).fontSize(7).fillColor('#aaa')
+               .text(
+                   `Página ${i + 1} de ${pages.count}  |  Orçamento ${data.id}  |  Gerado em ${moment().format('DD/MM/YYYY HH:mm')}`,
+                   marginL, 800,
+                   { width: contentW, align: 'center' }
+               );
+        }
+
+        doc.end();
+        await new Promise(resolve => writeStream.on('finish', resolve));
+
+        console.log('Orçamento PDF criado com sucesso!', filePath);
+        return { filePath, fileName };
+    } catch (error) {
+        throw new Error(`Erro ao gerar o orçamento PDF: ${error}`);
+    }
+}
+
+/**
+ * Gera PDF de contrato a partir do HTML do editor
+ * @param {Object} contrato - Dados do contrato com dados do cliente
+ * @returns {Object} { filePath, fileName, fileUrl }
+ */
+async function createContratoPDF(contrato) {
+    try {
+        if (!contrato.empresa && contrato.empresa_id) contrato.empresa = await getEmpresaData(contrato.empresa_id);
+        const emp = contrato.empresa;
+        const outputPathContratos = path.join(__dirname, '../files/contratos', contrato.id.toString());
+        if (!fs.existsSync(outputPathContratos)) {
+            fs.mkdirSync(outputPathContratos, { recursive: true });
+        }
+
+        const fileName = `Contrato-${contrato.numero || contrato.id}.pdf`;
+        const filePath = path.join(outputPathContratos, fileName);
+
+        // Remove PDF anterior se existir
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+
+        const pageW = 595.28; // A4 width
+        const marginL = 50;
+        const marginR = 50;
+        const contentW = pageW - marginL - marginR;
+
+        const doc = new PDFDocument({
+            size: 'A4',
+            margins: { top: 40, bottom: 50, left: marginL, right: marginR },
+            bufferPages: true
+        });
+
+        const stream = fs.createWriteStream(filePath);
+        doc.pipe(stream);
+
+        // ========== HEADER DA EMPRESA ==========
+        let logoRendered = false;
+        const headerTop = 40;
+        const logoW = 100;
+
+        if (emp?.logo) {
+            try {
+                const logoData = emp.logo.startsWith('data:') ? Buffer.from(emp.logo.split(',')[1], 'base64') : emp.logo;
+                doc.image(logoData, marginL, headerTop, { width: logoW });
+                logoRendered = true;
+            } catch (e) {
+                if (fs.existsSync(logoPath)) { doc.image(logoPath, marginL, headerTop, { width: logoW }); logoRendered = true; }
+            }
+        } else if (fs.existsSync(logoPath)) {
+            doc.image(logoPath, marginL, headerTop, { width: logoW });
+            logoRendered = true;
+        }
+
+        // Dados da empresa ao lado do logo
+        const xEmpresa = logoRendered ? marginL + logoW + 15 : marginL;
+        const wEmpresa = pageW - marginR - xEmpresa;
+        let yEmp = headerTop;
+
+        if (emp?.nome) {
+            doc.font(montserratBoldFont).fontSize(13).fillColor('#222')
+               .text(emp.nome, xEmpresa, yEmp, { width: wEmpresa });
+            yEmp += 18;
+        }
+
+        doc.font(montserratFont).fontSize(8.5).fillColor('#555');
+        const docFormatado = formatDocumento(emp?.documento || emp?.cnpj || emp?.cpf || '');
+        if (docFormatado) { doc.text(`CNPJ/CPF: ${docFormatado}`, xEmpresa, yEmp, { width: wEmpresa }); yEmp += 12; }
+        const enderecoEmp = formatEnderecoEmpresa(emp);
+        if (enderecoEmp) { doc.text(enderecoEmp, xEmpresa, yEmp, { width: wEmpresa }); yEmp += 12; }
+        if (emp?.telefone) { doc.text(`Tel: ${emp.telefone}`, xEmpresa, yEmp, { width: wEmpresa, continued: !!emp?.email }); }
+        if (emp?.email) { doc.text(`  |  ${emp.email}`, { width: wEmpresa }); }
+
+        // Linha separadora abaixo do header
+        const headerEndY = Math.max(yEmp + 20, headerTop + 75);
+        doc.strokeColor('#2196F3').lineWidth(1.5)
+           .moveTo(marginL, headerEndY).lineTo(pageW - marginR, headerEndY).stroke();
+
+        doc.y = headerEndY + 15;
+
+        // ========== TÍTULO DO CONTRATO ==========
+        doc.font(montserratBoldFont).fontSize(15).fillColor('#1a1a1a')
+           .text(`CONTRATO ${contrato.numero ? `N° ${contrato.numero}` : ''}`, { align: 'center' });
+
+        doc.moveDown(0.8);
+
+        // ========== BOX DE DADOS DO CONTRATO ==========
+        const boxY = doc.y;
+        const boxPad = 12;
+
+        // Fundo do box
+        doc.save();
+        doc.roundedRect(marginL, boxY, contentW, 70, 4).fillColor('#F5F7FA').fill();
+        doc.restore();
+
+        let yDados = boxY + boxPad;
+        const col1X = marginL + boxPad;
+        const col2X = marginL + contentW / 2 + boxPad;
+
+        doc.font(montserratFont).fontSize(9).fillColor('#666');
+
+        // Coluna esquerda
+        if (contrato.cli_nome) {
+            doc.font(montserratBoldFont).fillColor('#333').text('Cliente:', col1X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${contrato.cli_nome}`);
+        }
+        yDados += 15;
+        if (contrato.inicio_data) {
+            doc.font(montserratBoldFont).fillColor('#333').text('Início:', col1X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${moment(contrato.inicio_data).format('DD/MM/YYYY')}`);
+        }
+        yDados += 15;
+        if (contrato.periodo && contrato.periodo_type) {
+            doc.font(montserratBoldFont).fillColor('#333').text('Vigência:', col1X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${contrato.periodo} ${contrato.periodo_type}`);
+        }
+
+        // Coluna direita
+        yDados = boxY + boxPad;
+        if (contrato.valor) {
+            doc.font(montserratBoldFont).fillColor('#333').text('Valor:', col2X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${formatValor(parseFloat(contrato.valor))}`);
+        }
+        yDados += 15;
+        if (contrato.cli_cpf) {
+            doc.font(montserratBoldFont).fillColor('#333').text('CPF/CNPJ:', col2X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${formatDocumento(contrato.cli_cpf)}`);
+        }
+        yDados += 15;
+        if (contrato.cli_email) {
+            doc.font(montserratBoldFont).fillColor('#333').text('E-mail:', col2X, yDados, { continued: true })
+               .font(montserratFont).fillColor('#555').text(`  ${contrato.cli_email}`);
+        }
+
+        doc.y = boxY + 70 + 15;
+
+        // ========== CONTEÚDO DO CONTRATO ==========
+        if (contrato.conteudo_html) {
+            // Linha divisória sutil antes do conteúdo
+            doc.strokeColor('#e0e0e0').lineWidth(0.5)
+               .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+            doc.moveDown(0.8);
+
+            // Converte HTML para texto
+            let texto = contrato.conteudo_html
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/p>/gi, '\n\n')
+                .replace(/<\/div>/gi, '\n')
+                .replace(/<\/li>/gi, '\n')
+                .replace(/<li>/gi, '  - ')
+                .replace(/<\/h[1-6]>/gi, '\n\n')
+                .replace(/<h[1-6][^>]*>/gi, '')
+                .replace(/<strong>/gi, '')
+                .replace(/<\/strong>/gi, '')
+                .replace(/<em>/gi, '')
+                .replace(/<\/em>/gi, '')
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+
+            doc.font(montserratFont).fontSize(10).fillColor('#333')
+               .text(texto, {
+                   align: 'justify',
+                   lineGap: 4
+               });
+        }
+
+        // ========== OBSERVAÇÕES ==========
+        if (contrato.obs) {
+            doc.moveDown(1.5);
+            doc.font(montserratBoldFont).fontSize(9).fillColor('#666')
+               .text('Observações:');
+            doc.font(montserratFont).fontSize(9).fillColor('#666')
+               .text(contrato.obs, { lineGap: 2 });
+        }
+
+        // ========== ÁREA DE ASSINATURAS ==========
+        // Verifica se cabe na página (precisa de ~120px), senão adiciona nova página
+        if (doc.y > 650) {
+            doc.addPage();
+        }
+
+        doc.moveDown(2);
+
+        // Linha divisória
+        doc.strokeColor('#e0e0e0').lineWidth(0.5)
+           .moveTo(marginL, doc.y).lineTo(pageW - marginR, doc.y).stroke();
+
+        doc.moveDown(1);
+
+        // Data e local
+        doc.font(montserratFont).fontSize(9).fillColor('#555')
+           .text(`${emp?.cidade || ''}${emp?.cidade && emp?.estado ? '/' : ''}${emp?.estado || ''}, ${moment().format('DD [de] MMMM [de] YYYY')}`, { align: 'center' });
+
+        doc.moveDown(2);
+
+        const assinaturaY = doc.y;
+
+        // Assinatura Empresa (esquerda)
+        doc.strokeColor('#999').lineWidth(0.5)
+           .moveTo(80, assinaturaY + 50).lineTo(280, assinaturaY + 50).stroke();
+        doc.font(montserratBoldFont).fontSize(8).fillColor('#444')
+           .text('Assinatura da Empresa', 80, assinaturaY + 55, { width: 200, align: 'center' });
+        if (emp?.nome) {
+            doc.font(montserratFont).fontSize(7.5).fillColor('#888')
+               .text(emp.nome, 80, assinaturaY + 66, { width: 200, align: 'center' });
+        }
+
+        // Assinatura Cliente (direita)
+        doc.strokeColor('#999').lineWidth(0.5)
+           .moveTo(310, assinaturaY + 50).lineTo(510, assinaturaY + 50).stroke();
+        doc.font(montserratBoldFont).fontSize(8).fillColor('#444')
+           .text('Assinatura do Cliente', 310, assinaturaY + 55, { width: 200, align: 'center' });
+        if (contrato.cli_nome) {
+            doc.font(montserratFont).fontSize(7.5).fillColor('#888')
+               .text(contrato.cli_nome, 310, assinaturaY + 66, { width: 200, align: 'center' });
+        }
+
+        // ========== RODAPÉ ==========
+        const pages = doc.bufferedPageRange();
+        for (let i = 0; i < pages.count; i++) {
+            doc.switchToPage(i);
+            doc.font(montserratFont).fontSize(7).fillColor('#aaa')
+               .text(
+                   `Página ${i + 1} de ${pages.count}  |  Contrato ${contrato.numero || contrato.id}  |  Gerado em ${moment().format('DD/MM/YYYY HH:mm')}`,
+                   marginL, 800,
+                   { width: contentW, align: 'center' }
+               );
+        }
+
+        doc.end();
+
+        await new Promise((resolve, reject) => {
+            stream.on('finish', resolve);
+            stream.on('error', reject);
+        });
+
+        const fileUrl = `/download/docs/contratos/${contrato.id}/${fileName}`;
+
+        console.log('[Contratos] PDF gerado com sucesso:', filePath);
+        return { filePath, fileName, fileUrl };
+    } catch (error) {
+        console.error('[Contratos] Erro ao gerar PDF:', error);
+        return false;
+    }
+}
+
+module.exports = {
+    createCertificate,
+    createRecibo,
+    createRelatorioSaida,
+    createRelatorioReceber,
+    createRelatorioComissoes,
     createRelatorioServicosTecnicos,
     createOrdemServico,
-    inserirAssinaturaDigitalDoc
+    inserirAssinaturaDigitalDoc,
+    createOrcamento,
+    createContratoPDF,
+    getEmpresaData
 };

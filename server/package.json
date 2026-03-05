@@ -4,7 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:sync": "node src/scripts/sync-db-schema.js",
+    "db:sync:execute": "node src/scripts/sync-db-schema.js --execute",
+    "db:sync:reverse": "node src/scripts/sync-db-schema.js --reverse",
+    "db:sync:reverse:execute": "node src/scripts/sync-db-schema.js --reverse --execute"
   },
   "keywords": [],
   "author": "",
@@ -42,6 +46,7 @@
     "pdfkit-table": "^0.1.99",
     "socket": "^1.1.23",
     "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.3",
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#a379900",
     "xlsx": "^0.18.5"
   }

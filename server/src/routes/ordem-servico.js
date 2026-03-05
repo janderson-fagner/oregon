@@ -12,6 +12,7 @@ const { inserirAssinaturaDigitalDoc } = require('../utils/generatePDF');
 const { getAgendamentos } = require('../utils/agendaUtils');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
 const caminho = path.join(__dirname, '../uploads/assinaturas-ordem-servico');
 
@@ -32,13 +33,14 @@ const upload = multer({ storage: storage });
 
 router.get('/:age_id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const age_id = req.params.age_id;
 
         if (!age_id) {
             return res.status(400).json({ message: 'Agendamento não encontrado' });
         }
 
-        const agendamentos = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [age_id]);
+        const agendamentos = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?', [age_id, empresa_id], empresa_id);
 
         if (agendamentos.length === 0) {
             return res.status(404).json({ message: 'Agendamento não encontrado' });
@@ -59,6 +61,7 @@ router.get('/:age_id', async (req, res) => {
 
 router.post('/assinar/:age_id', upload.single('assinatura'), async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const age_id = req.params.age_id;
 
         if (!age_id) {
@@ -73,7 +76,7 @@ router.post('/assinar/:age_id', upload.single('assinatura'), async (req, res) =>
 
         assinaturaCoordinates = JSON.parse(assinaturaCoordinates);
 
-        const agendamentos = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [age_id]);
+        const agendamentos = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?', [age_id, empresa_id], empresa_id);
 
         if (agendamentos.length === 0) {
             return res.status(404).json({ message: 'Agendamento não encontrado' });
@@ -108,7 +111,7 @@ router.post('/assinar/:age_id', upload.single('assinatura'), async (req, res) =>
 
         console.log('Ordem de serviço assinada:', JSON.stringify(ordemData));
 
-        await dbQuery('UPDATE AGENDAMENTO SET age_ordemServico = ? WHERE age_id = ?', [JSON.stringify(ordemData), agendamento.age_id]);
+        await dbQuery('UPDATE AGENDAMENTO SET age_ordemServico = ? WHERE age_id = ? AND empresa_id = ?', [JSON.stringify(ordemData), agendamento.age_id, empresa_id]);
 
         return res.status(200).json({ message: 'Ordem de serviço assinada com sucesso' });
     } catch (error) {

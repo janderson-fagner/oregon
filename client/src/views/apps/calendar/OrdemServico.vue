@@ -126,6 +126,7 @@ const salvarOrdemServico = async (auto = true) => {
     salvando.value = false;
 
     if (!auto) close();
+    return true;
   } catch (error) {
     console.error("Erro ao salvar ordem de serviço", error);
     setAlert(
@@ -135,10 +136,15 @@ const salvarOrdemServico = async (auto = true) => {
       3000
     );
     salvando.value = false;
+    return false;
   }
 };
 
 const gerarOrdemServico = async () => {
+  let salvou = await salvarOrdemServico(true);
+
+  if (!salvou) return;
+
   try {
     const response = await $api("/agenda/gerarOrdemServico", {
       method: "POST",
@@ -147,13 +153,13 @@ const gerarOrdemServico = async () => {
       },
     });
 
-    if (!response || !response.url || !response.ordemData) 
-    throw new Error("Erro ao gerar ordem de serviço");
+    if (!response || !response.url || !response.ordemData)
+      throw new Error("Erro ao gerar ordem de serviço");
 
     console.log("response", response);
 
     setAlert(
-      'Ordem de serviço gerada com sucesso',
+      "Ordem de serviço gerada com sucesso",
       "success",
       "tabler-check",
       3000
@@ -190,7 +196,7 @@ const close = () => {
 };
 
 const downloadOrdemServico = () => {
-  if(!ordemServico.value.assinaturaData?.filePdf?.url) return;
+  if (!ordemServico.value.assinaturaData?.filePdf?.url) return;
 
   window.open(ordemServico.value.assinaturaData.filePdf.url, "_blank");
 };
@@ -408,17 +414,22 @@ const downloadOrdemServico = () => {
         </div>
       </div>
 
-      <div v-else class="d-flex flex-column align-center justify-center mt-4 gap-3">
-
-
+      <div
+        v-else
+        class="d-flex flex-column align-center justify-center mt-4 gap-3"
+      >
         <p class="mb-0 text-sm">
           <VIcon icon="tabler-signature" class="mr-2" />
           Link de assinatura:
-          <a :href="`${ urlApp }/ordem-servico/${ props.agendamentoData.age_id }`" target="_blank" class="text-primary">
+          <a
+            :href="`${urlApp}/ordem-servico/${props.agendamentoData.age_id}`"
+            target="_blank"
+            class="text-primary"
+          >
             {{ urlApp }}/ordem-servico/{{ props.agendamentoData.age_id }}
           </a>
         </p>
-        <VBtn class="w-100 text-none" @click="downloadOrdemServico"> 
+        <VBtn class="w-100 text-none" @click="downloadOrdemServico">
           <VIcon icon="tabler-download" class="mr-2" />
           Baixar Ordem de Serviço
         </VBtn>

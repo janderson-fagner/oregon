@@ -1,6 +1,7 @@
 <script setup>
 import { temaAtual } from "@core/stores/config";
 import tiposAgendamento from "./tiposAgendamento.vue";
+import { useAssinatura } from "@/composables/useAssinatura";
 
 import { can } from "@layouts/plugins/casl";
 const router = useRouter();
@@ -16,13 +17,13 @@ if(!can("manage", "config_gerais")) {
 }
 
 const { setAlert } = useAlert();
+const { isEmpresaPrincipal } = useAssinatura();
 
 const abasConfig = [
   { title: "Agendamentos", icon: "tabler-calendar" },
   { title: "Clientes", icon: "tabler-users" },
   { title: "Financeiro", icon: "tabler-currency-dollar" },
   { title: "Regras e Funções", icon: "tabler-user-circle" },
-  { title: "Desenvolvimento", icon: "tabler-code" },
 ];
 
 const tab = ref("Agendamentos");
@@ -34,7 +35,12 @@ const roles_api = async () => {
     const res = await $api("/roles/list-role", { method: "GET" });
 
     // Mapeia os resultados para o formato esperado
-    const apiRoles = res.results.filter((r) => r.role_name != "admin");
+    // Empresa principal vê tudo exceto admin; outras empresas não veem admin nem gerente
+    const apiRoles = res.results.filter((r) => {
+      if (r.role_name === "admin") return false;
+      if (!isEmpresaPrincipal.value && r.role_name === "gerente") return false;
+      return true;
+    });
 
     console.log("Roles from API:", apiRoles);
 
@@ -297,6 +303,25 @@ const configPermissions = [
   },
 ];
 
+const permissionsCalculadora = [
+  {
+    title: "Total",
+    value: [{ action: "manage", subject: "calculadora" }],
+  },
+  {
+    title: "Ver Calculadora",
+    value: [{ action: "view", subject: "calculadora" }],
+  },
+  {
+    title: "Gerar Orçamento",
+    value: [{ action: "create", subject: "calculadora" }],
+  },
+  {
+    title: "Editar Configurações",
+    value: [{ action: "manage", subject: "calculadora_config" }],
+  },
+];
+
 const permissoesType = [
   {
     title: "Relatórios",
@@ -344,6 +369,12 @@ const permissoesType = [
       return { ...p, value: Array.isArray(p.value) ? p.value[0] : p.value };
     }),
   },
+  {
+    title: "Calculadora de Precificação",
+    permissions: permissionsCalculadora.map((p) => {
+      return { ...p, value: Array.isArray(p.value) ? p.value[0] : p.value };
+    }),
+  },
 ];
 
 const dialogPermissions = ref(false);
@@ -352,6 +383,49 @@ const selectedRole = ref({
   role_ability: [],
   role_id: null,
 });
+
+/**
+ * Coleta todas as permissões individuais "Total" (manage subject) de cada categoria.
+ * Para empresas que não são a principal, "Permissão Total" marca todas essas.
+ */
+const allTotalPermissions = computed(() => {
+  const totals = [];
+  const allPerms = [
+    permissionsRelatorio, permissionsAgendamento, permissionsCliente,
+    permissionsServico, permissionsEstoque, permissionsFinanceiro,
+    atendimentoPermissions, configPermissions, permissionsCalculadora
+  ];
+  for (const group of allPerms) {
+    for (const p of group) {
+      const val = Array.isArray(p.value) ? p.value[0] : p.value;
+      totals.push(val);
+    }
+  }
+  return totals;
+});
+
+/**
+ * Verifica se todas as permissões individuais estão marcadas (para non-empresa-1 "Permissão Total")
+ */
+const allPermissionsSelected = computed(() => {
+  if (!selectedRole.value.role_ability?.length) return false;
+  return allTotalPermissions.value.every(perm =>
+    selectedRole.value.role_ability.some(a => a.action === perm.action && a.subject === perm.subject)
+  );
+});
+
+/**
+ * Toggle "Permissão Total" para non-empresa-1: marca/desmarca todas as permissões individuais
+ */
+const toggleAllPermissions = () => {
+  if (allPermissionsSelected.value) {
+    // Desmarca tudo, deixa só read all
+    selectedRole.value.role_ability = [{ action: 'read', subject: 'all' }];
+  } else {
+    // Marca todas as permissões individuais
+    selectedRole.value.role_ability = [...allTotalPermissions.value];
+  }
+};
 
 const configs = ref([]);
 
@@ -1157,7 +1231,7 @@ const saveRole = async () => {
                         (ability) =>
                           ability.action === 'manage' &&
                           ability.subject === 'all'
-                      )
+                      ) || (!isEmpresaPrincipal && role.role_ability?.length >= allTotalPermissions.length)
                     "
                   >
                     Permissão total
@@ -1334,7 +1408,9 @@ const saveRole = async () => {
               </VCol>
 
               <VCol cols="12">
+                <!-- Empresa principal: manage all real -->
                 <VCheckbox
+                  v-if="isEmpresaPrincipal"
                   class="mb-2"
                   v-model="selectedRole.role_ability"
                   :value="{ action: 'manage', subject: 'all' }"
@@ -1353,6 +1429,32 @@ const saveRole = async () => {
                       <VTooltip
                         activator="parent"
                         text="Permite acesso total ao sistema, sem restrições."
+                      />
+                    </p>
+                  </template>
+                </VCheckbox>
+
+                <!-- Outras empresas: marca todas as permissões individuais -->
+                <VCheckbox
+                  v-else
+                  class="mb-2"
+                  :model-value="allPermissionsSelected"
+                  @update:model-value="toggleAllPermissions"
+                >
+                  <template #label>
+                    <p class="text-sm ml-1 mb-0">
+                      Permissão Total
+
+                      <VIcon
+                        icon="tabler-info-circle-filled"
+                        size="16"
+                        color="primary"
+                        class="ml-1"
+                      />
+
+                      <VTooltip
+                        activator="parent"
+                        text="Marca todas as permissões disponíveis."
                       />
                     </p>
                   </template>
@@ -1454,73 +1556,6 @@ const saveRole = async () => {
           </VCardText>
         </VCard>
       </VDialog>
-    </VWindowItem>
-
-    <VWindowItem value="Desenvolvimento">
-      <VCard class="mb-6">
-        <VCardText>
-          <p class="text-h5 mb-0">Modo de Desenvolvimento</p>
-          <p class="text-caption">
-            O modo de desenvolvimento é utilizado para testes e desenvolvimento
-            do sistema. Quando ativado, o sistema só enviará mensagens para os
-            números cadastrados abaixo.
-          </p>
-
-          <VSwitch
-            v-model="modoDev"
-            :label="modoDev ? 'Ativado' : 'Desativado'"
-            class="mt-4"
-            color="primary"
-          />
-
-          <p class="mb-0 mt-5" v-if="modoDev">
-            Números de Desenvolvimento
-
-            <IconBtn
-              v-if="modoDev"
-              class="ml-2"
-              color="primary"
-              @click="numerosDev.push('')"
-              size="small"
-              variant="tonal"
-            >
-              <VIcon icon="tabler-plus" size="18" />
-            </IconBtn>
-          </p>
-
-          <div
-            v-for="(numero, index) in numerosDev"
-            :key="index"
-            v-if="numerosDev.length > 0 && modoDev"
-            class="d-flex align-end flex-row mt-2 gap-3"
-          >
-            <AppTextField
-              v-model="numerosDev[index]"
-              :label="index + 1 + ' - Número de Desenvolvimento'"
-              placeholder="Ex: 11 99999-9999"
-              v-mask="['## #####-####', '## ####-####']"
-            />
-
-            <IconBtn
-              class="ml-2"
-              color="error"
-              @click="numerosDev.splice(index, 1)"
-              variant="tonal"
-            >
-              <VIcon icon="tabler-trash" size="18" />
-            </IconBtn>
-          </div>
-
-          <VBtn
-            @click="updateConfig('dev')"
-            color="primary"
-            class="mt-4"
-            :loading="loading"
-          >
-            Salvar
-          </VBtn>
-        </VCardText>
-      </VCard>
     </VWindowItem>
   </VWindow>
 </template>

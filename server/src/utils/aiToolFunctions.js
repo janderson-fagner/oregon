@@ -6,6 +6,7 @@
  */
 
 const dbQuery = require('./dbHelper');
+const { empresaWhere } = require('./dbHelper');
 const moment = require('moment');
 
 /**
@@ -98,7 +99,7 @@ const toolDefinitions = [
     },
     {
         name: "criarAgendamento",
-        description: "AÇÃO CRÍTICA: Cria um novo agendamento no sistema. Use IMEDIATAMENTE após o cliente confirmar data e horário. NÃO apenas responda 'ok, agendado' - EXECUTE esta função para criar o agendamento de verdade!",
+        description: "AÇÃO CRÍTICA: Cria um novo agendamento no sistema. Use IMEDIATAMENTE após o cliente confirmar data e horário. NÃO apenas responda 'ok, agendado' - EXECUTE esta função para criar o agendamento de verdade! IMPORTANTE: Sempre passe nomeServico e tamanho para identificar corretamente o serviço e calcular o valor.",
         parameters: {
             type: "object",
             properties: {
@@ -120,7 +121,19 @@ const toolDefinitions = [
                 },
                 servicoId: {
                     type: "integer",
-                    description: "ID do serviço"
+                    description: "ID do serviço (se conhecido). Se não souber, use nomeServico."
+                },
+                nomeServico: {
+                    type: "string",
+                    description: "Nome do serviço (ex: 'sofá', 'colchão', 'tapete', 'cadeira'). SEMPRE informe para identificar o serviço corretamente."
+                },
+                tamanho: {
+                    type: "string",
+                    description: "Tamanho/tipo do item (ex: '3 lugares', '2 lugares', 'casal', 'solteiro', 'queen', 'king'). SEMPRE informe quando aplicável."
+                },
+                valor: {
+                    type: "number",
+                    description: "Valor do serviço em reais (ex: 306.90). Será calculado automaticamente se não informado."
                 },
                 endereco: {
                     type: "string",
@@ -128,7 +141,7 @@ const toolDefinitions = [
                 },
                 observacoes: {
                     type: "string",
-                    description: "Observações adicionais"
+                    description: "Observações adicionais sobre o serviço"
                 }
             },
             required: ["data", "horaInicio"]
@@ -219,13 +232,13 @@ const toolDefinitions = [
     },
     {
         name: "atualizarNegocio",
-        description: "Atualiza um negócio existente no CRM (avançar etapa, atualizar valor, adicionar anotação)",
+        description: "Atualiza um negócio existente no CRM (avançar etapa, atualizar valor, adicionar anotação). USE para avançar negócio no funil quando cliente evoluir.",
         parameters: {
             type: "object",
             properties: {
                 negocioId: {
                     type: "integer",
-                    description: "ID do negócio a atualizar"
+                    description: "ID do negócio a atualizar (obtido do contexto ou de consultarAgendamentosCliente)"
                 },
                 titulo: {
                     type: "string",
@@ -233,14 +246,58 @@ const toolDefinitions = [
                 },
                 valor: {
                     type: "number",
-                    description: "Novo valor"
+                    description: "Novo valor do negócio"
                 },
                 etapaId: {
                     type: "integer",
-                    description: "Nova etapa do funil (use para avançar o negócio)"
+                    description: "ID da nova etapa do funil para avançar o negócio (ex: 1=Contato Inicial, 6=Orçamento, 7=Fechamento)"
+                },
+                anotacao: {
+                    type: "string",
+                    description: "Anotação/observação sobre a atualização"
                 }
             },
             required: ["negocioId"]
+        }
+    },
+    {
+        name: "marcarNegocioGanho",
+        description: "IMPORTANTE: Marca um negócio como GANHO quando o cliente confirmar o fechamento e o agendamento for criado com sucesso. Use após criar agendamento.",
+        parameters: {
+            type: "object",
+            properties: {
+                negocioId: {
+                    type: "integer",
+                    description: "ID do negócio a marcar como ganho"
+                },
+                valorFinal: {
+                    type: "number",
+                    description: "Valor final acordado do negócio"
+                }
+            },
+            required: ["negocioId"]
+        }
+    },
+    {
+        name: "marcarNegocioPerdido",
+        description: "Marca um negócio como PERDIDO quando o cliente desistir ou não houver mais interesse. Use com cautela - tente recuperar o cliente primeiro.",
+        parameters: {
+            type: "object",
+            properties: {
+                negocioId: {
+                    type: "integer",
+                    description: "ID do negócio a marcar como perdido"
+                },
+                motivo: {
+                    type: "string",
+                    description: "Motivo da perda (ex: 'Preço alto', 'Desistiu', 'Concorrência')"
+                },
+                observacao: {
+                    type: "string",
+                    description: "Observação adicional sobre a perda"
+                }
+            },
+            required: ["negocioId", "motivo"]
         }
     },
     {
@@ -437,6 +494,46 @@ const toolDefinitions = [
         }
     },
     {
+        name: "buscarEnderecoPorLocal",
+        description: "IMPORTANTE: Busca o endereço completo de um local/ponto de referência usando Google Maps. Use quando o cliente informar um LOCAL (shopping, terminal, praça, estabelecimento) em vez de endereço completo. Retorna endereço completo com rua, número, bairro, cidade e coordenadas.",
+        parameters: {
+            type: "object",
+            properties: {
+                local: {
+                    type: "string",
+                    description: "Nome do local ou ponto de referência (ex: 'Shopping Palladium', 'Terminal Pinheirinho', 'Praça Osório')"
+                },
+                cidadeEstado: {
+                    type: "string",
+                    description: "Cidade e estado para contexto (ex: 'Curitiba, PR'). Padrão: região de atendimento da empresa"
+                }
+            },
+            required: ["local"]
+        }
+    },
+    {
+        name: "calcularTaxaDeslocamento",
+        description: "Calcula a taxa de deslocamento baseada na distância entre o endereço do cliente e a base da empresa. Retorna distância em km e valor da taxa adicional.",
+        parameters: {
+            type: "object",
+            properties: {
+                enderecoCliente: {
+                    type: "string",
+                    description: "Endereço completo do cliente"
+                },
+                coordenadasCliente: {
+                    type: "object",
+                    properties: {
+                        lat: { type: "number" },
+                        lng: { type: "number" }
+                    },
+                    description: "Coordenadas do cliente (se já disponíveis)"
+                }
+            },
+            required: ["enderecoCliente"]
+        }
+    },
+    {
         name: "calcularDistancia",
         description: "Calcula distância e tempo de deslocamento entre dois endereços",
         parameters: {
@@ -484,6 +581,67 @@ const toolDefinitions = [
             },
             required: ["opcoes"]
         }
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 📷 ANÁLISE DE IMAGENS
+    // ═══════════════════════════════════════════════════════════════════
+    {
+        name: "analisarImagemCliente",
+        description: "IMPORTANTE: Use quando cliente enviar foto do item (sofá, colchão, etc). Analisa a condição visual descrita e sugere a regra de precificação adequada baseada na condição observada.",
+        parameters: {
+            type: "object",
+            properties: {
+                nomeServico: {
+                    type: "string",
+                    description: "Nome do serviço (ex: 'sofá', 'colchão', 'tapete')"
+                },
+                descricaoImagem: {
+                    type: "string",
+                    description: "Descrição detalhada do que você observa na imagem enviada pelo cliente"
+                },
+                condicaoObservada: {
+                    type: "string",
+                    enum: ["otima", "boa", "regular", "ruim", "muito_ruim"],
+                    description: "Condição geral do item na imagem"
+                },
+                manchasVisiveis: {
+                    type: "boolean",
+                    description: "Se há manchas visíveis no item"
+                },
+                tipoManchas: {
+                    type: "string",
+                    description: "Tipo de manchas se houver (ex: 'óleo', 'café', 'urina', 'sujeira geral')"
+                },
+                tamanhoEstimado: {
+                    type: "string",
+                    description: "Tamanho estimado se identificável (ex: '3 lugares', 'casal')"
+                }
+            },
+            required: ["nomeServico", "descricaoImagem", "condicaoObservada"]
+        }
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔍 BUSCA DE SERVIÇOS
+    // ═══════════════════════════════════════════════════════════════════
+    {
+        name: "buscarServicoPorNome",
+        description: "OBRIGATÓRIO ANTES DE AGENDAR: Busca serviço pelo nome para obter servicoId. SEMPRE chame esta função ANTES de criarAgendamento. Retorna ID, nome, preços e regras de precificação.",
+        parameters: {
+            type: "object",
+            properties: {
+                nomeServico: {
+                    type: "string",
+                    description: "Nome ou parte do nome do serviço (ex: 'sofá', 'colchão', 'tapete')"
+                },
+                tamanho: {
+                    type: "string",
+                    description: "Tamanho/variação do serviço se aplicável (ex: '3 lugares', 'queen', '2m x 3m')"
+                }
+            },
+            required: ["nomeServico"]
+        }
     }
 ];
 
@@ -498,6 +656,9 @@ async function executeToolFunction(functionName, args, context = {}) {
     console.log(`\n🔧 Executando função: ${functionName}`);
     console.log('📥 Argumentos:', JSON.stringify(args, null, 2));
 
+    const empresa_id = context?.empresa_id || null;
+    const ew = empresaWhere(empresa_id);
+
     try {
     switch (functionName) {
             // ═══════════════════════════════════════════════════════════════════
@@ -511,7 +672,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                 args.duracaoMinutos || 60,
                     args.periodoPreferido || 'qualquer',
                     args.servicoId || null,
-                    args.subservicoId || null
+                    args.subservicoId || null,
+                    empresa_id
                 );
                 console.log(`✅ Encontradas ${resultado?.length || 0} opções de disponibilidade`);
                 return resultado;
@@ -524,7 +686,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                 args.horaInicio,
                 args.horaFim,
                 args.servicoId,
-                args.subservicoId
+                args.subservicoId,
+                empresa_id
             );
                 console.log(`✅ Horário ${args.horaInicio} em ${args.data}: ${resultado.disponivel ? 'Disponível' : 'Indisponível'}`);
                 return resultado;
@@ -547,10 +710,11 @@ async function executeToolFunction(functionName, args, context = {}) {
                     SELECT * FROM AGENDAMENTO a
                     WHERE a.cli_id = ?
                     AND a.age_ativo = 1
+                    AND a.${ew.sql}
                 `;
                 
-                const params = [clienteId];
-                
+                const params = [clienteId, ...ew.params];
+
                 switch (tipo) {
                     case 'ultimos':
                         query += ` AND a.age_data < ? ORDER BY a.age_data DESC, a.age_horaInicio DESC`;
@@ -572,7 +736,7 @@ async function executeToolFunction(functionName, args, context = {}) {
                 params.push(limite);
                 
                 // Usar getAgendamentos para obter dados completos
-                const agendamentos = await getAgendamentos(query, params);
+                const agendamentos = await getAgendamentos(query, params, empresa_id);
                 
                 // Formatar para a IA de forma mais completa
                 const formatados = agendamentos.map(ag => {
@@ -628,7 +792,7 @@ async function executeToolFunction(functionName, args, context = {}) {
 
             case 'verificarDataDisponivel': {
                 const { isDataBloqueada } = require('../flows/helpers/availabilityHelper');
-                const bloqueada = await isDataBloqueada(args.data);
+                const bloqueada = await isDataBloqueada(args.data, empresa_id);
                 return { disponivel: !bloqueada, dataBloqueada: bloqueada };
             }
 
@@ -636,15 +800,141 @@ async function executeToolFunction(functionName, args, context = {}) {
                 console.log('\n📅 ========== CRIANDO AGENDAMENTO VIA IA ==========');
                 console.log('📥 Args recebidos:', JSON.stringify(args, null, 2));
                 console.log('👤 Cliente no contexto:', context?.cliente?.cli_Id || context?.cliente?.id || 'NÃO ENCONTRADO');
-                
+                console.log('📦 Dados de serviço no contexto:', {
+                    servico_id: context?.servico_id,
+                    servico_nome: context?.servico_nome,
+                    servico_preco: context?.servico_preco
+                });
+
                 if (!context || !context.cliente) {
                     console.error('❌ ERRO: Contexto sem cliente!');
                     return { error: 'Contexto com cliente necessário para criar agendamento', success: false };
                 }
-                
+
                 const { createAgendamento } = require('../flows/actions/agendamentoActions');
                 const moment = require('moment');
                 const clienteId = context.cliente.cli_Id || context.cliente.id;
+
+                // ═══════════════════════════════════════════════════════════════════
+                // RESOLVER SERVIÇO - buscar pelo nome se não vier ID
+                // ═══════════════════════════════════════════════════════════════════
+                let servicoId = args.servicoId || context.servico_id;
+                let servicoValor = args.valor || context.servico_preco || 0;
+                let servicoDuracao = args.duracao || 60;
+
+                // Tentar extrair nome do serviço das observações se não vier diretamente
+                let nomeServicoParaBusca = args.nomeServico || args.servico || context.servico_nome;
+                if (!nomeServicoParaBusca && args.observacoes) {
+                    // Tentar extrair serviço das observações (ex: "Limpeza de sofá de 3 lugares")
+                    const obsLower = args.observacoes.toLowerCase();
+                    if (obsLower.includes('sofá') || obsLower.includes('sofa')) {
+                        nomeServicoParaBusca = 'sofá';
+                    } else if (obsLower.includes('colchão') || obsLower.includes('colchao')) {
+                        nomeServicoParaBusca = 'colchão';
+                    } else if (obsLower.includes('tapete')) {
+                        nomeServicoParaBusca = 'tapete';
+                    } else if (obsLower.includes('cadeira')) {
+                        nomeServicoParaBusca = 'cadeira';
+                    } else if (obsLower.includes('poltrona')) {
+                        nomeServicoParaBusca = 'poltrona';
+                    } else if (obsLower.includes('impermeabilização') || obsLower.includes('impermeabilizacao')) {
+                        nomeServicoParaBusca = 'impermeabilização';
+                    }
+                    if (nomeServicoParaBusca) {
+                        console.log(`🔍 Extraído nome do serviço das observações: "${nomeServicoParaBusca}"`);
+                    }
+                }
+
+                // Tentar extrair tamanho das observações
+                let tamanhoParaBusca = args.tamanho || context.tamanho_servico;
+                if (!tamanhoParaBusca && args.observacoes) {
+                    const obsLower = args.observacoes.toLowerCase();
+                    if (obsLower.includes('3 lugares') || obsLower.includes('três lugares')) {
+                        tamanhoParaBusca = '3 lugares';
+                    } else if (obsLower.includes('2 lugares') || obsLower.includes('dois lugares')) {
+                        tamanhoParaBusca = '2 lugares';
+                    } else if (obsLower.includes('4 lugares') || obsLower.includes('quatro lugares')) {
+                        tamanhoParaBusca = '4 lugares';
+                    } else if (obsLower.includes('5 lugares') || obsLower.includes('cinco lugares')) {
+                        tamanhoParaBusca = '5 lugares';
+                    } else if (obsLower.includes('solteiro')) {
+                        tamanhoParaBusca = 'solteiro';
+                    } else if (obsLower.includes('casal')) {
+                        tamanhoParaBusca = 'casal';
+                    } else if (obsLower.includes('queen')) {
+                        tamanhoParaBusca = 'queen';
+                    } else if (obsLower.includes('king')) {
+                        tamanhoParaBusca = 'king';
+                    }
+                    if (tamanhoParaBusca) {
+                        console.log(`📏 Extraído tamanho das observações: "${tamanhoParaBusca}"`);
+                    }
+                }
+
+                if (!servicoId && nomeServicoParaBusca) {
+                    console.log(`🔍 Buscando serviço pelo nome: "${nomeServicoParaBusca}" ${tamanhoParaBusca ? `(${tamanhoParaBusca})` : ''}`);
+
+                    const busca = await executeToolFunction('buscarServicoPorNome', {
+                        nomeServico: nomeServicoParaBusca,
+                        tamanho: tamanhoParaBusca
+                    }, context);
+
+                    if (busca.success && busca.servicoId) {
+                        servicoId = busca.servicoId;
+                        servicoValor = busca.preco || servicoValor;
+                        servicoDuracao = busca.duracao || servicoDuracao;
+                        console.log(`✅ Serviço encontrado: ID ${servicoId}, R$ ${servicoValor}, ${servicoDuracao} min`);
+                    } else {
+                        console.log('⚠️ Serviço não encontrado pelo nome:', busca);
+                    }
+                } else if (servicoId) {
+                    console.log(`✅ Serviço já definido: ID ${servicoId}, R$ ${servicoValor}`);
+                } else {
+                    console.log('⚠️ Nenhum serviço identificado');
+                }
+
+                // ═══════════════════════════════════════════════════════════════════
+                // RESOLVER ENDEREÇO - usar endereço encontrado se disponível
+                // ═══════════════════════════════════════════════════════════════════
+                let enderecoFinal = args.endereco;
+                let coordenadasCliente = null;
+
+                // Se há endereço encontrado pelo buscarEnderecoPorLocal, usar ele
+                if (context.enderecoEncontrado && context.enderecoEncontrado.success) {
+                    console.log('📍 Usando endereço encontrado via Google Maps');
+                    enderecoFinal = context.enderecoEncontrado.endereco || context.enderecoEncontrado.enderecoCompleto;
+                    coordenadasCliente = context.enderecoEncontrado.coordenadas;
+                }
+
+                // ═══════════════════════════════════════════════════════════════════
+                // CALCULAR TAXA DE DESLOCAMENTO (se configurado)
+                // ═══════════════════════════════════════════════════════════════════
+                let taxaDeslocamento = 0;
+                if (coordenadasCliente || enderecoFinal) {
+                    try {
+                        const taxaResult = await executeToolFunction('calcularTaxaDeslocamento', {
+                            enderecoCliente: typeof enderecoFinal === 'string' ? enderecoFinal : JSON.stringify(enderecoFinal),
+                            coordenadasCliente: coordenadasCliente
+                        }, context);
+
+                        if (taxaResult.success && taxaResult.taxaDeslocamento > 0) {
+                            taxaDeslocamento = taxaResult.taxaDeslocamento;
+                            console.log(`💰 Taxa de deslocamento calculada: R$ ${taxaDeslocamento}`);
+                        }
+                    } catch (taxaError) {
+                        console.log('⚠️ Não foi possível calcular taxa de deslocamento:', taxaError.message);
+                    }
+                }
+
+                // Adicionar taxa ao valor total
+                const valorTotal = parseFloat(servicoValor) + parseFloat(taxaDeslocamento);
+                console.log(`💵 Valor total (serviço + deslocamento): R$ ${valorTotal}`);
+
+                // Atualizar args com dados resolvidos
+                args.servicoId = servicoId;
+                args.valor = valorTotal;
+                args.valorServico = servicoValor;
+                args.taxaDeslocamento = taxaDeslocamento;
                 
                 // ═══════════════════════════════════════════════════════════════════
                 // VERIFICAÇÃO DE DUPLICATAS - Evita criar múltiplos agendamentos
@@ -654,13 +944,14 @@ async function executeToolFunction(functionName, args, context = {}) {
                 // Verificar se já existe agendamento pendente para a mesma data
                 const agendamentosExistentes = await dbQuery(`
                     SELECT age_id, age_data, age_horaInicio, age_horaFim, ast_id
-                    FROM AGENDAMENTO 
-                    WHERE cli_id = ? 
-                    AND age_ativo = 1 
+                    FROM AGENDAMENTO
+                    WHERE cli_id = ?
+                    AND age_ativo = 1
                     AND ast_id IN (1, 2)  -- Agendado ou Confirmado
                     AND age_data = ?
+                    AND ${ew.sql}
                     ORDER BY age_horaInicio ASC
-                `, [clienteId, args.data]);
+                `, [clienteId, args.data, ...ew.params]);
                 
                 if (agendamentosExistentes.length > 0) {
                     const existente = agendamentosExistentes[0];
@@ -684,7 +975,7 @@ async function executeToolFunction(functionName, args, context = {}) {
                             }
                         };
                     }
-                    
+
                     // Se é horário diferente, atualizar o existente ao invés de criar novo
                     console.log('🔄 Atualizando agendamento existente para novo horário...');
                     const { updateAgendamento } = require('../flows/actions/agendamentoActions');
@@ -695,7 +986,7 @@ async function executeToolFunction(functionName, args, context = {}) {
                         horaFim: args.horaFim,
                         observacoes: `Horário alterado via IA de ${existente.age_horaInicio} para ${args.horaInicio} - ${moment().format('DD/MM/YYYY HH:mm')}`
                     }, context);
-                    
+
                     if (updateResult.success) {
                         console.log(`✅ Agendamento #${existente.age_id} atualizado para ${args.horaInicio}`);
                         return {
@@ -715,15 +1006,16 @@ async function executeToolFunction(functionName, args, context = {}) {
                 
                 // Verificar se existe agendamento pendente em outra data (remarcação)
                 const agendamentoPendente = await dbQuery(`
-                    SELECT age_id, age_data, age_horaInicio 
-                    FROM AGENDAMENTO 
-                    WHERE cli_id = ? 
-                    AND age_ativo = 1 
+                    SELECT age_id, age_data, age_horaInicio
+                    FROM AGENDAMENTO
+                    WHERE cli_id = ?
+                    AND age_ativo = 1
                     AND ast_id IN (1, 2)  -- Agendado ou Confirmado
                     AND age_data >= CURDATE()
+                    AND ${ew.sql}
                     ORDER BY age_data ASC, age_horaInicio ASC
                     LIMIT 1
-                `, [clienteId]);
+                `, [clienteId, ...ew.params]);
                 
                 if (agendamentoPendente.length > 0 && context.isRemarking) {
                     const pendente = agendamentoPendente[0];
@@ -773,35 +1065,58 @@ async function executeToolFunction(functionName, args, context = {}) {
                     observacoes: args.observacoes || `Agendamento criado via IA - ${moment().format('DD/MM/YYYY HH:mm')}`,
                     statusId: 1, // Agendado
                     fonte: 'ia_gemini',
-                    enderecoMode: args.endereco ? 'novo' : 'padrao'
+                    enderecoMode: enderecoFinal ? 'novo' : 'padrao',
+                    duracaoMinutos: servicoDuracao
                 };
-                
-                // Processar endereço
-                if (args.endereco) {
-                    if (typeof args.endereco === 'string') {
-                        // Se é string, tentar parsear ou usar como logradouro
+
+                // Processar endereço (usar enderecoFinal que pode ter sido resolvido via Maps)
+                if (enderecoFinal) {
+                    if (typeof enderecoFinal === 'string') {
+                        // Se é string, usar como logradouro
                         createConfig.enderecoMode = 'novo';
                         createConfig.endereco = {
-                            logradouro: args.endereco
+                            logradouro: enderecoFinal
                         };
-                    } else {
-                        createConfig.endereco = args.endereco;
+                    } else if (typeof enderecoFinal === 'object') {
+                        // Se é objeto (do buscarEnderecoPorLocal), usar campos
+                        createConfig.enderecoMode = 'novo';
+                        createConfig.endereco = {
+                            logradouro: enderecoFinal.logradouro || '',
+                            numero: enderecoFinal.numero || '',
+                            bairro: enderecoFinal.bairro || '',
+                            cidade: enderecoFinal.cidade || '',
+                            estado: enderecoFinal.estado || '',
+                            cep: enderecoFinal.cep || ''
+                        };
                     }
                 }
-                
-                // Serviços
-                if (args.servicoId || args.servicos) {
-                    createConfig.servicos = [];
-                    if (args.servicoId) {
-                        createConfig.servicos.push({
-                            servicoId: args.servicoId,
-                            quantidade: args.quantidade || 1,
-                            valor: args.valor || 0,
-                            descricao: args.descricaoServico || ''
-                        });
-                    } else if (Array.isArray(args.servicos)) {
-                        createConfig.servicos = args.servicos;
+
+                // Serviços - SEMPRE adicionar se tivermos um servicoId (resolvido ou passado)
+                createConfig.servicos = [];
+                if (servicoId) {
+                    console.log(`✅ Adicionando serviço ao agendamento: ID ${servicoId}, R$ ${servicoValor}`);
+                    createConfig.servicos.push({
+                        servicoId: servicoId,
+                        quantidade: args.quantidade || 1,
+                        valor: servicoValor || 0,
+                        descricao: args.descricaoServico || args.nomeServico || context.servico_nome || ''
+                    });
+
+                    // Se há taxa de deslocamento, adicionar como item separado ou na observação
+                    if (taxaDeslocamento > 0) {
+                        createConfig.observacoes = (createConfig.observacoes || '') +
+                            `\n💰 Taxa de deslocamento: R$ ${taxaDeslocamento.toFixed(2)}`;
                     }
+                } else if (Array.isArray(args.servicos) && args.servicos.length > 0) {
+                    createConfig.servicos = args.servicos;
+                } else {
+                    console.error('❌ ERRO: Agendamento requer ao menos um serviço!');
+                    return {
+                        success: false,
+                        error: 'É necessário informar um serviço para criar o agendamento. Use buscarServicoPorNome primeiro para obter o servicoId.',
+                        requiresService: true,
+                        sugestao: 'Chame buscarServicoPorNome("nome do serviço") antes de criarAgendamento'
+                    };
                 }
                 
                 console.log('📋 Config final:', JSON.stringify(createConfig, null, 2));
@@ -821,8 +1136,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                         try {
                             const { criarNegocioAutomatico } = require('./negocioHelper');
                             const negocioExistente = await dbQuery(
-                                `SELECT id FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' LIMIT 1`,
-                                [clienteId]
+                                `SELECT id FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' AND ${ew.sql} LIMIT 1`,
+                                [clienteId, ...ew.params]
                             );
                             
                             if (negocioExistente.length === 0) {
@@ -832,7 +1147,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                                     titulo: `Agendamento - ${clienteNome}`,
                                     valor: args.valor || 0,
                                     origem: 'Agendamento via IA',
-                                    descricao: `Agendamento para ${args.data} às ${args.horaInicio}`
+                                    descricao: `Agendamento para ${args.data} às ${args.horaInicio}`,
+                                    empresa_id
                                 });
                                 
                                 if (negocioResult.success) {
@@ -840,8 +1156,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                                     
                                     // Vincular agendamento ao negócio
                                     await dbQuery(
-                                        'UPDATE Negocios SET age_id = ? WHERE id = ?',
-                                        [resultado.agendamentoId || resultado.agendamento_id, negocioResult.negocioId]
+                                        'UPDATE Negocios SET age_id = ? WHERE id = ? AND ' + ew.sql,
+                                        [resultado.agendamentoId || resultado.agendamento_id, negocioResult.negocioId, ...ew.params]
                                     );
                                 }
                             }
@@ -936,8 +1252,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                 
                 // Verificar se já existe negócio ativo para este cliente
                 const negocioExistente = await dbQuery(
-                    `SELECT id, title, status FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' ORDER BY created_at DESC LIMIT 1`,
-                    [clienteId]
+                    `SELECT id, title, status FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' AND ${ew.sql} ORDER BY created_at DESC LIMIT 1`,
+                    [clienteId, ...ew.params]
                 );
                 
                 if (negocioExistente.length > 0) {
@@ -949,7 +1265,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                         await atualizarNegocio({
                             negocioId: negocioExistente[0].id,
                             valor: args.valor,
-                            anotacao: `Atualizado via IA: ${args.descricao || args.titulo || 'Nova interação'}`
+                            anotacao: `Atualizado via IA: ${args.descricao || args.titulo || 'Nova interação'}`,
+                            empresa_id
                         });
                     }
                     
@@ -972,7 +1289,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                     titulo: args.titulo || `Interesse - ${clienteNome}`,
                     valor: args.valor || 0,
                     origem: 'Conversa via IA',
-                    descricao: args.descricao || `Cliente demonstrou interesse em agendamento/serviço`
+                    descricao: args.descricao || `Cliente demonstrou interesse em agendamento/serviço`,
+                    empresa_id
                 });
 
                 if (resultado.success) {
@@ -991,18 +1309,86 @@ async function executeToolFunction(functionName, args, context = {}) {
             }
 
             case 'atualizarNegocio': {
-            if (!context) {
+                console.log('\n💼 ========== ATUALIZANDO NEGÓCIO VIA IA ==========');
+
+                if (!context) {
                     return { error: 'Contexto necessário para atualizar negócio', success: false };
                 }
-                
-                const { updateNegocio } = require('../flows/actions/negocioActions');
-                return await updateNegocio({
-                    negocioId: args.negocioId || context.negocio_id,
-                    titulo: args.titulo,
-                    descricao: args.descricao,
+
+                const { atualizarNegocio: atualizarNegocioHelper } = require('./negocioHelper');
+
+                const negocioId = args.negocioId || context.negocio_id;
+                if (!negocioId) {
+                    return { error: 'ID do negócio não informado', success: false };
+                }
+
+                const resultado = await atualizarNegocioHelper({
+                    negocioId: negocioId,
+                    etapaId: args.etapaId || args.stageId,
                     valor: args.valor,
-                    stageId: args.etapaId || args.stageId
-                }, context);
+                    anotacao: args.anotacao || args.descricao,
+                    empresa_id
+                });
+
+                if (resultado.success) {
+                    console.log('✅ Negócio atualizado com sucesso!');
+                    return {
+                        ...resultado,
+                        contextUpdates: {
+                            negocio_atualizado: true,
+                            negocio_etapa_id: args.etapaId || context.negocio_etapa_id
+                        }
+                    };
+                }
+
+                return resultado;
+            }
+
+            case 'marcarNegocioGanho': {
+                console.log('\n🎉 ========== MARCANDO NEGÓCIO COMO GANHO ==========');
+
+                const { marcarNegocioGanho: ganhoHelper } = require('./negocioHelper');
+
+                const negocioIdGanho = args.negocioId || context.negocio_id;
+                if (!negocioIdGanho) {
+                    return { error: 'ID do negócio não informado', success: false };
+                }
+
+                const resultadoGanho = await ganhoHelper({
+                    negocioId: negocioIdGanho,
+                    valorFinal: args.valorFinal,
+                    empresa_id
+                });
+
+                if (resultadoGanho.success) {
+                    console.log('✅ Negócio marcado como GANHO!');
+                }
+
+                return resultadoGanho;
+            }
+
+            case 'marcarNegocioPerdido': {
+                console.log('\n😞 ========== MARCANDO NEGÓCIO COMO PERDIDO ==========');
+
+                const { marcarNegocioPerdido: perdidoHelper } = require('./negocioHelper');
+
+                const negocioIdPerdido = args.negocioId || context.negocio_id;
+                if (!negocioIdPerdido) {
+                    return { error: 'ID do negócio não informado', success: false };
+                }
+
+                const resultadoPerdido = await perdidoHelper({
+                    negocioId: negocioIdPerdido,
+                    motivo: args.motivo || 'Não especificado',
+                    observacao: args.observacao,
+                    empresa_id
+                });
+
+                if (resultadoPerdido.success) {
+                    console.log('✅ Negócio marcado como PERDIDO');
+                }
+
+                return resultadoPerdido;
             }
 
             case 'atualizarCliente': {
@@ -1055,19 +1441,22 @@ async function executeToolFunction(functionName, args, context = {}) {
                 
                 // Inserir na tabela de ações agendadas
                 try {
+                    const phone = context.cliente?.cli_celular || context.phone || null;
                     await dbQuery(`
-                        INSERT INTO FlowScheduledActions 
-                        (cliente_id, action_type, action_data, scheduled_at, status, created_at)
-                        VALUES (?, ?, ?, ?, 'pending', NOW())
+                        INSERT INTO FlowScheduledActions
+                        (flowRunId, clientId, phone, acao, parametros, executarEm, executado, created_at, empresa_id)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, NOW(), ?)
                     `, [
+                        context.flowRunId || null,
                         clienteId,
+                        phone,
                         args.acao,
                         JSON.stringify({
                             mensagem: args.mensagem,
-                            flowRunId: context.flowRunId,
                             flowId: context.flowId
                         }),
-                        dataAgendada
+                        dataAgendada,
+                        empresa_id
                     ]);
                     
                     console.log(`✅ Ação agendada para ${dataAgendada}`);
@@ -1095,10 +1484,10 @@ async function executeToolFunction(functionName, args, context = {}) {
                 
                 try {
                     await dbQuery(`
-                        UPDATE clientes 
+                        UPDATE CLIENTES
                         SET flows_blocked = ?, flows_blocked_at = ${args.bloquear ? 'NOW()' : 'NULL'}
-                        WHERE cli_Id = ?
-                    `, [args.bloquear ? 1 : 0, clienteId]);
+                        WHERE cli_Id = ? AND ${ew.sql}
+                    `, [args.bloquear ? 1 : 0, clienteId, ...ew.params]);
                     
                     console.log(`✅ Cliente ${args.bloquear ? 'bloqueado' : 'desbloqueado'}`);
                     
@@ -1132,21 +1521,27 @@ async function executeToolFunction(functionName, args, context = {}) {
                     
                     // Bloquear fluxos automáticos
                     await dbQuery(`
-                        UPDATE clientes 
+                        UPDATE CLIENTES
                         SET flows_blocked = 1, flows_blocked_at = NOW(), flows_blocked_reason = 'wait_for_agent'
-                        WHERE cli_Id = ?
-                    `, [clienteId]);
+                        WHERE cli_Id = ? AND ${ew.sql}
+                    `, [clienteId, ...ew.params]);
                     
                     // Registrar encaminhamento
+                    // FlowForwardLog: flow_run_id, flow_id, node_id, contact_phone, forwarded_to_phone, forwarded_to_label, message_content, status
+                    const phone = context.cliente?.cli_celular || context.phone || '';
                     await dbQuery(`
-                        INSERT INTO FlowForwardLog 
-                        (cliente_id, reason, departamento, priority, created_at)
-                        VALUES (?, ?, ?, ?, NOW())
+                        INSERT INTO FlowForwardLog
+                        (flow_run_id, flow_id, node_id, contact_phone, forwarded_to_phone, forwarded_to_label, message_content, status, created_at, empresa_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?)
                     `, [
-                        clienteId,
-                        'ia_encaminhou',
-                        args.departamento || 'geral',
-                        args.prioridade || 'normal'
+                        context.flowRunId || 0,
+                        context.flowId || 0,
+                        context.nodeId || 0,
+                        phone,
+                        args.departamento || 'atendente',
+                        `IA encaminhou - ${args.prioridade || 'normal'}`,
+                        args.mensagem || 'Encaminhado para atendimento humano',
+                        empresa_id
                     ]);
                     
                     console.log('✅ Encaminhado para atendente');
@@ -1173,8 +1568,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                 // Se passou nome, buscar ID
                 if (!fluxoId && args.fluxoNome) {
                     const [flow] = await dbQuery(`
-                        SELECT id FROM Flows WHERE name LIKE ? AND status = 'active' LIMIT 1
-                    `, [`%${args.fluxoNome}%`]);
+                        SELECT id FROM Flows WHERE name LIKE ? AND status = 'active' AND ${ew.sql} LIMIT 1
+                    `, [`%${args.fluxoNome}%`, ...ew.params]);
                     
                     if (flow) {
                         fluxoId = flow.id;
@@ -1234,6 +1629,108 @@ async function executeToolFunction(functionName, args, context = {}) {
                 return { latLng: coords, endereco: args.endereco };
             }
 
+            case 'buscarEnderecoPorLocal': {
+                console.log('\n🗺️ ========== BUSCA DE ENDEREÇO POR LOCAL ==========');
+                const { buscarEnderecoPorLocal } = require('../flows/helpers/availabilityHelper');
+
+                // Usar cidade padrão da empresa se não informada
+                let cidadeEstado = args.cidadeEstado;
+                if (!cidadeEstado) {
+                    try {
+                        const empresaConfig = await dbQuery("SELECT value FROM Options WHERE type = 'gemini_empresa' AND " + ew.sql + " LIMIT 1", [...ew.params]);
+                        if (empresaConfig?.[0]?.value) {
+                            const emp = JSON.parse(empresaConfig[0].value);
+                            cidadeEstado = emp.regiaoAtendida || emp.localizacao || 'Curitiba, PR';
+                        }
+                    } catch (_) {
+                        cidadeEstado = 'Curitiba, PR';
+                    }
+                }
+
+                const resultado = await buscarEnderecoPorLocal(args.local, cidadeEstado, empresa_id);
+
+                if (resultado.success) {
+                    console.log(`✅ Endereço encontrado: ${resultado.enderecoCompleto}`);
+
+                    // Salvar no contexto para uso posterior
+                    if (context) {
+                        context.enderecoEncontrado = resultado;
+                        context.endereco_completo = resultado.enderecoCompleto;
+                        context.coordenadas_cliente = resultado.coordenadas;
+                    }
+
+                    return {
+                        success: true,
+                        ...resultado,
+                        mensagem: `Encontrei o endereço: ${resultado.enderecoCompleto}`
+                    };
+                }
+
+                return resultado;
+            }
+
+            case 'calcularTaxaDeslocamento': {
+                console.log('\n💰 ========== CÁLCULO DE TAXA DE DESLOCAMENTO ==========');
+                const { geocodificarEnderecoComMaps, calcularTaxaDeslocamento } = require('../flows/helpers/availabilityHelper');
+
+                // Buscar coordenadas da base da empresa
+                let coordsBase = null;
+                try {
+                    const empresaConfig = await dbQuery("SELECT value FROM Options WHERE type = 'gemini_empresa' AND " + ew.sql + " LIMIT 1", [...ew.params]);
+                    if (empresaConfig?.[0]?.value) {
+                        const emp = JSON.parse(empresaConfig[0].value);
+                        if (emp.coordenadas) {
+                            coordsBase = emp.coordenadas;
+                        } else if (emp.localizacao) {
+                            coordsBase = await geocodificarEnderecoComMaps(emp.localizacao);
+                        }
+                    }
+                } catch (_) {}
+
+                // Usar coordenadas padrão de Curitiba se não encontrar
+                if (!coordsBase) {
+                    coordsBase = { lat: -25.4284, lng: -49.2733 }; // Centro de Curitiba
+                }
+
+                // Obter coordenadas do cliente
+                let coordsCliente = args.coordenadasCliente;
+                if (!coordsCliente && args.enderecoCliente) {
+                    coordsCliente = await geocodificarEnderecoComMaps(args.enderecoCliente);
+                }
+
+                if (!coordsCliente) {
+                    return {
+                        success: false,
+                        error: 'Não foi possível obter coordenadas do endereço do cliente'
+                    };
+                }
+
+                // Buscar configuração de taxa do banco
+                let configTaxa = null;
+                try {
+                    const taxaConfig = await dbQuery("SELECT value FROM Options WHERE type = 'gemini_agendamentos' AND " + ew.sql + " LIMIT 1", [...ew.params]);
+                    if (taxaConfig?.[0]?.value) {
+                        const agendConfig = JSON.parse(taxaConfig[0].value);
+                        if (agendConfig.taxaDeslocamento) {
+                            configTaxa = agendConfig.taxaDeslocamento;
+                        }
+                    }
+                } catch (_) {}
+
+                const resultado = await calcularTaxaDeslocamento(coordsBase, coordsCliente, configTaxa);
+
+                console.log(`📏 Distância: ${resultado.distanciaKm} km`);
+                console.log(`💰 Taxa: R$ ${resultado.taxaDeslocamento}`);
+
+                return {
+                    success: true,
+                    ...resultado,
+                    mensagem: resultado.dentroRaioBase
+                        ? `Endereço dentro da área de atendimento (${resultado.distanciaKm} km), sem taxa adicional.`
+                        : `Endereço a ${resultado.distanciaKm} km, taxa de deslocamento: R$ ${resultado.taxaDeslocamento.toFixed(2)}`
+                };
+            }
+
             case 'calcularDistancia': {
                 try {
                     const { calcularDistancia } = require('./distanceHelper');
@@ -1248,6 +1745,234 @@ async function executeToolFunction(functionName, args, context = {}) {
                 const { resumirOpcoesParaIAComMaps } = require('../flows/helpers/availabilityHelper');
                 const resumo = await resumirOpcoesParaIAComMaps(args.opcoes || [], args.latLng || null);
                 return { resumo };
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // 📷 ANÁLISE DE IMAGENS DO CLIENTE
+            // ═══════════════════════════════════════════════════════════════════
+            case 'analisarImagemCliente': {
+                console.log('\n📷 ========== ANÁLISE DE IMAGEM DO CLIENTE ==========');
+
+                const { nomeServico, descricaoImagem, condicaoObservada, manchasVisiveis, tipoManchas, tamanhoEstimado } = args;
+
+                console.log(`📥 Serviço: ${nomeServico}`);
+                console.log(`📝 Descrição: ${descricaoImagem}`);
+                console.log(`🎯 Condição: ${condicaoObservada}`);
+
+                // Buscar configuração de serviços
+                const optionsResultImg = await dbQuery(`SELECT value FROM Options WHERE type = 'gemini_agendamentos' AND ` + ew.sql, [...ew.params]);
+
+                if (!optionsResultImg || optionsResultImg.length === 0) {
+                    return { success: false, error: 'Configuração não encontrada' };
+                }
+
+                let configServicosImg;
+                try {
+                    configServicosImg = JSON.parse(optionsResultImg[0].value);
+                } catch (err) {
+                    return { success: false, error: 'Erro ao carregar configuração' };
+                }
+
+                const termoBuscaImg = nomeServico.toLowerCase();
+
+                const servicoImg = (configServicosImg.servicos || []).find(s =>
+                    (s.nome || '').toLowerCase().includes(termoBuscaImg)
+                );
+
+                if (!servicoImg || !servicoImg.regrasPrecificacao) {
+                    return { success: false, error: 'Serviço não encontrado', servicoNome: nomeServico };
+                }
+
+                // Mapear condição para índice de regra (escala de preço)
+                // otima/boa = menor preço, regular = médio, ruim/muito_ruim = maior preço
+                const condicaoMap = { 'otima': 0, 'boa': 0, 'regular': 1, 'ruim': 2, 'muito_ruim': -1 };
+                let indiceRegra = condicaoMap[condicaoObservada] || 0;
+                if (indiceRegra === -1) indiceRegra = servicoImg.regrasPrecificacao.length - 1;
+                if (indiceRegra >= servicoImg.regrasPrecificacao.length) indiceRegra = servicoImg.regrasPrecificacao.length - 1;
+
+                // Buscar regra por tamanho se informado
+                if (tamanhoEstimado) {
+                    const regraByTamanho = servicoImg.regrasPrecificacao.find(r =>
+                        (r.titulo || '').toLowerCase().includes(tamanhoEstimado.toLowerCase())
+                    );
+                    if (regraByTamanho) {
+                        console.log(`✅ Regra encontrada por tamanho: ${regraByTamanho.titulo} - R$ ${regraByTamanho.preco}`);
+                        return {
+                            success: true,
+                            analise: {
+                                condicao: condicaoObservada,
+                                manchas: manchasVisiveis || false,
+                                tipoManchas: tipoManchas || null,
+                                tamanhoEstimado: tamanhoEstimado,
+                                observacao: descricaoImagem
+                            },
+                            regraSugerida: {
+                                titulo: regraByTamanho.titulo,
+                                preco: regraByTamanho.preco,
+                                duracao: regraByTamanho.duracaoMinutos,
+                                justificativa: `Baseado no tamanho "${tamanhoEstimado}" e condição "${condicaoObservada}"`
+                            },
+                            servicoId: servicoImg.servicoId,
+                            subservicoId: servicoImg.subservicoId || null,
+                            contextUpdates: {
+                                imagem_analisada: true,
+                                condicao_item: condicaoObservada,
+                                servico_preco: regraByTamanho.preco,
+                                servico_id: servicoImg.servicoId
+                            }
+                        };
+                    }
+                }
+
+                const regraSugerida = servicoImg.regrasPrecificacao[indiceRegra];
+
+                console.log(`✅ Regra sugerida: ${regraSugerida.titulo} - R$ ${regraSugerida.preco}`);
+
+                return {
+                    success: true,
+                    analise: {
+                        condicao: condicaoObservada,
+                        manchas: manchasVisiveis || false,
+                        tipoManchas: tipoManchas || null,
+                        observacao: descricaoImagem
+                    },
+                    regraSugerida: {
+                        titulo: regraSugerida.titulo,
+                        preco: regraSugerida.preco,
+                        duracao: regraSugerida.duracaoMinutos,
+                        justificativa: `Baseado na condição "${condicaoObservada}", sugiro "${regraSugerida.titulo}"`
+                    },
+                    servicoId: servicoImg.servicoId,
+                    subservicoId: servicoImg.subservicoId || null,
+                    contextUpdates: {
+                        imagem_analisada: true,
+                        condicao_item: condicaoObservada,
+                        servico_preco: regraSugerida.preco,
+                        servico_id: servicoImg.servicoId
+                    }
+                };
+            }
+
+            case 'buscarServicoPorNome': {
+                console.log('\n🔍 ========== BUSCA DE SERVIÇO POR NOME ==========');
+                console.log(`📥 Buscando: "${args.nomeServico}" ${args.tamanho ? `(${args.tamanho})` : ''}`);
+
+                const termoBusca = args.nomeServico.toLowerCase();
+
+                // Buscar configuração de serviços da tabela Options (fonte correta de preços)
+                const optionsResult = await dbQuery(`
+                    SELECT value FROM Options WHERE type = 'gemini_agendamentos' AND ` + ew.sql, [...ew.params]);
+
+                if (!optionsResult || optionsResult.length === 0) {
+                    console.log('❌ Configuração gemini_agendamentos não encontrada');
+                    return {
+                        success: false,
+                        encontrado: false,
+                        mensagem: 'Configuração de serviços não encontrada. Entre em contato com o suporte.'
+                    };
+                }
+
+                let configServicos;
+                try {
+                    configServicos = JSON.parse(optionsResult[0].value);
+                } catch (err) {
+                    console.log('❌ Erro ao parsear configuração:', err.message);
+                    return {
+                        success: false,
+                        encontrado: false,
+                        mensagem: 'Erro ao carregar configuração de serviços.'
+                    };
+                }
+
+                console.log(`📋 Serviços configurados: ${configServicos.servicos?.length || 0}`);
+
+                // Buscar serviços que correspondem ao termo
+                const servicosEncontrados = (configServicos.servicos || []).filter(s => {
+                    const nomeLower = (s.nome || '').toLowerCase();
+                    const descLower = (s.descricao || '').toLowerCase();
+                    return nomeLower.includes(termoBusca) || descLower.includes(termoBusca);
+                });
+
+                console.log(`📋 Serviços encontrados: ${servicosEncontrados.length}`);
+
+                if (servicosEncontrados.length === 0) {
+                    console.log('❌ Nenhum serviço encontrado');
+                    return {
+                        success: false,
+                        encontrado: false,
+                        mensagem: `Não encontrei serviço com o nome "${args.nomeServico}". Serviços disponíveis: ${(configServicos.servicos || []).map(s => s.nome).join(', ')}`
+                    };
+                }
+
+                // Formatar serviços com regras de precificação
+                const servicosComPreco = servicosEncontrados.map(servico => {
+                    const regras = servico.regrasPrecificacao || [];
+
+                    // Se há tamanho especificado, tentar encontrar regra correspondente
+                    let regraEscolhida = null;
+                    if (args.tamanho && regras.length > 0) {
+                        const tamanhoLower = args.tamanho.toLowerCase();
+                        regraEscolhida = regras.find(r =>
+                            (r.titulo || '').toLowerCase().includes(tamanhoLower) ||
+                            (r.descricao || '').toLowerCase().includes(tamanhoLower)
+                        );
+                    }
+
+                    return {
+                        servicoId: servico.servicoId,
+                        subservicoId: servico.subservicoId || null,
+                        nome: servico.nome,
+                        descricao: servico.descricao,
+                        regrasPreco: regras.map(r => ({
+                            titulo: r.titulo,
+                            preco: r.preco,
+                            duracao: r.duracaoMinutos,
+                            descricao: r.descricao
+                        })),
+                        regraEscolhida: regraEscolhida ? {
+                            titulo: regraEscolhida.titulo,
+                            preco: regraEscolhida.preco,
+                            duracao: regraEscolhida.duracaoMinutos
+                        } : null
+                    };
+                });
+
+                console.log(`✅ Encontrados ${servicosComPreco.length} serviço(s)`);
+
+                // Se só encontrou um serviço, facilitar uso
+                const servicoPrincipal = servicosComPreco[0];
+
+                // Determinar preço: regra escolhida > primeira regra
+                const precoFinal = servicoPrincipal.regraEscolhida?.preco ||
+                                   servicoPrincipal.regrasPreco?.[0]?.preco ||
+                                   0;
+
+                const duracaoFinal = servicoPrincipal.regraEscolhida?.duracao ||
+                                     servicoPrincipal.regrasPreco?.[0]?.duracao ||
+                                     60;
+
+                console.log(`💰 Serviço principal: "${servicoPrincipal.nome}" (ID: ${servicoPrincipal.servicoId}, SubID: ${servicoPrincipal.subservicoId}) - R$ ${precoFinal}`);
+
+                return {
+                    success: true,
+                    encontrado: true,
+                    total: servicosComPreco.length,
+                    servicos: servicosComPreco,
+                    // Dados do serviço principal para facilitar uso
+                    servicoId: servicoPrincipal.servicoId,
+                    subservicoId: servicoPrincipal.subservicoId,
+                    nome: servicoPrincipal.nome,
+                    preco: precoFinal,
+                    duracao: duracaoFinal,
+                    regrasDisponiveis: servicoPrincipal.regrasPreco,
+                    contextUpdates: {
+                        servico_id: servicoPrincipal.servicoId,
+                        subservico_id: servicoPrincipal.subservicoId,
+                        servico_nome: servicoPrincipal.nome,
+                        servico_preco: precoFinal,
+                        servico_duracao: duracaoFinal
+                    }
+                };
             }
 
             // ═══════════════════════════════════════════════════════════════════
@@ -1275,11 +2000,11 @@ function getToolDefinitions(capabilities = null) {
     
     // Filtrar por capacidades
     const capabilityMap = {
-        'agendamentos': ['buscarDisponibilidades', 'verificarHorarioDisponivel', 'consultarAgendamentosCliente', 'criarAgendamento', 'atualizarAgendamento', 'cancelarAgendamento'],
-        'crm': ['criarNegocio', 'atualizarNegocio', 'atualizarCliente'],
+        'agendamentos': ['buscarDisponibilidades', 'verificarHorarioDisponivel', 'consultarAgendamentosCliente', 'criarAgendamento', 'atualizarAgendamento', 'cancelarAgendamento', 'buscarServicoPorNome', 'analisarImagemCliente'],
+        'crm': ['criarNegocio', 'atualizarNegocio', 'atualizarCliente', 'marcarNegocioGanho', 'marcarNegocioPerdido'],
         'fluxo': ['aguardarResposta', 'agendarAcaoFutura', 'bloquearClienteFluxos', 'encaminharParaAtendente', 'redirecionarFluxo'],
         'comunicacao': ['enviarMensagem', 'enviarEmail'],
-        'localizacao': ['geocodificarEndereco', 'calcularDistancia', 'resumirDisponibilidadeComMaps']
+        'localizacao': ['geocodificarEndereco', 'calcularDistancia', 'resumirDisponibilidadeComMaps', 'buscarEnderecoPorLocal', 'calcularTaxaDeslocamento']
     };
     
     const allowedFunctions = new Set();

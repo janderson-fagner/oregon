@@ -14,6 +14,7 @@ const dbQuery = require('../utils/dbHelper');
 
 router.get('/list/tags', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             q = '',
             sortBy = '',
@@ -23,7 +24,8 @@ router.get('/list/tags', async (req, res) => {
         } = req.query;
 
         // SQL
-        let query = 'SELECT * FROM Tags WHERE 1 = 1';
+        let query = 'SELECT * FROM Tags WHERE 1 = 1 AND empresa_id = ?';
+        let queryParams = [empresa_id];
         let order = ' ORDER BY name ASC';
 
         // Adicione filtros condicionais
@@ -41,10 +43,10 @@ router.get('/list/tags', async (req, res) => {
         if (itemsPerPage != 'todos')
             query += ` LIMIT ${parseInt(itemsPerPage)} OFFSET ${(page - 1) * parseInt(itemsPerPage)}`;
 
-        let tags = await dbQuery(query);
+        let tags = await dbQuery(query, queryParams);
 
         // Calcula o total de clientes com os filtros aplicados
-        let totalQuery = await dbQuery(`SELECT COUNT(*) as total FROM Tags`);
+        let totalQuery = await dbQuery(`SELECT COUNT(*) as total FROM Tags WHERE empresa_id = ?`, [empresa_id]);
         let totalTags = totalQuery[0].total;
 
         let response = {
@@ -61,17 +63,18 @@ router.get('/list/tags', async (req, res) => {
 
 router.post('/create/tag', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { name, description = null, color = null } = req.body;
 
-        let tag = await dbQuery('SELECT * FROM Tags WHERE name = ?', [name]);
+        let tag = await dbQuery('SELECT * FROM Tags WHERE name = ? AND empresa_id = ?', [name, empresa_id]);
 
         if (tag.length > 0) {
             return res.status(400).send('Tag já existe');
         }
 
-        let create = await dbQuery('INSERT INTO Tags (name, description, color) VALUES (?, ?, ?)', [name, description, color]);
+        let create = await dbQuery('INSERT INTO Tags (name, description, color, empresa_id) VALUES (?, ?, ?, ?)', [name, description, color, empresa_id]);
 
-        let result = await dbQuery('SELECT * FROM Tags WHERE id = ?', [create.insertId]);
+        let result = await dbQuery('SELECT * FROM Tags WHERE id = ? AND empresa_id = ?', [create.insertId, empresa_id]);
 
         res.status(200).send(result[0]);
     } catch (error) {
@@ -82,9 +85,10 @@ router.post('/create/tag', async (req, res) => {
 
 router.get('/get/tag/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
-        let query = await dbQuery('SELECT * FROM Tags WHERE id = ?', [id]);
+        let query = await dbQuery('SELECT * FROM Tags WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (query.length == 0) {
             return res.status(404).send('Nenhuma tag encontrada');
@@ -99,16 +103,17 @@ router.get('/get/tag/:id', async (req, res) => {
 
 router.post('/update/tag', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id, name, description = null, color = null } = req.body;
 
         // Buscar a tag antiga
-        let tag = await dbQuery('SELECT * FROM Tags WHERE id = ?', [id]);
+        let tag = await dbQuery('SELECT * FROM Tags WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (tag.length === 0) {
             //return res.status(404).send('Tag não encontrada');
 
             // Se a tag não for encontrada, criar uma nova
-            let create = await dbQuery('INSERT INTO Tags (name, description) VALUES (?, ?)', [name, description]);
+            let create = await dbQuery('INSERT INTO Tags (name, description, empresa_id) VALUES (?, ?, ?)', [name, description, empresa_id]);
 
             if (create.affectedRows == 0) {
                 return res.status(500).send('Erro ao criar tag');
@@ -120,7 +125,7 @@ router.post('/update/tag', async (req, res) => {
         const oldTagName = tag[0].name;
 
         // Atualizar o nome da tag na tabela Tags
-        await dbQuery('UPDATE Tags SET name = ?, description = ?, color = ? WHERE id = ?', [name, description, color, id]);
+        await dbQuery('UPDATE Tags SET name = ?, description = ?, color = ? WHERE id = ? AND empresa_id = ?', [name, description, color, id, empresa_id]);
 
         res.status(200).send('Tag atualizada com sucesso');
     } catch (error) {
@@ -131,17 +136,18 @@ router.post('/update/tag', async (req, res) => {
 
 router.delete('/delete/tag/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
         // Buscar a tag antiga
-        let tag = await dbQuery('SELECT * FROM Tags WHERE id = ?', [id]);
+        let tag = await dbQuery('SELECT * FROM Tags WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (tag.length === 0) {
             return res.status(404).send('Tag não encontrada');
         }
 
         // Deletar a tag
-        await dbQuery('DELETE FROM Tags WHERE id = ?', [id]);
+        await dbQuery('DELETE FROM Tags WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).send({ message: 'Tag atualizada com sucesso' });
     } catch (error) {
@@ -152,6 +158,7 @@ router.delete('/delete/tag/:id', async (req, res) => {
 
 router.post('/save/tags', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             refId,
             refType,
@@ -173,12 +180,12 @@ router.post('/save/tags', async (req, res) => {
         let valueId = refType == 'cliente' ? 'cli_Id' : refType == 'negocio' ? 'id' : null;
         let tagsCol = refType == 'cliente' ? 'cli_tags' : refType == 'negocio' ? 'tags' : null;
 
-        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ?`, [refId]);
+        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ? AND empresa_id = ?`, [refId, empresa_id]);
         if (dataQuery.length === 0) {
             return res.status(404).json({ message: `${refType} não encontrado.` });
         }
 
-        let update = await dbQuery(`UPDATE ${table} SET ${tagsCol} = ? WHERE ${valueId} = ?`, [JSON.stringify(tags), refId]);
+        let update = await dbQuery(`UPDATE ${table} SET ${tagsCol} = ? WHERE ${valueId} = ? AND empresa_id = ?`, [JSON.stringify(tags), refId, empresa_id]);
 
         if (update.affectedRows === 0) {
             return res.status(500).json({ message: 'Erro ao atualizar tags.' });
@@ -197,6 +204,7 @@ router.post('/save/tags', async (req, res) => {
 
 router.post('/upsert/atividade', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             refId,
             refType,
@@ -231,7 +239,7 @@ router.post('/upsert/atividade', async (req, res) => {
         let atividadeCol = refType == 'cliente' ? 'cli_atividades' : refType == 'negocio' ? 'atividades' : null;
         let historicoCol = refType == 'cliente' ? 'cli_historico' : refType == 'negocio' ? 'historico' : null;
 
-        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ?`, [refId]);
+        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ? AND empresa_id = ?`, [refId, empresa_id]);
         if (dataQuery.length === 0) {
             return res.status(404).json({ message: `${refType} não encontrado.` });
         }
@@ -326,8 +334,8 @@ router.post('/upsert/atividade', async (req, res) => {
             });
         }
 
-        await dbQuery(`UPDATE ${table} SET ${atividadeCol} = ?, ${historicoCol} = ? WHERE ${valueId} = ?`,
-            [JSON.stringify(atividadesAtuais), JSON.stringify(historicoAtual), refId]);
+        await dbQuery(`UPDATE ${table} SET ${atividadeCol} = ?, ${historicoCol} = ? WHERE ${valueId} = ? AND empresa_id = ?`,
+            [JSON.stringify(atividadesAtuais), JSON.stringify(historicoAtual), refId, empresa_id]);
 
         res.status(201).json({ message: 'Atividade criada com sucesso.', atividade: atividadeRes });
     } catch (error) {
@@ -338,6 +346,7 @@ router.post('/upsert/atividade', async (req, res) => {
 
 router.delete('/delete/atividade', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             refId,
             refType,
@@ -348,7 +357,7 @@ router.delete('/delete/atividade', async (req, res) => {
         let valueId = refType == 'cliente' ? 'cli_Id' : refType == 'negocio' ? 'id' : null;
         let atividadeCol = refType == 'cliente' ? 'cli_atividades' : refType == 'negocio' ? 'atividades' : null;
 
-        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ?`, [refId]);
+        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ? AND empresa_id = ?`, [refId, empresa_id]);
         if (dataQuery.length === 0) {
             return res.status(404).json({ message: `${refType} não encontrado.` });
         }
@@ -364,7 +373,7 @@ router.delete('/delete/atividade', async (req, res) => {
 
         atividadesAtuais.splice(atividadeIndex, 1);
 
-        await dbQuery(`UPDATE ${table} SET ${atividadeCol} = ? WHERE ${valueId} = ?`, [JSON.stringify(atividadesAtuais), refId]);
+        await dbQuery(`UPDATE ${table} SET ${atividadeCol} = ? WHERE ${valueId} = ? AND empresa_id = ?`, [JSON.stringify(atividadesAtuais), refId, empresa_id]);
         res.status(200).json({ message: 'Atividade deletada com sucesso.' });
     } catch (error) {
         console.error('Erro ao deletar atividade:', error);
@@ -378,6 +387,7 @@ router.delete('/delete/atividade', async (req, res) => {
 
 router.post('/upsert/anotacao', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             refId,
             refType,
@@ -396,7 +406,7 @@ router.post('/upsert/anotacao', async (req, res) => {
         let anotacaoCol = refType == 'cliente' ? 'cli_anotacoes' : refType == 'negocio' ? 'anotacoes' : null;
         let historicoCol = refType == 'cliente' ? 'cli_historico' : refType == 'negocio' ? 'historico' : null;
 
-        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ?`, [refId]);
+        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ? AND empresa_id = ?`, [refId, empresa_id]);
         if (dataQuery.length === 0) {
             return res.status(404).json({ message: `${refType} não encontrado.` });
         }
@@ -461,8 +471,8 @@ router.post('/upsert/anotacao', async (req, res) => {
             });
         }
 
-        await dbQuery(`UPDATE ${table} SET ${anotacaoCol} = ?, ${historicoCol} = ? WHERE ${valueId} = ?`,
-            [JSON.stringify(anotacoesAtuais), JSON.stringify(historicoAtual), refId]);
+        await dbQuery(`UPDATE ${table} SET ${anotacaoCol} = ?, ${historicoCol} = ? WHERE ${valueId} = ? AND empresa_id = ?`,
+            [JSON.stringify(anotacoesAtuais), JSON.stringify(historicoAtual), refId, empresa_id]);
 
         res.status(201).json({ message: 'Anotação criada/atualizada com sucesso.', anotacao: anotacaoRes });
     } catch (error) {
@@ -473,6 +483,7 @@ router.post('/upsert/anotacao', async (req, res) => {
 
 router.delete('/delete/anotacao', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             refId,
             refType,
@@ -483,7 +494,7 @@ router.delete('/delete/anotacao', async (req, res) => {
         let valueId = refType == 'cliente' ? 'cli_Id' : refType == 'negocio' ? 'id' : null;
         let anotacaoCol = refType == 'cliente' ? 'cli_anotacoes' : refType == 'negocio' ? 'anotacoes' : null;
 
-        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ?`, [refId]);
+        let dataQuery = await dbQuery(`SELECT * FROM ${table} WHERE ${valueId} = ? AND empresa_id = ?`, [refId, empresa_id]);
         if (dataQuery.length === 0) {
             return res.status(404).json({ message: `${refType} não encontrado.` });
         }
@@ -499,8 +510,8 @@ router.delete('/delete/anotacao', async (req, res) => {
 
         anotacoesAtuais.splice(anotacaoIndex, 1);
 
-        await dbQuery(`UPDATE ${table} SET ${anotacaoCol} = ? WHERE ${valueId} = ?`,
-            [JSON.stringify(anotacoesAtuais), refId]);
+        await dbQuery(`UPDATE ${table} SET ${anotacaoCol} = ? WHERE ${valueId} = ? AND empresa_id = ?`,
+            [JSON.stringify(anotacoesAtuais), refId, empresa_id]);
         res.status(200).json({ message: 'Anotação deletada com sucesso.' });
     } catch (error) {
         console.error('Erro ao deletar anotação:', error);
@@ -514,16 +525,17 @@ router.delete('/delete/anotacao', async (req, res) => {
 
 router.get('/list/funil', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             negocios = false
         } = req.query;
 
-        let funis = await dbQuery('SELECT * FROM Funis ORDER BY ordem ASC');
+        let funis = await dbQuery('SELECT * FROM Funis WHERE empresa_id = ? ORDER BY ordem ASC', [empresa_id]);
 
         if (negocios) {
-            let negociosFunis = await dbQuery('SELECT cli_Id, title, id, status, etapaId FROM Negocios WHERE etapaId IN (?)', [funis.map(f => f.id)]);
+            let negociosFunis = await dbQuery('SELECT cli_Id, title, id, status, etapaId FROM Negocios WHERE etapaId IN (?) AND empresa_id = ?', [funis.map(f => f.id), empresa_id]);
             if (negociosFunis.length > 0) {
-                let clientes = await dbQuery(`SELECT cli_Id, cli_nome FROM CLIENTES WHERE cli_Id IN (?)`, [negociosFunis.map(n => n.cli_Id)]);
+                let clientes = await dbQuery(`SELECT cli_Id, cli_nome FROM CLIENTES WHERE cli_Id IN (?) AND empresa_id = ?`, [negociosFunis.map(n => n.cli_Id), empresa_id]);
 
                 funis.forEach(funil => {
                     funil.negocios = negociosFunis.filter(n => n.etapaId === funil.id).map(n => {
@@ -546,6 +558,7 @@ router.get('/list/funil', async (req, res) => {
 
 router.post('/upsert/funil', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id = null, nome, probabilidade = null, ordem = 0, instrucoesIa } = req.body;
 
         if (!nome) {
@@ -556,7 +569,7 @@ router.post('/upsert/funil', async (req, res) => {
 
         if (!id) {
             // Criar novo funil
-            let create = await dbQuery('INSERT INTO Funis (nome, probabilidade, ordem, instrucoesIa) VALUES (?, ?, ?, ?)', [nome, probabilidade, ordem, instrucoesIa]);
+            let create = await dbQuery('INSERT INTO Funis (nome, probabilidade, ordem, instrucoesIa, empresa_id) VALUES (?, ?, ?, ?, ?)', [nome, probabilidade, ordem, instrucoesIa, empresa_id]);
 
             if (create.affectedRows == 0) {
                 return res.status(500).json({ message: 'Erro ao criar funil.' });
@@ -565,19 +578,19 @@ router.post('/upsert/funil', async (req, res) => {
             idF = create.insertId;
         } else {
             // Atualizar funil existente
-            let funil = await dbQuery('SELECT * FROM Funis WHERE id = ?', [id]);
+            let funil = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
             if (funil.length === 0) {
                 return res.status(404).json({ message: 'Funil não encontrado.' });
             }
 
-            await dbQuery('UPDATE Funis SET nome = ?, probabilidade = ?, ordem = ?, instrucoesIa = ? WHERE id = ?',
-                [nome, probabilidade, ordem, instrucoesIa, id]);
+            await dbQuery('UPDATE Funis SET nome = ?, probabilidade = ?, ordem = ?, instrucoesIa = ? WHERE id = ? AND empresa_id = ?',
+                [nome, probabilidade, ordem, instrucoesIa, id, empresa_id]);
 
             idF = id;
         }
 
-        const funilQuery = await dbQuery('SELECT * FROM Funis WHERE id = ?', [idF]);
+        const funilQuery = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [idF, empresa_id]);
         if (funilQuery.length === 0) {
             return res.status(404).json({ message: 'Funil não encontrado após criação/atualização.' });
         }
@@ -591,25 +604,26 @@ router.post('/upsert/funil', async (req, res) => {
 
 router.delete('/delete/funil/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
-        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ?', [id]);
+        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (funil.length === 0) {
             return res.status(404).json({ message: 'Funil não encontrado.' });
         }
 
-        const funis = await dbQuery('SELECT * FROM Funis');
+        const funis = await dbQuery('SELECT * FROM Funis WHERE empresa_id = ?', [empresa_id]);
         if (funis.length <= 1) {
             return res.status(400).json({ message: 'Você deve ter ao menos um funil.' });
         }
 
-        const negociosFunil = await dbQuery('SELECT * FROM Negocios WHERE etapaId = ?', [id]);
+        const negociosFunil = await dbQuery('SELECT * FROM Negocios WHERE etapaId = ? AND empresa_id = ?', [id, empresa_id]);
         if (negociosFunil.length > 0) {
             return res.status(400).json({ message: 'Existem negócios vinculados a este funil. Por favor, mova ou exclua esses negócios antes de deletar o funil.' });
         }
 
-        await dbQuery('DELETE FROM Funis WHERE id = ?', [id]);
+        await dbQuery('DELETE FROM Funis WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Funil deletado com sucesso.' });
     } catch (error) {
@@ -624,6 +638,7 @@ router.delete('/delete/funil/:id', async (req, res) => {
 
 router.get('/list/negocios', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             q = '',
             sortBy = 'id',
@@ -643,15 +658,16 @@ router.get('/list/negocios', async (req, res) => {
             offset = 0;
             itemsPerPage = 1000000;
         }
-        
+
         q = sanitizeInput(q);
 
-        let baseQuery = 'FROM Negocios WHERE 1=1';
+        let baseQuery = 'FROM Negocios WHERE 1=1 AND empresa_id = ?';
+        let queryParams = [empresa_id];
 
         if (cli_Id) {
             baseQuery += ` AND cli_Id = ${cli_Id}`;
         }
-        
+
         if (etapaId) {
             baseQuery += ` AND etapaId = ${etapaId}`;
         }
@@ -659,10 +675,10 @@ router.get('/list/negocios', async (req, res) => {
         if (status) {
             baseQuery += ` AND status = '${status}'`;
         }
-        
+
         baseQuery += ` ORDER BY ${sortBy} ${orderBy.toUpperCase()}`;
 
-        let totalNegociosQuery = await dbQuery(`SELECT COUNT(*) as totalNegocios ${baseQuery}`);
+        let totalNegociosQuery = await dbQuery(`SELECT COUNT(*) as totalNegocios ${baseQuery}`, queryParams);
         let totalNegocios = totalNegociosQuery[0] ? totalNegociosQuery[0].totalNegocios : 0;
 
         baseQuery += ` LIMIT ${itemsPerPage} OFFSET ${offset}`;
@@ -672,15 +688,15 @@ router.get('/list/negocios', async (req, res) => {
             data_fechamento_esperada, data_fechamento, motivoPerdido, obsPerdido, dataPerdido,
             created_at, updated_at, created_by, updated_by
         `;
-        
-        let negocios = await dbQuery(`SELECT ${itens} ${baseQuery}`);
+
+        let negocios = await dbQuery(`SELECT ${itens} ${baseQuery}`, queryParams);
 
         for(let negocio of negocios) {
             negocio.atividades = JSON.parse(negocio.atividades || '[]');
             negocio.anotacoes = JSON.parse(negocio.anotacoes || '[]');
             negocio.tags = JSON.parse(negocio.tags || '[]');
-            
-            let etapa = await dbQuery('SELECT * FROM Funis WHERE id = ?', [negocio.etapaId]);
+
+            let etapa = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [negocio.etapaId, empresa_id]);
             negocio.etapa = etapa.length > 0 ? etapa[0] : null;
         }
 
@@ -693,9 +709,10 @@ router.get('/list/negocios', async (req, res) => {
 
 router.get('/get/negocio/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
@@ -708,7 +725,7 @@ router.get('/get/negocio/:id', async (req, res) => {
         negocio.historico = JSON.parse(negocio.historico || '[]');
         negocio.tags = JSON.parse(negocio.tags || '[]');
 
-        let cliente = await dbQuery('SELECT cli_Id, cli_nome, cli_cpf, cli_celular, cli_email, cli_tags FROM CLIENTES WHERE cli_Id = ?', [negocio.cli_Id]);
+        let cliente = await dbQuery('SELECT cli_Id, cli_nome, cli_cpf, cli_celular, cli_email, cli_tags FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?', [negocio.cli_Id, empresa_id]);
         negocio.cliente = cliente.length > 0 ? cliente[0] : null;
 
         if (negocio.cliente) {
@@ -720,8 +737,8 @@ router.get('/get/negocio/:id', async (req, res) => {
         }
 
         if (negocio.age_id) {
-            let query = 'SELECT * FROM AGENDAMENTO WHERE age_id = ?';
-            let agendamento = await getAgendamentos(query, [negocio.age_id]);
+            let query = 'SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?';
+            let agendamento = await getAgendamentos(query, [negocio.age_id, empresa_id], empresa_id);
             negocio.agendamento = agendamento.length > 0 ? agendamento[0] : null;
         }
 
@@ -774,6 +791,7 @@ router.get('/variaveis', async (req, res) => {
 
 router.post('/create/negocio', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             cli_Id,
             title,
@@ -784,7 +802,7 @@ router.post('/create/negocio', async (req, res) => {
             return res.status(400).json({ message: 'Cliente, título e etapa são obrigatórios.' });
         }
 
-        let cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [cli_Id]);
+        let cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?', [cli_Id, empresa_id]);
         if (cliente.length === 0) {
             return res.status(404).json({ message: 'Cliente não encontrado.' });
         }
@@ -803,7 +821,7 @@ router.post('/create/negocio', async (req, res) => {
 
         historicoCliente.unshift(hist);
 
-        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ?', [etapaId]);
+        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [etapaId, empresa_id]);
         if (funil.length === 0) {
             return res.status(404).json({ message: 'Etapa do funil não encontrada.' });
         }
@@ -825,23 +843,24 @@ router.post('/create/negocio', async (req, res) => {
             etapaId,
             historico: JSON.stringify(newHistorico),
             status: 'Pendente',
-            created_by: req.user?.fullName || 'N/A'
+            created_by: req.user?.fullName || 'N/A',
+            empresa_id
         }
 
-        let newNegocioQuery = await dbQuery('INSERT INTO Negocios (cli_Id, title, etapaId, status, created_by, historico) VALUES (?, ?, ?, ?, ?, ?)',
-            [newNegocio.cli_Id, newNegocio.title, newNegocio.etapaId, newNegocio.status, newNegocio.created_by, newNegocio.historico]);
+        let newNegocioQuery = await dbQuery('INSERT INTO Negocios (cli_Id, title, etapaId, status, created_by, historico, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [newNegocio.cli_Id, newNegocio.title, newNegocio.etapaId, newNegocio.status, newNegocio.created_by, newNegocio.historico, empresa_id]);
 
         if (newNegocioQuery.affectedRows == 0) {
             return res.status(500).json({ message: 'Erro ao criar negócio.' });
         }
 
-        let createdNegocio = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [newNegocioQuery.insertId]);
+        let createdNegocio = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [newNegocioQuery.insertId, empresa_id]);
 
         if (createdNegocio.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado após criação.' });
         }
 
-        await dbQuery('UPDATE CLIENTES SET cli_historico = ? WHERE cli_Id = ?', [JSON.stringify(historicoCliente), cli_Id]);
+        await dbQuery('UPDATE CLIENTES SET cli_historico = ? WHERE cli_Id = ? AND empresa_id = ?', [JSON.stringify(historicoCliente), cli_Id, empresa_id]);
         res.status(201).json({ message: 'Negócio criado com sucesso.', negocio: createdNegocio[0] });
     } catch (error) {
         console.error('Erro ao criar negócio:', error);
@@ -851,6 +870,7 @@ router.post('/create/negocio', async (req, res) => {
 
 router.put('/update/negocio/etapa', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             id,
             etapaId
@@ -860,7 +880,7 @@ router.put('/update/negocio/etapa', async (req, res) => {
             return res.status(400).json({ message: 'ID do negócio e etapa são obrigatórios.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
@@ -871,7 +891,7 @@ router.put('/update/negocio/etapa', async (req, res) => {
             return res.status(400).json({ message: 'Negócio já está nesta etapa.' });
         }
 
-        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ?', [etapaId]);
+        let funil = await dbQuery('SELECT * FROM Funis WHERE id = ? AND empresa_id = ?', [etapaId, empresa_id]);
         if (funil.length === 0) {
             return res.status(404).json({ message: 'Etapa do funil não encontrada.' });
         }
@@ -910,8 +930,8 @@ router.put('/update/negocio/etapa', async (req, res) => {
             icon: 'tabler-briefcase'
         });
 
-        await dbQuery('UPDATE Negocios SET historico = ?, etapaId = ?, updated_by = ? WHERE id = ?',
-            [JSON.stringify(historico), etapaId, req.user?.fullName || 'N/A', id]);
+        await dbQuery('UPDATE Negocios SET historico = ?, etapaId = ?, updated_by = ? WHERE id = ? AND empresa_id = ?',
+            [JSON.stringify(historico), etapaId, req.user?.fullName || 'N/A', id, empresa_id]);
 
         res.status(200).json({ message: 'Etapa do negócio atualizada com sucesso.' });
     } catch (error) {
@@ -922,6 +942,7 @@ router.put('/update/negocio/etapa', async (req, res) => {
 
 router.put('/update/negocio/key', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             id,
             key,
@@ -943,7 +964,7 @@ router.put('/update/negocio/key', async (req, res) => {
             return res.status(400).json({ message: 'Chave inválida para atualização.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
@@ -966,8 +987,8 @@ router.put('/update/negocio/key', async (req, res) => {
             icon: 'tabler-edit'
         });
 
-        await dbQuery(`UPDATE Negocios SET historico = ?, ${key} = ? WHERE id = ?`,
-            [JSON.stringify(historico), value, id]);
+        await dbQuery(`UPDATE Negocios SET historico = ?, ${key} = ? WHERE id = ? AND empresa_id = ?`,
+            [JSON.stringify(historico), value, id, empresa_id]);
 
         res.status(200).json({ message: `${allowedKeys.find(k => k.key === key).title} do negócio atualizado com sucesso.` });
     } catch (error) {
@@ -978,18 +999,19 @@ router.put('/update/negocio/key', async (req, res) => {
 
 router.put('/update/negocio/vincularAgendamento', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id, age_id } = req.body;
 
         if (!id || !age_id) {
             return res.status(400).json({ message: 'ID do negócio e ID do agendamento são obrigatórios.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
 
-        let agendamentoQuery = await dbQuery('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [age_id]);
+        let agendamentoQuery = await dbQuery('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?', [age_id, empresa_id]);
         if (agendamentoQuery.length === 0) {
             return res.status(404).json({ message: 'Agendamento não encontrado.' });
         }
@@ -1012,8 +1034,8 @@ router.put('/update/negocio/vincularAgendamento', async (req, res) => {
             icon: 'tabler-calendar-plus'
         });
 
-        await dbQuery(`UPDATE Negocios SET historico = ?, age_id = ? WHERE id = ?`,
-            [JSON.stringify(historico), age_id, id]);
+        await dbQuery(`UPDATE Negocios SET historico = ?, age_id = ? WHERE id = ? AND empresa_id = ?`,
+            [JSON.stringify(historico), age_id, id, empresa_id]);
 
         res.status(200).json({ message: `Agendamento vinculado ao negócio com sucesso.` });
     } catch (error) {
@@ -1024,13 +1046,14 @@ router.put('/update/negocio/vincularAgendamento', async (req, res) => {
 
 router.put('/update/negocio/ganho', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.body;
 
         if (!id) {
             return res.status(400).json({ message: 'ID do negócio é obrigatório.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
@@ -1054,8 +1077,8 @@ router.put('/update/negocio/ganho', async (req, res) => {
         });
 
 
-        await dbQuery('UPDATE Negocios SET status = ?, historico = ?, data_fechamento = ?, motivoPerdido = NULL, obsPerdido = NULL, dataPerdido = NULL WHERE id = ?',
-            ['Ganho', JSON.stringify(historico), moment().format('YYYY-MM-DD'), id]);
+        await dbQuery('UPDATE Negocios SET status = ?, historico = ?, data_fechamento = ?, motivoPerdido = NULL, obsPerdido = NULL, dataPerdido = NULL WHERE id = ? AND empresa_id = ?',
+            ['Ganho', JSON.stringify(historico), moment().format('YYYY-MM-DD'), id, empresa_id]);
 
         res.status(200).json({ message: 'Status do negócio atualizado para ganho com sucesso.' });
     } catch (error) {
@@ -1066,13 +1089,14 @@ router.put('/update/negocio/ganho', async (req, res) => {
 
 router.put('/update/negocio/perdido', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id, motivo, obs = null } = req.body;
 
         if (!id || !motivo) {
             return res.status(400).json({ message: 'ID do negócio e motivo são obrigatórios.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
@@ -1095,8 +1119,8 @@ router.put('/update/negocio/perdido', async (req, res) => {
             type: 'negocio-status-atualizado'
         });
 
-        await dbQuery('UPDATE Negocios SET status = ?, historico = ?, data_fechamento = NULL, motivoPerdido = ?, obsPerdido = ?, dataPerdido = ? WHERE id = ?',
-            ['Perdido', JSON.stringify(historico), motivo, obs, moment().format('YYYY-MM-DD HH:mm:ss'), id]);
+        await dbQuery('UPDATE Negocios SET status = ?, historico = ?, data_fechamento = NULL, motivoPerdido = ?, obsPerdido = ?, dataPerdido = ? WHERE id = ? AND empresa_id = ?',
+            ['Perdido', JSON.stringify(historico), motivo, obs, moment().format('YYYY-MM-DD HH:mm:ss'), id, empresa_id]);
 
         res.status(200).json({ message: 'Status do negócio atualizado para perdido com sucesso.' });
     } catch (error) {
@@ -1107,13 +1131,14 @@ router.put('/update/negocio/perdido', async (req, res) => {
 
 router.post('/duplicate/negocio', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.body;
 
         if (!id) {
             return res.status(400).json({ message: 'ID do negócio é obrigatório.' });
         }
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
@@ -1149,7 +1174,8 @@ router.post('/duplicate/negocio', async (req, res) => {
             created_at: moment().format('YYYY-MM-DD HH:mm:ss'),
             updated_at: moment().format('YYYY-MM-DD HH:mm:ss'),
             etapaId: negocio.etapaId,
-            status: negocio.status
+            status: negocio.status,
+            empresa_id
         };
 
         let novoQuery = await dbQuery('INSERT INTO Negocios SET ?', [newNegocio]);
@@ -1163,14 +1189,15 @@ router.post('/duplicate/negocio', async (req, res) => {
 
 router.delete('/delete/negocio/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
-        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [id]);
+        let negocioQuery = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (negocioQuery.length === 0) {
             return res.status(404).json({ message: 'Negócio não encontrado.' });
         }
 
-        await dbQuery('DELETE FROM Negocios WHERE id = ?', [id]);
+        await dbQuery('DELETE FROM Negocios WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Negócio deletado com sucesso.' });
     } catch (error) {
@@ -1185,6 +1212,7 @@ router.delete('/delete/negocio/:id', async (req, res) => {
 
 router.get('/list/all-atividades', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             q = '',
             searchType = '', // cliente ou negocio
@@ -1203,8 +1231,8 @@ router.get('/list/all-atividades', async (req, res) => {
         let allAtividades = [];
 
         // Buscar atividades dos clientes
-        let clientesQuery = 'SELECT cli_Id, cli_nome, cli_atividades FROM CLIENTES WHERE cli_atividades IS NOT NULL AND cli_atividades != "[]"';
-        let clientes = await dbQuery(clientesQuery);
+        let clientesQuery = 'SELECT cli_Id, cli_nome, cli_atividades FROM CLIENTES WHERE cli_atividades IS NOT NULL AND cli_atividades != "[]" AND empresa_id = ?';
+        let clientes = await dbQuery(clientesQuery, [empresa_id]);
 
         for (let cliente of clientes) {
             let atividades = [];
@@ -1226,8 +1254,8 @@ router.get('/list/all-atividades', async (req, res) => {
         }
 
         // Buscar atividades dos negócios
-        let negociosQuery = 'SELECT n.id, n.title, n.atividades, n.cli_Id, c.cli_nome FROM Negocios n LEFT JOIN CLIENTES c ON c.cli_Id = n.cli_Id WHERE n.atividades IS NOT NULL AND n.atividades != "[]"';
-        let negocios = await dbQuery(negociosQuery);
+        let negociosQuery = 'SELECT n.id, n.title, n.atividades, n.cli_Id, c.cli_nome FROM Negocios n LEFT JOIN CLIENTES c ON c.cli_Id = n.cli_Id WHERE n.atividades IS NOT NULL AND n.atividades != "[]" AND n.empresa_id = ?';
+        let negocios = await dbQuery(negociosQuery, [empresa_id]);
 
         for (let negocio of negocios) {
             let atividades = [];
@@ -1333,6 +1361,7 @@ router.get('/list/all-atividades', async (req, res) => {
 
 router.get('/list/all-anotacoes', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             q = '',
             searchType = '', // cliente ou negocio
@@ -1349,8 +1378,8 @@ router.get('/list/all-anotacoes', async (req, res) => {
         let allAnotacoes = [];
 
         // Buscar anotações dos clientes
-        let clientesQuery = 'SELECT cli_Id, cli_nome, cli_anotacoes FROM CLIENTES WHERE cli_anotacoes IS NOT NULL AND cli_anotacoes != "[]"';
-        let clientes = await dbQuery(clientesQuery);
+        let clientesQuery = 'SELECT cli_Id, cli_nome, cli_anotacoes FROM CLIENTES WHERE cli_anotacoes IS NOT NULL AND cli_anotacoes != "[]" AND empresa_id = ?';
+        let clientes = await dbQuery(clientesQuery, [empresa_id]);
 
         for (let cliente of clientes) {
             let anotacoes = [];
@@ -1372,8 +1401,8 @@ router.get('/list/all-anotacoes', async (req, res) => {
         }
 
         // Buscar anotações dos negócios
-        let negociosQuery = 'SELECT n.id, n.title, n.anotacoes, n.cli_Id, c.cli_nome FROM Negocios n LEFT JOIN CLIENTES c ON c.cli_Id = n.cli_Id WHERE n.anotacoes IS NOT NULL AND n.anotacoes != "[]"';
-        let negocios = await dbQuery(negociosQuery);
+        let negociosQuery = 'SELECT n.id, n.title, n.anotacoes, n.cli_Id, c.cli_nome FROM Negocios n LEFT JOIN CLIENTES c ON c.cli_Id = n.cli_Id WHERE n.anotacoes IS NOT NULL AND n.anotacoes != "[]" AND n.empresa_id = ?';
+        let negocios = await dbQuery(negociosQuery, [empresa_id]);
 
         for (let negocio of negocios) {
             let anotacoes = [];

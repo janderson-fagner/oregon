@@ -137,13 +137,18 @@ async function executeWaitReplyConditional(config, context) {
  */
 async function executeWaitReplyOptions(config, context) {
     flowLog.actionSuccess('wait_reply_options', { step: 'start' });
-    
+
     try {
         const options = config.options || [];
         const message = config.message || '';
         const maxAttempts = config.maxAttempts || 3;
         const invalidOptionMessage = config.invalidOptionMessage || 'Opção inválida. Por favor, escolha uma das opções acima.';
-        
+
+        // Converter timeout para ms (nova funcionalidade)
+        const timeoutValue = config.timeoutValue || 0;
+        const timeoutType = config.timeoutType || 'minutes';
+        const timeoutMs = convertTimeToMs(timeoutValue, timeoutType);
+
         if (options.length === 0) {
             flowLog.log('WARN', 'Nenhuma opção configurada no menu');
             return {
@@ -152,18 +157,18 @@ async function executeWaitReplyOptions(config, context) {
                 error: 'Nenhuma opção configurada'
             };
         }
-        
+
         // Processar mensagem com variáveis
         const processedMessage = await replaceVariables(message, context);
-        
+
         // Montar texto do menu
         let menuText = processedMessage + '\n\n';
         options.forEach((option, index) => {
             menuText += `${index + 1} - ${option.label}\n`;
         });
-        
-        flowLog.log('INFO', `Menu com ${options.length} opções preparado`);
-        
+
+        flowLog.log('INFO', `Menu com ${options.length} opções preparado - Timeout: ${formatTime(timeoutMs)}`);
+
         return {
             success: true,
             output: 'wait',
@@ -173,7 +178,8 @@ async function executeWaitReplyOptions(config, context) {
             maxAttempts: maxAttempts,
             invalidOptionMessage: invalidOptionMessage,
             captureMode: 'options',
-            currentAttempt: 0
+            currentAttempt: 0,
+            timeoutMs: timeoutMs
         };
         
     } catch (error) {

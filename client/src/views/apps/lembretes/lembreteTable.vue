@@ -1,15 +1,11 @@
 <script setup>
   import { VDataTableServer } from "vuetify/labs/VDataTable";
   import { paginationMeta } from "@api-utils/paginationMeta";
-  import { useCookieStore } from "@layouts/stores/config";
   import LembreteDialog from "@/views/apps/lembretes/lembreteDialog.vue";
   import { useAlert } from "@/composables/useAlert";
 
   const { setAlert } = useAlert();
-  const cookieStore = useCookieStore();
   const loading = ref(true);
-  const userData = useCookie("userData").value;
-  const userRole = userData.role;
 
   const props = defineProps({
     isDrawerOpen: {
@@ -65,6 +61,16 @@
       key: "agendado_time",
     },
     {
+      title: "Destinatários",
+      key: "destinatarios",
+      sortable: false,
+    },
+    {
+      title: "Status",
+      key: "status",
+      sortable: false,
+    },
+    {
       title: "Repetir",
       key: "repeat",
     },
@@ -97,12 +103,9 @@
         },
       });
 
-      console.log("res lembretes", res);
-
       lembretes.value = res.lembretes;
       totalLembretes.value = res.totalLembretes;
     } catch (err) {
-      console.error("Error fetching user data", err, err.response);
       lembretes.value = [];
     }
 
@@ -120,26 +123,19 @@
 
       if (!res) return;
 
-      console.log("res edit", res);
-
       selectedLembreteData.value = res;
       isAddNewUserDrawerVisible.value = true;
     } catch (error) {
-      console.error("Error fetching user data", error, error.response);
+      console.error("Error fetching lembrete data", error);
     }
   };
 
   const deleteUser = async (id) => {
-    //Confirmação de exclusão
     const confirm = window.confirm(
       "Tem certeza que deseja excluir esse lembrete? Isso não poderá ser desfeito!"
     );
 
-    if (!confirm) {
-      return;
-    }
-
-    console.log("Excluir Lembrete:", id);
+    if (!confirm) return;
 
     try {
       await $api(`/lembretes/delete/${id}`, {
@@ -154,7 +150,6 @@
       );
       getLembretes();
     } catch (err) {
-      console.error("Error fetching user data", err, err.response);
       setAlert(
         err?.response?._data?.message ||
           "Ocorreu um erro ao excluir o lembrete, tente novamente!",
@@ -165,11 +160,20 @@
     }
   };
 
-  const formatValor = (valor) => {
-    return valor.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
+  // Retorna o status do lembrete baseado no estado
+  const getStatusLembrete = (item) => {
+    if (item.concluido) return { text: "Concluído", color: "success" };
+    const agendado = new Date(item.agendado_time);
+    if (agendado < new Date()) return { text: "Atrasado", color: "error" };
+    return { text: "Ativo", color: "info" };
+  };
+
+  // Formata a lista de destinatários para exibição
+  const getDestinatariosLabel = (item) => {
+    const funcoes = item.destinatarios_funcoes || [];
+    const usuarios = item.destinatarios_usuarios || [];
+    if (funcoes.length === 0 && usuarios.length === 0) return null;
+    return { funcoes, usuariosCount: usuarios.length };
   };
 </script>
 
@@ -183,7 +187,6 @@
     <PerfectScrollbar :options="{ wheelPropagation: false }">
       <VCard flat>
         <VCardText class="pt-2">
-          <!-- 👉 Title -->
           <AppDrawerHeaderSection
             :title="'Lembretes do' + ' ' + props.type"
             @cancel="closeNavigationDrawer"
@@ -210,7 +213,6 @@
                 <div
                   class="app-user-search-filter d-flex align-center flex-wrap gap-4"
                 >
-                  <!-- 👉 Add user button -->
                   <VBtn
                     prepend-icon="tabler-plus"
                     @click="isAddNewUserDrawerVisible = true"
@@ -222,7 +224,6 @@
 
               <VDivider />
 
-              <!-- SECTION datatable -->
               <VDataTableServer
                 v-model:items-per-page="itemsPerPage"
                 v-model:page="page"
@@ -254,7 +255,6 @@
                     :class="{ 'text-decoration-line-through': item.concluido }"
                   >
                     {{ item.subtitle }}
-
                     <VTooltip activator="parent" :text="item.subtitle" />
                   </p>
                 </template>
@@ -265,8 +265,47 @@
                   </p>
                 </template>
 
+                <template #item.destinatarios="{ item }">
+                  <div class="d-flex flex-wrap gap-1">
+                    <template v-if="getDestinatariosLabel(item)">
+                      <VChip
+                        v-for="funcao in getDestinatariosLabel(item).funcoes"
+                        :key="funcao"
+                        size="small"
+                        color="primary"
+                        variant="tonal"
+                        label
+                      >
+                        {{ funcao }}
+                      </VChip>
+                      <VChip
+                        v-if="getDestinatariosLabel(item).usuariosCount > 0"
+                        size="small"
+                        color="info"
+                        variant="tonal"
+                        label
+                      >
+                        {{ getDestinatariosLabel(item).usuariosCount }} usuário(s)
+                      </VChip>
+                    </template>
+                    <VChip v-else size="small" color="secondary" variant="tonal" label>
+                      Admin / Gerente
+                    </VChip>
+                  </div>
+                </template>
+
+                <template #item.status="{ item }">
+                  <VChip
+                    :color="getStatusLembrete(item).color"
+                    size="small"
+                    label
+                  >
+                    {{ getStatusLembrete(item).text }}
+                  </VChip>
+                </template>
+
                 <template #item.repeat="{ item }">
-                  <VChip :color="item.repeat ? 'success' : 'warning'" label>
+                  <VChip :color="item.repeat ? 'success' : 'warning'" size="small" label>
                     {{ item.repeat ? "Sim" : "Não" }}
                   </VChip>
                 </template>
@@ -276,31 +315,37 @@
                     <VIcon
                       icon="tabler-mail"
                       :color="item.notify_email ? 'primary' : 'secondary'"
+                      size="20"
                     />
                     <VIcon
                       icon="tabler-brand-whatsapp"
                       :color="item.notify_zap ? 'primary' : 'secondary'"
+                      size="20"
                     />
                   </div>
                 </template>
 
                 <!-- Actions -->
                 <template #item.actions="{ item }">
-                  <div class="d-flex flex-row gap-2">
+                  <div class="d-flex flex-row gap-1">
                     <IconBtn
                       title="Editar Lembrete"
                       @click="editUser(item)"
                       color="warning"
+                      variant="tonal"
+                      size="small"
                     >
-                      <VIcon icon="tabler-edit" />
+                      <VIcon icon="tabler-edit" size="18" />
                     </IconBtn>
 
                     <IconBtn
                       title="Excluir Lembrete"
                       @click="deleteUser(item.id)"
                       color="error"
+                      variant="tonal"
+                      size="small"
                     >
-                      <VIcon icon="tabler-trash" />
+                      <VIcon icon="tabler-trash" size="18" />
                     </IconBtn>
                   </div>
                 </template>
@@ -353,7 +398,6 @@
                   </div>
                 </template>
               </VDataTableServer>
-              <!-- SECTION -->
             </VCard>
           </section>
         </VCardText>

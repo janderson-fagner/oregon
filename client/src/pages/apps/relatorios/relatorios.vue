@@ -5,6 +5,8 @@ import comissoes from "@/pages/apps/relatorios/comissoes-relatorios.vue";
 import servicos from "@/pages/apps/relatorios/servicos-relatorios.vue";
 import crm from "@/pages/apps/relatorios/crm-relatorios.vue";
 import atendimento from "@/pages/apps/relatorios/atendimento-relatorios.vue";
+import contratosRelatorios from "@/pages/apps/relatorios/contratos-relatorios.vue";
+import orcamentosRelatorios from "@/pages/apps/relatorios/orcamentos-relatorios.vue";
 import { can } from "@layouts/plugins/casl";
 
 const { setAlert } = useAlert();
@@ -53,6 +55,18 @@ const tabs = [
     route: "relatoriosAtendimento",
     can: can("view", "relatorio_crm"),
   },
+  {
+    icon: "tabler-file-text",
+    title: "Contratos",
+    route: "relatoriosContratos",
+    can: can("view", "relatorio_financeiro"),
+  },
+  {
+    icon: "tabler-file-invoice",
+    title: "Orçamentos",
+    route: "relatoriosOrcamentos",
+    can: can("view", "relatorio_financeiro"),
+  },
 ].filter((tab) => tab.can);
 
 watch(prodTab, (val) => {
@@ -67,7 +81,9 @@ if (
   route.name === "relatoriosServicos" ||
   route.name === "relatoriosAgendamentos" ||
   route.name === "relatoriosCRM" ||
-  route.name === "relatoriosAtendimento"
+  route.name === "relatoriosAtendimento" ||
+  route.name === "relatoriosContratos" ||
+  route.name === "relatoriosOrcamentos"
 ) {
   watch(
     () => route.name,
@@ -90,6 +106,12 @@ if (
       } else if (val === "relatoriosAtendimento") {
         prodTab.value =
           tabs.findIndex((tab) => tab.title === "Atendimento") ?? null;
+      } else if (val === "relatoriosContratos") {
+        prodTab.value =
+          tabs.findIndex((tab) => tab.title === "Contratos") ?? null;
+      } else if (val === "relatoriosOrcamentos") {
+        prodTab.value =
+          tabs.findIndex((tab) => tab.title === "Orçamentos") ?? null;
       }
       if(prodTab.value === null) {
         router.push('/');
@@ -111,6 +133,10 @@ onMounted(() => {
     prodTab.value = tabs.findIndex((tab) => tab.title === "CRM") ?? null;
   } else if (route.name === "relatoriosAtendimento") {
     prodTab.value = tabs.findIndex((tab) => tab.title === "Atendimento") ?? null;
+  } else if (route.name === "relatoriosContratos") {
+    prodTab.value = tabs.findIndex((tab) => tab.title === "Contratos") ?? null;
+  } else if (route.name === "relatoriosOrcamentos") {
+    prodTab.value = tabs.findIndex((tab) => tab.title === "Orçamentos") ?? null;
   }
 
   if(prodTab.value === null) {
@@ -126,7 +152,7 @@ onMounted(() => {
     </VCol>
   </VRow>
 
-  <div class="d-flex flex-row flex-nowrap gap-3 mb-4">
+  <div class="d-flex flex-row flex-nowrap gap-3 mb-4 overflow-x-auto">
     <VBtn
       v-for="(tab, index) in tabs"
       :key="index"
@@ -164,6 +190,14 @@ onMounted(() => {
 
     <VWindowItem v-if="tabs?.[prodTab]?.can">
       <atendimento />
+    </VWindowItem>
+
+    <VWindowItem v-if="tabs?.[prodTab]?.can">
+      <contratosRelatorios />
+    </VWindowItem>
+
+    <VWindowItem v-if="tabs?.[prodTab]?.can">
+      <orcamentosRelatorios />
     </VWindowItem>
   </VWindow>
 </template>

@@ -74,3 +74,89 @@ O token deve ser armazenado no cookie 'accessToken' e os dados do usuário no co
 Irá retornar um token de acesso. Utilize esse token para autenticar as requisições, no
 header da requisição, adicione o seguinte header:
 Authorization: Bearer <token de acesso>
+
+##PM2
+O projeto utiliza o PM2 para gerenciamento de processos. E está rodando na instância ID 4 com nome "oregon-node-dev".
+
+Para ver os logs do PM2, use o comando:
+pm2 logs oregon-node-dev
+
+Para ver os processos rodando, use o comando:
+pm2 list
+
+Para ver o status do processo, use o comando:
+pm2 status oregon-node-dev
+
+O processo tem watch, após cada alteração no código, o PM2 reinicia o processo automaticamente.
+
+#Teste de Fluxos via API
+
+O sistema possui uma rota de teste de fluxos SEM AUTENTICAÇÃO para facilitar testes e debug.
+Use sempre o telefone de teste: **+55 41 8719-8546** (formato API: `5541871978546`)
+
+##Endpoints disponíveis:
+
+###1. Simular mensagem de entrada (inicia ou continua fluxo):
+```bash
+curl -X POST https://app.oregonservicos.com.br/apidev/flow-test/simulate-message \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"5541871978546","text":"Olá, quero agendar um horário"}'
+```
+
+###2. Responder a um fluxo em execução:
+```bash
+curl -X POST https://app.oregonservicos.com.br/apidev/flow-test/respond \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"5541871978546","text":"1"}'
+```
+
+###3. Verificar status do fluxo:
+```bash
+curl -X GET https://app.oregonservicos.com.br/apidev/flow-test/status/5541871978546
+```
+
+###4. Listar fluxos disponíveis:
+```bash
+curl -X GET https://app.oregonservicos.com.br/apidev/flow-test/flows
+```
+
+###5. Iniciar um fluxo específico manualmente:
+```bash
+curl -X POST https://app.oregonservicos.com.br/apidev/flow-test/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"flowId":1,"phone":"5541871978546"}'
+```
+
+###6. Cancelar fluxo ativo:
+```bash
+curl -X POST https://app.oregonservicos.com.br/apidev/flow-test/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"5541871978546"}'
+```
+
+###7. Resetar sessão de teste (limpa tudo):
+```bash
+curl -X POST https://app.oregonservicos.com.br/apidev/flow-test/reset \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"5541871978546"}'
+```
+
+###8. Ver detalhes de uma execução:
+```bash
+curl -X GET https://app.oregonservicos.com.br/apidev/flow-test/run/123
+```
+
+##Interface visual de teste:
+Acesse: https://app.oregonservicos.com.br/apidev/flow-test.html
+
+##Observações importantes:
+- As mensagens NÃO são enviadas ao WhatsApp real (modo simulação)
+- Os fluxos são processados com lógica REAL
+- O contexto é preservado entre requisições
+- Ideal para debug e testes automatizados por LLMs
+- Documentação completa dos fluxos: /var/www/public-oregon/FLOWS_DOCUMENTATION.md
+- A tabela AGENDAMENTO_X_SERVICOS é legacy, não use ela para nada, a tabela correta de relação é AXS.
+- A tabela SERVICOS é legacy, não use ela para nada, a tabela correta de serviços é SERVICOS_NEW e SERVICOS_SUBS.
+
+#Asaas
+Para documentação do Asaas, use o MCP do Asaas. Com o access_token: $aact_YTU5YTE0M2M2N2I4MTliNzk0YTI5N2U5MzdjNWZmNDQ6OjAwMDAwMDAwMDAwMDAwNzc5NTY6OiRhYWNoX2U5NmVkNTE3LTgxOGYtNGU0Ny05MmY2LTBlOTliZWRlZjFlNQ==

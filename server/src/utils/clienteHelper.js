@@ -6,6 +6,7 @@
 
 const moment = require('moment');
 const dbQuery = require('./dbHelper');
+const { empresaWhere } = require('./dbHelper');
 
 /**
  * Parse seguro de JSON
@@ -26,22 +27,24 @@ function parseJSON(value) {
  * @param {Number} clienteId - ID do cliente
  * @returns {Promise<Object>} Resumo compacto
  */
-async function getResumoClienteParaIA(clienteId) {
+async function getResumoClienteParaIA(clienteId, empresa_id = null) {
     console.log(`\n📊 Gerando resumo compacto do cliente ${clienteId} para IA...`);
 
+    const ew = empresaWhere(empresa_id);
+
     try {
-        const [cliente] = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [clienteId]);
+        const [cliente] = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND ' + ew.sql, [clienteId, ...ew.params]);
         if (!cliente) return { error: 'Cliente não encontrado' };
 
         const enderecos = await dbQuery(`
-            SELECT * FROM ENDERECO 
-            WHERE cli_id = ? 
-            ORDER BY end_id DESC 
+            SELECT * FROM ENDERECO
+            WHERE cli_id = ? AND ${ew.sql}
+            ORDER BY end_id DESC
             LIMIT 3
-        `, [clienteId]);
+        `, [clienteId, ...ew.params]);
 
         const agendamentos = await dbQuery(`
-            SELECT 
+            SELECT
                 a.age_id,
                 a.age_data,
                 a.age_horaInicio,
@@ -56,27 +59,28 @@ async function getResumoClienteParaIA(clienteId) {
             LEFT JOIN User f ON a.fun_id = f.id
             WHERE a.cli_id = ?
             AND a.age_ativo = 1
+            AND a.${ew.sql}
             ORDER BY a.age_data DESC, a.age_horaInicio DESC
             LIMIT 5
-        `, [clienteId]);
-        
+        `, [clienteId, ...ew.params]);
+
         console.log(`   📅 Agendamentos encontrados: ${agendamentos.length}`);
 
         const negocios = await dbQuery(`
             SELECT n.*, e.nome as etapa_nome, e.instrucoesIa as etapa_instrucoes
             FROM Negocios n
             LEFT JOIN Funis e ON n.etapaId = e.id
-            WHERE n.cli_Id = ?
+            WHERE n.cli_Id = ? AND n.${ew.sql}
             ORDER BY n.updated_at DESC, n.created_at DESC
             LIMIT 3
-        `, [clienteId]);
+        `, [clienteId, ...ew.params]);
 
         const anotacoes = parseJSON(cliente.cli_anotacoes) || [];
         const atividades = parseJSON(cliente.cli_atividades) || [];
         const tags = parseJSON(cliente.cli_tags) || [];
 
         const stats = {
-            totalAgendamentos: (await dbQuery('SELECT COUNT(*) as total FROM AGENDAMENTO WHERE cli_id = ? AND age_ativo = 1', [clienteId]))[0]?.total || 0,
+            totalAgendamentos: (await dbQuery('SELECT COUNT(*) as total FROM AGENDAMENTO WHERE cli_id = ? AND age_ativo = 1 AND ' + ew.sql, [clienteId, ...ew.params]))[0]?.total || 0,
             totalNegocios: negocios.length
         };
 
@@ -191,8 +195,8 @@ async function getResumoClienteParaIA(clienteId) {
  * @param {Number} clienteId - ID do cliente
  * @returns {Promise<String>} Texto resumido
  */
-async function getResumoRapidoCliente(clienteId) {
-    const resumo = await getResumoClienteParaIA(clienteId);
+async function getResumoRapidoCliente(clienteId, empresa_id = null) {
+    const resumo = await getResumoClienteParaIA(clienteId, empresa_id);
     
     if (resumo.error) {
         return `Cliente ${clienteId} não encontrado`;
@@ -217,13 +221,15 @@ async function getResumoRapidoCliente(clienteId) {
  * @param {Boolean} onlyBlocked - Se true, retorna apenas se estiver bloqueado
  * @returns {Promise<Object|null>} Cliente ou null
  */
-async function findClienteByPhoneBlocked(phone, onlyBlocked = false) {
+async function findClienteByPhoneBlocked(phone, onlyBlocked = false, empresa_id = null) {
     if (!phone) return null;
-    
+
+    const ew = empresaWhere(empresa_id);
+
     try {
         const cleanPhone = phone.replace(/\D/g, '');
         const last8 = cleanPhone.slice(-8);
-        
+
         let query = `
             SELECT cli_Id, cli_nome, cli_celular, flows_blocked
             FROM CLIENTES
@@ -231,15 +237,16 @@ async function findClienteByPhoneBlocked(phone, onlyBlocked = false) {
                 RIGHT(REGEXP_REPLACE(COALESCE(cli_celular, ''), '[^0-9]', ''), 8) = ?
                 OR RIGHT(REGEXP_REPLACE(COALESCE(cli_celular2, ''), '[^0-9]', ''), 8) = ?
             )
+            AND ${ew.sql}
         `;
-        
+
         if (onlyBlocked) {
             query += ' AND flows_blocked = 1';
         }
-        
+
         query += ' LIMIT 1';
-        
-        const clientes = await dbQuery(query, [last8, last8]);
+
+        const clientes = await dbQuery(query, [last8, last8, ...ew.params]);
         
         return clientes.length > 0 ? clientes[0] : null;
     } catch (error) {

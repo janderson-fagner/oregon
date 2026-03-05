@@ -49,9 +49,9 @@
             <tr>
               <td class="sm-py-32 sm-px-24"
                 style="mso-line-height-rule: exactly; padding: 48px; text-align: center; font-family: Inter, -apple-system, 'Segoe UI', sans-serif;">
-                <a href="https://app.oregonservicos.com.br"
+                <a href="{{ app_url }}"
                   style="font-family: 'Inter', sans-serif; mso-line-height-rule: exactly;">
-                  <img src="https://app.oregonservicos.com.br/uploads/logo.png" width="155" alt="Oregon"
+                  <img src="{{ app_logo_url }}" width="155" alt="{{ app_name }}"
                     style="max-width: 100%; vertical-align: middle; line-height: 100%; border: 0;">
                 </a>
               </td>
@@ -94,7 +94,7 @@
                       </table>
                       <p
                         style="font-family: 'Inter', sans-serif; mso-line-height-rule: exactly; margin-top: 6px; font-size: 13px; text-align: cemter;">
-                        Você está recebendo este e-mail porque está cadastrado para receber emails no sistema da Oregon. <br>Email automático enviado por: automatico@oregonservicos.com.br não responda.
+                        Você está recebendo este e-mail porque está cadastrado para receber emails no sistema {{ app_name }}. <br>Email automático, não responda.
                       </p>
                     </td>
                   </tr>
@@ -109,11 +109,11 @@
                 style="mso-line-height-rule: exactly; padding-left: 48px; padding-right: 48px; font-family: Inter, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: #eceff1; text-align: cemter;">
                 <p align="center"
                   style="font-family: 'Inter', sans-serif; mso-line-height-rule: exactly; color: #263238; text-align: cemter;">
-                  Ao usar o Oregon Sistema, você concorda com nossos
-                  <a href="https://app.oregonservicos.com.br" class="hover-underline"
+                  Ao usar o {{ app_name }} Sistema, você concorda com nossos
+                  <a href="{{ app_url }}" class="hover-underline"
                     style="font-family: 'Inter', sans-serif; mso-line-height-rule: exactly; color: #3182ce; text-decoration: none;">Termos
                     e condições de uso</a> e nossa
-                  <a href="https://app.oregonservicos.com.br" class="hover-underline"
+                  <a href="{{ app_url }}" class="hover-underline"
                     style="font-family: 'Inter', sans-serif; mso-line-height-rule: exactly; color: #3182ce; text-decoration: none;">Política
                     de Privacidade</a>.
                 </p>

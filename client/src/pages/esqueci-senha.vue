@@ -2,7 +2,11 @@
 import { VNodeRenderer } from '@layouts/components/VNodeRenderer'
 import { themeConfig } from '@themeConfig'
 import bklogin from '@images/pages/bk-login.svg'
+import logoOregon from '@images/logo.png'
+import logoDaviot from '@images/daviot-logo.png'
+import { isDaviot } from '@/utils/typeClient'
 import { useAlert } from '@/composables/useAlert'
+const currentLogo = isDaviot() ? logoDaviot : logoOregon
 
 const { setAlert } = useAlert()
 
@@ -93,7 +97,7 @@ const confirmPasswordValidator = value => {
         <VCardText>
           <VCardText class="text-center d-lg-flex align-center justify-center">
             <img
-              src="@images/logo.png"
+              :src="currentLogo"
               alt="logo"
               style="width: 35%; max-width: 100%; height: auto;"
             >

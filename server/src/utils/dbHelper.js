@@ -42,4 +42,10 @@ async function dbQuery(query, params, retryCount = 3) {
   }
 }
 
+function empresaWhere(empresa_id) {
+  if (empresa_id) return { sql: 'empresa_id = ?', params: [empresa_id] };
+  return { sql: 'empresa_id IS NULL', params: [] };
+}
+
 module.exports = dbQuery;
+module.exports.empresaWhere = empresaWhere;

@@ -1,5 +1,9 @@
 <script setup>
 import navItems from '@/navigation/vertical'
+import logo from '@images/logo.png'
+import logoDaviot from '@images/daviot-logo.png'
+
+import { isDaviot } from '@/utils/typeClient'
 
 //Configurações do Tema
 import {
@@ -8,8 +12,6 @@ import {
 } from '@layouts/stores/config'
 import { useTheme } from 'vuetify'
 import { useStorage } from '@vueuse/core'
-import NavBarNotifications from '@/layouts/components/NavBarNotifications.vue'
-
 const vuetifyTheme = useTheme()
 
 const setPrimaryColor = useDebounceFn(color => {
@@ -77,10 +79,6 @@ watch(() => route.name, () => {
 <template>
   <VerticalNavLayout :nav-items="navItems">
 
-    <div class="noti-bar2">
-      <NavBarNotifications />
-    </div>
-
     <!-- 👉 navbar -->
     <template #navbar="{ toggleVerticalOverlayNavActive }">
       <VRow class="align-center flex-nowrap">
@@ -91,8 +89,8 @@ watch(() => route.name, () => {
         </VCol>
 
         <VCol cols="8" class="justify-center d-flex">
-          <img src="@images/logo.png" alt="logo" class="d-flex align-content-center"
-            :style="!isMobile ? 'max-width: 100%;' : 'max-width: 40%;', 'height: auto;'">
+          <img :src="isDaviot() ? logoDaviot : logo" alt="logo" class="d-flex align-content-center"
+            :style="!isMobile ? 'max-width: 100%;' : 'max-width: 40%;'">
         </VCol>
 
         <VCol cols="2" class="justify-end d-flex pa-0">

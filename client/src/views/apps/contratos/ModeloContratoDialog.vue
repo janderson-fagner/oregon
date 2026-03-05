@@ -1,0 +1,146 @@
+<script setup>
+import { QuillEditor } from "@vueup/vue-quill";
+import "@vueup/vue-quill/dist/vue-quill.snow.css";
+import { temaAtual } from "@core/stores/config";
+
+const toolbarOptions = [
+  [{ header: 1 }, { header: 2 }],
+  ["bold", "italic", "underline", "strike"],
+  [{ color: [] }, { background: [] }],
+  [{ align: [] }],
+  [{ list: "ordered" }, { list: "bullet" }],
+  [{ indent: "-1" }, { indent: "+1" }],
+  ["blockquote"],
+  ["clean"],
+];
+
+const { setAlert } = useAlert();
+
+const emit = defineEmits(["update:isDrawerOpen", "saved"]);
+
+const props = defineProps({
+  isDrawerOpen: { type: Boolean, required: true },
+  modeloData: { type: Object, default: null },
+});
+
+const refData = {
+  id: null,
+  titulo: null,
+  conteudo_html: null,
+};
+
+const form = ref({ ...refData });
+const loading = ref(false);
+
+const closeDrawer = () => {
+  emit("update:isDrawerOpen", false);
+  form.value = { ...refData };
+};
+
+const handleDrawer = (val) => {
+  emit("update:isDrawerOpen", val);
+  if (!val) form.value = { ...refData };
+};
+
+watch(
+  () => props.modeloData,
+  (newVal) => {
+    if (newVal?.id) {
+      form.value = {
+        id: newVal.id,
+        titulo: newVal.titulo,
+        conteudo_html: newVal.conteudo_html,
+      };
+    } else {
+      form.value = { ...refData };
+    }
+  },
+  { immediate: true }
+);
+
+const salvar = async () => {
+  if (!form.value.titulo) {
+    setAlert("Título é obrigatório", "warning", "tabler-alert-triangle", 3000);
+    return;
+  }
+  loading.value = true;
+  try {
+    if (form.value.id) {
+      await $api(`/contrato-modelos/update/${form.value.id}`, {
+        method: "PUT",
+        body: form.value,
+      });
+      setAlert("Modelo atualizado!", "success", "tabler-check", 3000);
+    } else {
+      const res = await $api("/contrato-modelos/create", {
+        method: "POST",
+        body: form.value,
+      });
+      form.value.id = res.id;
+      setAlert("Modelo criado!", "success", "tabler-check", 3000);
+    }
+    emit("saved");
+    closeDrawer();
+  } catch (err) {
+    console.error("Erro ao salvar modelo:", err);
+    setAlert("Erro ao salvar modelo", "error", "tabler-alert-triangle", 5000);
+  }
+  loading.value = false;
+};
+</script>
+
+<template>
+  <VDialog
+    :modelValue="props.isDrawerOpen"
+    @update:modelValue="handleDrawer"
+    max-width="700"
+    persistent
+  >
+    <VCard v-if="props.isDrawerOpen">
+      <VCardText class="pa-4">
+        <AppDrawerHeaderSection
+          customClass="px-0 pb-0 pt-3"
+          :title="form.id ? 'Editar Modelo' : 'Novo Modelo'"
+          @cancel="closeDrawer"
+        />
+
+        <VRow class="mt-4">
+          <VCol cols="12">
+            <AppTextField
+              v-model="form.titulo"
+              label="Título do Modelo"
+              placeholder="Ex: Contrato de Prestação de Serviços"
+            />
+          </VCol>
+
+          <VCol cols="12">
+            <p class="text-body-2 mb-2">Conteúdo do Modelo</p>
+            <QuillEditor
+              v-model:content="form.conteudo_html"
+              theme="snow"
+              :toolbar="toolbarOptions"
+              class="inputQuill"
+              contentType="html"
+              placeholder="Escreva o conteúdo do modelo aqui..."
+              style="min-height: 300px;"
+            />
+          </VCol>
+        </VRow>
+
+        <div class="d-flex flex-row align-center justify-end gap-3 mt-4">
+          <VBtn
+            variant="outlined"
+            color="secondary"
+            :disabled="loading"
+            @click="closeDrawer"
+          >
+            Cancelar
+          </VBtn>
+          <VBtn color="primary" :loading="loading" @click="salvar">
+            {{ form.id ? "Atualizar" : "Salvar" }}
+          </VBtn>
+        </div>
+      </VCardText>
+    </VCard>
+  </VDialog>
+</template>

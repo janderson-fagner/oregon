@@ -111,9 +111,10 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
  * @param {string} chatId - ID do chat
  * @param {boolean} mapeado - Se deve retornar chat mapeado
  * @param {number} limit - Limite de mensagens
+ * @param {number|null} empresa_id - ID da empresa para filtrar (opcional)
  * @returns {Promise<Object|null>} Chat encontrado ou null
  */
-async function getChatById(clientId, chatId, mapeado = true, limit = 50) {
+async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa_id = null) {
     try {
         const client = getClientById(clientId);
         
@@ -184,10 +185,10 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50) {
 
         console.log('Número de busca:', numeroSearch);
 
-        const sql = `
+        let sql = `
         SELECT DISTINCT c.*
         FROM CLIENTES c
-        WHERE RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
+        WHERE (RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
         OR RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular2, ''), '[^0-9]', ''), 8) = ?
         OR EXISTS (
                 SELECT 1
@@ -196,19 +197,34 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50) {
                                             val  VARCHAR(64) PATH '$.value')) jt
                 WHERE jt.type = 'phone'
                 AND RIGHT(REGEXP_REPLACE(COALESCE(jt.val,''), '[^0-9]', ''), 8) = ?
-        )
-        LIMIT 1
+        ))
         `;
+        let sqlParams = [numeroSearch, numeroSearch, numeroSearch];
 
-        const clienteQuery = await dbQuery(sql, [numeroSearch, numeroSearch, numeroSearch]);
+        if (empresa_id) {
+            sql += ' AND c.empresa_id = ?';
+            sqlParams.push(empresa_id);
+        }
+        sql += ' LIMIT 1';
+
+        const clienteQuery = await dbQuery(sql, sqlParams);
         let cliente = null;
 
         if (clienteQuery && clienteQuery.length > 0) {
             cliente = clienteQuery[0];
 
             cliente.id = cliente.cli_Id;
-            cliente.agendamentos = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE cli_id = ?', [cliente.cli_Id]);
-            cliente.endereco = await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [cliente.cli_Id]);
+            const agendQuery = empresa_id
+                ? 'SELECT * FROM AGENDAMENTO WHERE cli_id = ? AND empresa_id = ?'
+                : 'SELECT * FROM AGENDAMENTO WHERE cli_id = ?';
+            const agendParams = empresa_id ? [cliente.cli_Id, empresa_id] : [cliente.cli_Id];
+            cliente.agendamentos = await getAgendamentos(agendQuery, agendParams, empresa_id || null);
+
+            const endQuery = empresa_id
+                ? 'SELECT * FROM ENDERECO WHERE cli_id = ? AND empresa_id = ?'
+                : 'SELECT * FROM ENDERECO WHERE cli_id = ?';
+            const endParams = empresa_id ? [cliente.cli_Id, empresa_id] : [cliente.cli_Id];
+            cliente.endereco = await dbQuery(endQuery, endParams);
             cliente.nome = cliente.cli_nome;
             cliente.email = cliente.cli_email;
             cliente.cpf = cliente.cli_cpf;

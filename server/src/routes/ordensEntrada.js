@@ -3,6 +3,7 @@ const router = express.Router();
 const moment = require('moment');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const { sanitizeInput } = require('../utils/functions');
 
 /**
@@ -10,6 +11,7 @@ const { sanitizeInput } = require('../utils/functions');
  * Query params: q (busca), sortBy, itemsPerPage, page, orderBy, dataDe, dataAte, produto_id
  */
 router.get('/list', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     let {
         q = '',
         sortBy = '',
@@ -29,10 +31,10 @@ router.get('/list', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    let baseQuery = `FROM ORDENS_ENTRADA oe 
-        INNER JOIN PRODUTOS p ON oe.oe_produto_id = p.prod_id 
+    let baseQuery = `FROM ORDENS_ENTRADA oe
+        INNER JOIN PRODUTOS p ON oe.oe_produto_id = p.prod_id
         LEFT JOIN User u ON oe.oe_usuario_id = u.id
-        WHERE 1 = 1`;
+        WHERE 1 = 1 AND oe.empresa_id = ${parseInt(empresa_id)}`;
     
     // Filtro de busca por nome do produto, fornecedor ou nota fiscal
     if (q) {
@@ -100,11 +102,12 @@ router.get('/list', async (req, res) => {
  * GET /ordens-entrada/get/:id - Buscar ordem de entrada específica
  */
 router.get('/get/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
 
     try {
         let queryOrdem = `
-            SELECT 
+            SELECT
                 oe.*,
                 p.prod_nome,
                 p.prod_sku,
@@ -113,8 +116,8 @@ router.get('/get/:id', async (req, res) => {
             FROM ORDENS_ENTRADA oe
             INNER JOIN PRODUTOS p ON oe.oe_produto_id = p.prod_id
             LEFT JOIN User u ON oe.oe_usuario_id = u.id
-            WHERE oe.oe_id = ?`;
-        let ordemQuery = await dbQuery(queryOrdem, [id]);
+            WHERE oe.oe_id = ? AND oe.empresa_id = ?`;
+        let ordemQuery = await dbQuery(queryOrdem, [id, empresa_id]);
 
         if (!ordemQuery || ordemQuery.length == 0) {
             return res.status(404).json({ message: 'Ordem de entrada não encontrada' });
@@ -142,7 +145,8 @@ router.get('/get/:id', async (req, res) => {
  * Atualiza a quantidade do produto e opcionalmente cria uma despesa
  */
 router.post('/create', async (req, res) => {
-    const { 
+    const empresa_id = req.user.empresa_id;
+    const {
         oe_produto_id,
         oe_quantidade,
         oe_valor_unitario = 0,
@@ -212,8 +216,8 @@ router.post('/create', async (req, res) => {
         let query = `INSERT INTO ORDENS_ENTRADA (
             oe_produto_id, oe_quantidade, oe_valor_unitario, oe_valor_total,
             oe_data, oe_fornecedor, oe_nota_fiscal, oe_observacoes,
-            oe_criar_despesa, oe_despesa_id, oe_usuario_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            oe_criar_despesa, oe_despesa_id, oe_usuario_id, empresa_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
         const result = await dbQuery(query, [
             oe_produto_id,
@@ -226,7 +230,8 @@ router.post('/create', async (req, res) => {
             oe_observacoes,
             oe_criar_despesa ? 1 : 0,
             despesa_id,
-            req.user ? req.user.id : null
+            req.user ? req.user.id : null,
+            empresa_id
         ]);
 
         // Atualizar quantidade do produto
@@ -250,8 +255,9 @@ router.post('/create', async (req, res) => {
  * ATENÇÃO: Atualizar uma ordem recalcula a quantidade do produto
  */
 router.post('/update/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
-    const { 
+    const {
         oe_quantidade,
         oe_valor_unitario = 0,
         oe_valor_total = 0,
@@ -273,7 +279,7 @@ router.post('/update/:id', async (req, res) => {
 
     try {
         // Buscar ordem atual
-        const ordemAtualQuery = await dbQuery('SELECT * FROM ORDENS_ENTRADA WHERE oe_id = ?', [id]);
+        const ordemAtualQuery = await dbQuery('SELECT * FROM ORDENS_ENTRADA WHERE oe_id = ? AND empresa_id = ?', [id, empresa_id]);
         if (!ordemAtualQuery || ordemAtualQuery.length === 0) {
             return res.status(404).json({ message: 'Ordem de entrada não encontrada' });
         }
@@ -293,8 +299,8 @@ router.post('/update/:id', async (req, res) => {
         let updateQuery = `UPDATE ORDENS_ENTRADA SET 
             oe_quantidade = ?, oe_valor_unitario = ?, oe_valor_total = ?,
             oe_data = ?, oe_fornecedor = ?, oe_nota_fiscal = ?, oe_observacoes = ?,
-            updated_at = NOW() 
-            WHERE oe_id = ?`;
+            updated_at = NOW()
+            WHERE oe_id = ? AND empresa_id = ?`;
 
         await dbQuery(updateQuery, [
             oe_quantidade,
@@ -304,7 +310,8 @@ router.post('/update/:id', async (req, res) => {
             oe_fornecedor,
             oe_nota_fiscal,
             oe_observacoes,
-            id
+            id,
+            empresa_id
         ]);
 
         // Atualizar quantidade do produto
@@ -330,11 +337,12 @@ router.post('/update/:id', async (req, res) => {
  * Remove a quantidade do produto e deleta a despesa associada se existir
  */
 router.delete('/delete/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
 
     try {
         // Buscar ordem
-        const ordemQuery = await dbQuery('SELECT * FROM ORDENS_ENTRADA WHERE oe_id = ?', [id]);
+        const ordemQuery = await dbQuery('SELECT * FROM ORDENS_ENTRADA WHERE oe_id = ? AND empresa_id = ?', [id, empresa_id]);
         if (!ordemQuery || ordemQuery.length === 0) {
             return res.status(404).json({ message: 'Ordem de entrada não encontrada' });
         }
@@ -358,7 +366,7 @@ router.delete('/delete/:id', async (req, res) => {
         }
 
         // Deletar ordem
-        await dbQuery('DELETE FROM ORDENS_ENTRADA WHERE oe_id = ?', [id]);
+        await dbQuery('DELETE FROM ORDENS_ENTRADA WHERE oe_id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Ordem de entrada deletada com sucesso' });
     } catch (error) {
@@ -371,18 +379,19 @@ router.delete('/delete/:id', async (req, res) => {
  * GET /ordens-entrada/por-produto/:produto_id - Listar ordens de entrada de um produto específico
  */
 router.get('/por-produto/:produto_id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { produto_id } = req.params;
 
     try {
         const ordens = await dbQuery(`
-            SELECT 
+            SELECT
                 oe.*,
                 u.fullName as usuario_nome
             FROM ORDENS_ENTRADA oe
             LEFT JOIN User u ON oe.oe_usuario_id = u.id
-            WHERE oe.oe_produto_id = ?
+            WHERE oe.oe_produto_id = ? AND oe.empresa_id = ?
             ORDER BY oe.oe_data DESC, oe.created_at DESC
-        `, [produto_id]);
+        `, [produto_id, empresa_id]);
 
         res.status(200).json(ordens);
     } catch (error) {

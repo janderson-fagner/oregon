@@ -131,6 +131,7 @@ const limparDespesa = () => {
   isTableLembreteVisible.value = false;
   repeatDialogView.value = false;
   dialogViewSaida.value = false;
+  searchTipoDespesa.value = '';
 };
 
 const closeNavigationDrawer = () => {

@@ -154,7 +154,7 @@ router.get("/agendamentos", async (req, res) => {
     }
 
     console.log("Query: ", query, "values: ", values);
-    const agendamentos = await getAgendamentos(query, values);
+    const agendamentos = await getAgendamentos(query, values, empresa_id);
 
     if (dup || dup === "true") {
       const correctAgendamentos = [];
@@ -314,7 +314,8 @@ router.get("/agendamento/:id", async (req, res) => {
 
     const agendamentos = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [id, empresa_id]
+      [id, empresa_id],
+      empresa_id
     );
 
     if (agendamentos.length === 0) {
@@ -627,7 +628,8 @@ router.post("/changeStatus", async (req, res) => {
     try {
       const agendamentoAtualizado = await getAgendamentos(
         "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-        [age_id, empresa_id]
+        [age_id, empresa_id],
+        empresa_id
       );
       if (agendamentoAtualizado && agendamentoAtualizado.length > 0) {
         await triggerAgendamentoFlows("status_agendamento", {
@@ -669,7 +671,8 @@ router.post("/remarcar", async (req, res) => {
 
     let agendamento = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [age_id, empresa_id]
+      [age_id, empresa_id],
+      empresa_id
     );
 
     if (agendamento.length === 0) {
@@ -852,7 +855,8 @@ router.post("/remarcar", async (req, res) => {
 
     const agendamentoInsertQuery = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [newAgendamento.insertId, empresa_id]
+      [newAgendamento.insertId, empresa_id],
+      empresa_id
     );
 
     if (agendamentoInsertQuery.length === 0) {
@@ -954,7 +958,8 @@ router.post("/changeHorarios", async (req, res) => {
 
     let agendamento = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [age_id, empresa_id]
+      [age_id, empresa_id],
+      empresa_id
     );
 
     if (agendamento.length === 0) {
@@ -1193,7 +1198,8 @@ router.post("/create", async (req, res) => {
     try {
       const agendamentoCompleto = await getAgendamentos(
         "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-        [agendamento.insertId, empresa_id]
+        [agendamento.insertId, empresa_id],
+        empresa_id
       );
       if (agendamentoCompleto && agendamentoCompleto.length > 0) {
         await triggerAgendamentoFlows("novo_agendamento", {
@@ -1247,9 +1253,9 @@ router.post("/update", async (req, res) => {
     const agendamentoAtual =
       agendamentoAtualQuery.length > 0 ? agendamentoAtualQuery[0] : null;
 
-    endereco = endereco[0];
+    endereco = Array.isArray(endereco) ? endereco[0] : endereco;
 
-    let age_endereco = endereco.end_id;
+    let age_endereco = endereco?.end_id;
     let add_end = false;
 
     if (age_endereco) {
@@ -1271,10 +1277,10 @@ router.post("/update", async (req, res) => {
           isDiff(enderecoExist?.end_estado, endereco.end_estado);
       }
     } else {
-      add_end = true;
+      if (endereco) add_end = true;
     }
 
-    if (add_end) {
+    if (add_end && endereco) {
       let objEnd = {
         end_cep: endereco.end_cep,
         end_logradouro: endereco.end_logradouro,
@@ -1598,7 +1604,7 @@ router.post("/setAtendido", async (req, res) => {
     let pagamento = null;
 
     try {
-      pagamento = await createPagamento(age_id);
+      pagamento = await createPagamento(age_id, empresa_id);
     } catch (error) {
       console.error("Erro ao criar pagamento: ", error);
     }
@@ -1710,7 +1716,8 @@ router.post("/getPagamentos", async (req, res) => {
 
     let agendamento = await getAgendamentos(
       `SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?`,
-      [age_id, empresa_id]
+      [age_id, empresa_id],
+      empresa_id
     );
 
     //console.log('agendamento valor: ', agendamento[0].age_valor);
@@ -1836,7 +1843,8 @@ router.post("/getCertificate", async (req, res) => {
 
     const agendamentoQuery = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [age_id, empresa_id]
+      [age_id, empresa_id],
+      empresa_id
     );
 
     if (agendamentoQuery.length === 0) {
@@ -1849,8 +1857,9 @@ router.post("/getCertificate", async (req, res) => {
     const endereco = agendamento.endereco;
     const servicos = agendamento.servicos;
 
-    // let enderecoFormatado = `${endereco[0].end_logradouro}, ${endereco[0].end_numero} - ${endereco[0].end_bairro}, ${endereco[0].end_cidade}/${endereco[0].end_estado}`;
-    let enderecoFormatado = escreverEndereco(endereco[0]);
+    let enderecoFormatado = endereco && endereco.length > 0
+      ? escreverEndereco(endereco[0])
+      : 'Endereço não informado';
 
     const arrMes = [
       "Janeiro",
@@ -1917,6 +1926,7 @@ router.post("/getCertificate", async (req, res) => {
       date: dataFormatadaAgora,
       services: servicosFormatados,
       quantityServices: servicos.length,
+      empresa_id,
     };
 
     const certificate = await createCertificate(data);
@@ -1943,7 +1953,8 @@ router.post("/getRecibo", async (req, res) => {
 
     const agendamentoQuery = await getAgendamentos(
       "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-      [age_id, empresa_id]
+      [age_id, empresa_id],
+      empresa_id
     );
 
     if (agendamentoQuery.length === 0) {
@@ -1956,7 +1967,9 @@ router.post("/getRecibo", async (req, res) => {
     const endereco = agendamento.endereco;
     const servicos = agendamento.servicos;
 
-    let enderecoFormatado = `${endereco[0].end_logradouro}, ${endereco[0].end_numero} - ${endereco[0].end_bairro}, ${endereco[0].end_cidade}/${endereco[0].end_estado}`;
+    let enderecoFormatado = endereco && endereco.length > 0
+      ? `${endereco[0].end_logradouro || ''}, ${endereco[0].end_numero || 'S/N'} - ${endereco[0].end_bairro || ''}, ${endereco[0].end_cidade || ''}/${endereco[0].end_estado || ''}`
+      : 'Endereço não informado';
 
     let dataFormatada = moment(agendamento.age_data).format(
       "DD [de] MMMM [de] YYYY"
@@ -1985,6 +1998,7 @@ router.post("/getRecibo", async (req, res) => {
       valor: formatValue,
       valorExtenso: await numeroParaExtenso(agendamento.age_valor),
       dataRecibo: dataFormatada,
+      empresa_id,
     };
 
     const recibo = await createRecibo(data);
@@ -2249,7 +2263,7 @@ router.get("/getRetrabalhos", async (req, res) => {
   console.log("Data Query:", dataQuery);
 
   try {
-    const agendamentos = await getAgendamentos(dataQuery);
+    const agendamentos = await getAgendamentos(dataQuery, [], empresa_id);
 
     console.log("Agendamentos Retrabalhos:", agendamentos.length);
 
@@ -2257,7 +2271,8 @@ router.get("/getRetrabalhos", async (req, res) => {
       try {
         agendamento.agendamentoAnterior = await getAgendamentos(
           "SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?",
-          [agendamento.age_retrabalho_id, empresa_id]
+          [agendamento.age_retrabalho_id, empresa_id],
+          empresa_id
         );
       } catch (error) {
         console.error("Erro ao encontrar agendamento em retrabaçhps: ", error);
@@ -2330,7 +2345,7 @@ router.get("/getAgendamentosGarantia", async (req, res) => {
   dataQuery += ` LIMIT ${offset}, ${itemsPerPage}`;
 
   try {
-    const agendamentos = await getAgendamentos(dataQuery);
+    const agendamentos = await getAgendamentos(dataQuery, [], empresa_id);
 
     // Se tiver expire, filtrar os agendamentos que estão para expirar com base em atendido_date
     let agendamentosFiltrados = [];
@@ -2492,7 +2507,7 @@ router.get("/getAgendamentosByCliente", async (req, res) => {
   dataQuery += ` LIMIT ${offset}, ${itemsPerPage}`;
 
   try {
-    const agendamentos = await getAgendamentos(dataQuery);
+    const agendamentos = await getAgendamentos(dataQuery, [], empresa_id);
 
     let data = {
       agendamentos,
@@ -2583,6 +2598,7 @@ router.post("/gerarOrdemServico", async (req, res) => {
     const ordemServico = await createOrdemServico({
       ...ordemData,
       age_id: agendamento[0].age_id,
+      empresa_id,
     });
 
     let url = `/download/docs/ordens-servico/${agendamento[0].age_id}/${ordemServico.fileName}`;

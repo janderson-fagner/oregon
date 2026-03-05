@@ -1035,6 +1035,12 @@
       loadingToggleFlows.value = false;
     }
   };
+
+  // Cleanup dos listeners de socket ao desmontar o componente
+  onBeforeUnmount(() => {
+    socket.off("nova-mensagem");
+    socket.off("update-mensagem");
+  });
 </script>
 
 <template>

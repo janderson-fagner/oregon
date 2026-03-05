@@ -7,6 +7,7 @@ const { sanitizeInput } = require('../utils/functions');
 const { getAgendamentos } = require('../utils/agendaUtils');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
 
 router.get('/list', async (req, res) => {
@@ -24,6 +25,8 @@ router.get('/list', async (req, res) => {
         gastoDe = null,
         gastoAte = null
     } = req.query;
+
+    const empresa_id = req.user.empresa_id;
 
     itemsPerPage = parseInt(itemsPerPage);
     page = parseInt(page);
@@ -70,18 +73,18 @@ router.get('/list', async (req, res) => {
 `;
 
     // Iniciar a query com JOIN entre clientes e ENDERECO e incluir a subquery para contagem total
-    let baseQuery = `FROM CLIENTES c WHERE 1=1`;
+    let baseQuery = `FROM CLIENTES c WHERE c.empresa_id = ${parseInt(empresa_id)}`;
 
 
     if (q && q.trim() !== '') {
         let qQuery = '';
 
         let enderecosQuery = await dbQuery(`
-            SELECT * FROM ENDERECO WHERE
+            SELECT * FROM ENDERECO WHERE empresa_id = ? AND (
             ${normalizeField('end_logradouro')} LIKE ? OR
             ${normalizeField('end_bairro')} LIKE ? OR
-            ${normalizeField('end_cidade')} LIKE ?
-        `, [`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`]);
+            ${normalizeField('end_cidade')} LIKE ?)
+        `, [empresa_id, `%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`]);
 
         if (enderecosQuery.length > 0) {
             //baseQuery += ` AND cli_Id IN (${enderecosQuery.map(e => e.cli_id).join(',')})`;
@@ -164,7 +167,7 @@ router.get('/list', async (req, res) => {
                 cli_Id, cli_nome, cli_celular, cli_celular2, cli_email,
                 cli_cpf, cli_ativo, cli_obs, created_at, updated_at
                 `;
-                const clienteExtra = await dbQuery(`SELECT ${itens2} FROM CLIENTES WHERE cli_Id = ?`, [cli_Id]);
+                const clienteExtra = await dbQuery(`SELECT ${itens2} FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?`, [cli_Id, empresa_id]);
                 if (clienteExtra.length > 0) {
                     clientes.unshift(clienteExtra[0]);
                     totalClientes += 1;
@@ -173,11 +176,11 @@ router.get('/list', async (req, res) => {
         }
 
         for (let cliente of clientes) {
-            let agendamentos = await dbQuery('SELECT * FROM AGENDAMENTO WHERE cli_id = ?', [cliente.cli_Id]);
+            let agendamentos = await dbQuery('SELECT * FROM AGENDAMENTO WHERE cli_id = ? AND empresa_id = ?', [cliente.cli_Id, empresa_id]);
             cliente.agendamentos = agendamentos.length > 0 ? agendamentos : null;
             cliente.agendamentoVisible = false;
 
-            let enderecos = await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [cliente.cli_Id]);
+            let enderecos = await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ? AND empresa_id = ?', [cliente.cli_Id, empresa_id]);
             cliente.enderecos = enderecos.length > 0 ? enderecos : null;
 
             cliente.cli_contratos = cliente.cli_contratos ? JSON.parse(cliente.cli_contratos) : null;
@@ -192,8 +195,9 @@ router.get('/list', async (req, res) => {
 });
 
 router.get('/list/total', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     try {
-        const total = await dbQuery('SELECT COUNT(*) as total FROM CLIENTES WHERE cli_ativo = 1');
+        const total = await dbQuery('SELECT COUNT(*) as total FROM CLIENTES WHERE cli_ativo = 1 AND empresa_id = ?', [empresa_id]);
         res.status(200).json({ totalclientes: total[0].total });
     } catch (error) {
         console.error('Erro ao buscar total de clientes', error);
@@ -203,14 +207,15 @@ router.get('/list/total', async (req, res) => {
 
 router.get('/get/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     if (!id) {
         return res.status(400).json({ error: 'ID é obrigatório' });
     }
 
     try {
-        const clienteQuery = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [id]);
-        const enderecoQuery = await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [id]);
+        const clienteQuery = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?', [id, empresa_id]);
+        const enderecoQuery = await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ? AND empresa_id = ?', [id, empresa_id]);
 
         let cliente = clienteQuery.map((c) => {
             return {
@@ -256,8 +261,9 @@ router.get('/get/:id', async (req, res) => {
 
 router.post('/create', async (req, res) => {
     const data = req.body;
+    const empresa_id = req.user.empresa_id;
 
-    //console.log('Corpo da requisição:', req.body); 
+    //console.log('Corpo da requisição:', req.body);
 
     const nome = data.nome;
     const celular = data.celular || null;
@@ -288,13 +294,13 @@ router.post('/create', async (req, res) => {
                 icon: 'tabler-user-plus'
             }];
 
-            const cliente = await dbQuery(`INSERT INTO CLIENTES 
+            const cliente = await dbQuery(`INSERT INTO CLIENTES
                 (cli_nome, cli_cpf, cli_email, cli_celular, cli_obs, cli_personType,
-                cli_genero, cli_contatos, cli_historico, cli_contratos)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                cli_genero, cli_contatos, cli_historico, cli_contratos, empresa_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [nome, cpf, email, celular, observacao, personType, genero,
                     JSON.stringify(contatos), JSON.stringify(historicoCliente),
-                    JSON.stringify(contratos)]);
+                    JSON.stringify(contratos), empresa_id]);
 
             if (endereco) {
                 for (const enderecoV of endereco) {
@@ -306,8 +312,8 @@ router.post('/create', async (req, res) => {
                     let estado = enderecoV.estado && enderecoV.estado !== '' ? enderecoV.estado : null;
                     let cep = enderecoV.cep && enderecoV.cep !== '' ? enderecoV.cep : null;
 
-                    const queryEndereco = 'INSERT INTO ENDERECO (cli_id, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado, end_cep) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-                    const valuesEndereco = [cliente.insertId, logradouro, numero, complemento, bairro, cidade, estado, cep];
+                    const queryEndereco = 'INSERT INTO ENDERECO (cli_id, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado, end_cep, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+                    const valuesEndereco = [cliente.insertId, logradouro, numero, complemento, bairro, cidade, estado, cep, empresa_id];
 
                     await dbQuery(queryEndereco, valuesEndereco);
                 }
@@ -316,9 +322,9 @@ router.post('/create', async (req, res) => {
             let queryNewCliente = endereco && endereco.length > 0 ? `SELECT CLIENTES.*, ENDERECO.*
             FROM CLIENTES
             JOIN ENDERECO ON CLIENTES.cli_Id = ENDERECO.cli_id
-            WHERE CLIENTES.cli_Id = ? ` : `SELECT * FROM CLIENTES WHERE cli_Id = ?`;
+            WHERE CLIENTES.cli_Id = ? AND CLIENTES.empresa_id = ?` : `SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?`;
 
-            const newCliente = await dbQuery(queryNewCliente, [cliente.insertId]);
+            const newCliente = await dbQuery(queryNewCliente, [cliente.insertId, empresa_id]);
 
             newCliente[0].cli_historico = JSON.parse(newCliente[0].cli_historico || '[]');
             newCliente[0].cli_contatos = JSON.parse(newCliente[0].cli_contatos || '[]');
@@ -328,7 +334,7 @@ router.post('/create', async (req, res) => {
         } else {
             const { id } = data;
 
-            const clienteExistente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [id]);
+            const clienteExistente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?', [id, empresa_id]);
             if (clienteExistente.length === 0) {
                 return res.status(404).json({ error: 'Cliente não encontrado' });
             }
@@ -345,11 +351,11 @@ router.post('/create', async (req, res) => {
 
             await dbQuery(`
                     UPDATE CLIENTES
-                    SET cli_nome = ?, cli_cpf = ?, cli_email = ?, cli_celular = ?, cli_obs = ?, 
+                    SET cli_nome = ?, cli_cpf = ?, cli_email = ?, cli_celular = ?, cli_obs = ?,
                     cli_personType = ?, cli_genero = ?, cli_contatos = ?, cli_historico = ?, cli_contratos = ?
-                    WHERE cli_Id = ?
-                `, [nome, cpf, email, celular, observacao, personType, genero, JSON.stringify(contatos), 
-                    JSON.stringify(historicoAtual), JSON.stringify(contratos), id]);
+                    WHERE cli_Id = ? AND empresa_id = ?
+                `, [nome, cpf, email, celular, observacao, personType, genero, JSON.stringify(contatos),
+                    JSON.stringify(historicoAtual), JSON.stringify(contratos), id, empresa_id]);
 
             if (endereco) {
                 for (const enderecoV of endereco) {
@@ -366,17 +372,17 @@ router.post('/create', async (req, res) => {
                         await dbQuery(`
                                 UPDATE ENDERECO
                                 SET end_logradouro = ?, end_numero = ?, end_complemento = ?, end_bairro = ?, end_cidade = ?, end_estado = ?, end_cep = ?
-                                WHERE end_id = ? AND cli_id = ?
-                            `, [logradouro, numero, complemento, bairro, cidade, estado, cep, enderecoV.id, id]);
+                                WHERE end_id = ? AND cli_id = ? AND empresa_id = ?
+                            `, [logradouro, numero, complemento, bairro, cidade, estado, cep, enderecoV.id, id, empresa_id]);
                     } else {
-                        const queryEndereco = 'INSERT INTO ENDERECO (cli_id, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado, end_cep) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-                        const valuesEndereco = [id, logradouro, numero, complemento, bairro, cidade, estado, cep];
+                        const queryEndereco = 'INSERT INTO ENDERECO (cli_id, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado, end_cep, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+                        const valuesEndereco = [id, logradouro, numero, complemento, bairro, cidade, estado, cep, empresa_id];
                         await dbQuery(queryEndereco, valuesEndereco);
                     }
                 }
             }
 
-            const updatedCliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [id]);
+            const updatedCliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND empresa_id = ?', [id, empresa_id]);
 
             updatedCliente[0].cli_historico = JSON.parse(updatedCliente[0].cli_historico || '[]');
             updatedCliente[0].cli_contatos = JSON.parse(updatedCliente[0].cli_contatos || '[]');
@@ -392,13 +398,14 @@ router.post('/create', async (req, res) => {
 
 router.get('/delete/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     if (!id) {
         return res.status(400).json({ error: 'ID é obrigatório' });
     }
 
     try {
-        await dbQuery('UPDATE CLIENTES SET cli_ativo = 0 WHERE cli_Id = ?', [id]);
+        await dbQuery('UPDATE CLIENTES SET cli_ativo = 0 WHERE cli_Id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Cliente deletado com sucesso' });
     } catch (error) {
@@ -409,13 +416,14 @@ router.get('/delete/:id', async (req, res) => {
 
 router.get('/restore/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     if (!id) {
         return res.status(400).json({ error: 'ID é obrigatório' });
     }
 
     try {
-        await dbQuery('UPDATE CLIENTES SET cli_ativo = 1 WHERE cli_Id = ?', [id]);
+        await dbQuery('UPDATE CLIENTES SET cli_ativo = 1 WHERE cli_Id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Cliente restaurado com sucesso' });
     } catch (error) {
@@ -444,6 +452,7 @@ router.get('/clientes-cep', async (req, res) => {
 
 router.get('/getAgendamentos/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
     let {
         q = null,
         f = null,
@@ -468,7 +477,7 @@ router.get('/getAgendamentos/:id', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    let baseQuery = `FROM AGENDAMENTO WHERE cli_id = ?`;
+    let baseQuery = `FROM AGENDAMENTO WHERE cli_id = ? AND empresa_id = ?`;
 
     if (q && q.trim() !== '') {
         baseQuery += ` AND (
@@ -498,7 +507,7 @@ router.get('/getAgendamentos/:id', async (req, res) => {
 
     try {
         // Preparar os parâmetros da consulta
-        let queryParams = [id];
+        let queryParams = [id, empresa_id];
         if (q) {
             queryParams.push(`%${q}%`);
         }
@@ -511,7 +520,7 @@ router.get('/getAgendamentos/:id', async (req, res) => {
 
         //console.log('Final SQL Query for Agendamentos:', dataQuery, queryParams);
 
-        const agendamentos = await getAgendamentos(dataQuery, [...queryParams, ...queryParams]);
+        const agendamentos = await getAgendamentos(dataQuery, [...queryParams, ...queryParams], empresa_id);
 
         let data = {
             agendamentos,
@@ -529,9 +538,10 @@ router.get('/getAgendamentos/:id', async (req, res) => {
 router.put('/block-flows/:id', async (req, res) => {
     const { id } = req.params;
     const { blocked } = req.body;
-    
+    const empresa_id = req.user.empresa_id;
+
     try {
-        await dbQuery('UPDATE CLIENTES SET flows_blocked = ? WHERE cli_Id = ?', [blocked, id]);
+        await dbQuery('UPDATE CLIENTES SET flows_blocked = ? WHERE cli_Id = ? AND empresa_id = ?', [blocked, id, empresa_id]);
         res.status(200).json({ message: 'Fluxos bloqueados com sucesso' });
     } catch (error) {
         console.error('Erro ao bloquear fluxos', error);

@@ -11,7 +11,10 @@ import { useLayoutConfigStore } from '@layouts/stores/config'
 import { injectionKeyIsVerticalNavHovered } from '@layouts/symbols'
 import UserProfile from '@/layouts/components/UserProfile.vue'
 import logoImg from '@images/logo.png'
+import logoDaviotImg from '@images/daviot-logo.png'
 import miniLogoImg from '@images/favicon.png'
+import miniLogoDaviotImg from '@images/daviot-icon.png'
+import { isDaviot } from '@/utils/typeClient'
 
 const props = defineProps({
   tag: {
@@ -174,11 +177,11 @@ if (window.innerWidth < 600) {
           class="app-logo app-title-wrapper"
         >
           <img
-            :src="!configStore.isVerticalNavCollapsed || isHovered ? logoImg : miniLogoImg"
+            :src="!configStore.isVerticalNavCollapsed || isHovered ? (isDaviot() ? logoDaviotImg : logoImg) : (isDaviot() ? miniLogoDaviotImg : miniLogoImg)"
             alt="logo"
             class="mb-2"
             style="height: auto; transition: .6s;"
-            :style="!configStore.isVerticalNavCollapsed || isHovered ? 'max-width: 10%; width: 55%; margin-left: 23px;' : 'width: 40%'"
+            :style="!configStore.isVerticalNavCollapsed || isHovered ? 'max-width: 10%; width: 55%; margin-left: 23px;' : !isDaviot() ? 'width: 40%' : 'width: 4%'"
           >
 
           <Transition name="vertical-nav-app-title" />

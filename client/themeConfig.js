@@ -5,12 +5,14 @@ import { Skins } from '@core/enums'
 
 // ❗ Logo SVG must be imported with ?raw suffix
 import logo from '@images/logo.png'
+import logoDaviot from '@images/daviot-logo.png'
 import { AppContentLayoutNav, ContentWidth, FooterType, NavbarType } from '@layouts/enums'
+
 
 export const { themeConfig, layoutConfig } = defineThemeConfig({
   app: {
-    title: 'Oregon',
-    logo: h('div', { innerHTML: logo, style: 'line-height:0; color: rgb(var(--v-global-theme-primary))' }),
+    title: 'Daviot-Oregon',
+    logo: h('div', { innerHTML: logoDaviot, style: 'line-height:0; color: rgb(var(--v-global-theme-primary))' }),
     contentWidth: ContentWidth.Boxed,
     contentLayoutNav: AppContentLayoutNav.Vertical,
     overlayNavFromBreakpoint: breakpointsVuetify.xs,

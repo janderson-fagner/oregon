@@ -6,21 +6,24 @@ const path = require("path");
 const fs = require("fs");
 
 const dbQuery = require('./dbHelper');
+const { empresaWhere } = require('./dbHelper');
 
-const { getIO } = require('../socket');
-const { send } = require("process");
-const io = getIO();
+const { emitToEmpresa } = require('../socket');
 
-let fromDefault = `"Oregon Sistema" <${process.env.SMTP_FROM ? process.env.SMTP_FROM : 'automatico@oregonservicos.com.br'}>`;
+const { getBrandFromHost } = require('./brandHelper');
 
-async function sendMailAndNotificationUserBase(sendEmail = false, createNotification = false, userEmail, data) {
+let fromDefault = `"Daviot Sistema" <${process.env.SMTP_FROM ? process.env.SMTP_FROM : 'automatico@oregonservicos.com.br'}>`;
+
+async function sendMailAndNotificationUserBase(sendEmail = false, createNotification = false, userEmail, data, empresa_id = null, hostname = null) {
+
+    const ew = empresaWhere(empresa_id);
 
     try {
         let userName = userEmail.split('@')[0];
 
         console.log('Enviando email para', userEmail, 'com os dados:', data, 'sendEmail:', sendEmail, 'createNotification:', createNotification);
 
-        const user = await dbQuery('SELECT * FROM User WHERE email = ?', [userEmail]);
+        const user = await dbQuery('SELECT * FROM User WHERE email = ? AND ' + ew.sql, [userEmail, ...ew.params]);
 
         if (user.length > 0) {
             userName = user[0].fullName;
@@ -33,17 +36,22 @@ async function sendMailAndNotificationUserBase(sendEmail = false, createNotifica
 
             const source = fs.readFileSync(templatePath, 'utf8');
             const template = handlebars.compile(source);
+            const brand = hostname ? getBrandFromHost(hostname) : getBrandFromHost(null);
             const replacements = {
                 name: userName,
                 sendMessage: data.message,
                 linkAction: data.linkAction,
                 textAction: data.textAction,
+                app_name: brand.appName,
+                app_url: brand.appUrl,
+                app_logo_url: brand.appUrl + brand.logoUrl,
             };
 
             const html = template(replacements);
 
+            const emailFrom = hostname ? getBrandFromHost(hostname).emailFrom : fromDefault;
             const mailOptions = {
-                from: fromDefault,
+                from: emailFrom,
                 to: userEmail,
                 subject: data.mailTitle,
                 html
@@ -69,9 +77,9 @@ async function sendMailAndNotificationUserBase(sendEmail = false, createNotifica
 
             let userId = user[0].id;
 
-            const notification = await dbQuery('INSERT INTO Notificacoes (title, subtitle, params, time, userId) VALUES (?, ?, ?, ?, ?)', [notificationData.title, notificationData.subtitle, notificationData.params, formatDateToMySQL(new Date()), userId]);
+            const notification = await dbQuery('INSERT INTO Notificacoes (title, subtitle, params, time, userId, empresa_id) VALUES (?, ?, ?, ?, ?, ?)', [notificationData.title, notificationData.subtitle, notificationData.params, formatDateToMySQL(new Date()), userId, empresa_id]);
 
-            io.emit("newNotification", notification);
+            emitToEmpresa(empresa_id, "newNotification", notification);
         }
     } catch (error) {
         console.error('Erro ao enviar email e criar notificação', error);

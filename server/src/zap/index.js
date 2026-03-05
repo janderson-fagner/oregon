@@ -3,10 +3,11 @@
  * Exporta todas as funções e gerencia eventos globais
  */
 
-const { getIO } = require('../socket');
+const { emitToEmpresa } = require('../socket');
 const { usersJump } = require('./utils');
 const { mapearMsg } = require('./message');
 const { getClientById } = require('./client');
+const dbQuery = require('../utils/dbHelper');
 
 // Importa e re-exporta todas as funções dos módulos
 const clientFunctions = require('./client');
@@ -18,61 +19,47 @@ const utilFunctions = require('./utils');
  * Configura os listeners de eventos para um client específico
  * @param {string} clientId - ID do client
  */
-function setupClientListeners(clientId) {
+async function setupClientListeners(clientId) {
     const client = getClientById(clientId);
-    
+
     if (!client) {
         console.error(`Client ${clientId} não encontrado para configurar listeners`);
         return;
     }
 
-    const io = getIO();
+    // Busca empresa_id do client para isolamento de socket
+    const clientDataArr = await dbQuery('SELECT empresa_id FROM Clients WHERE id = ?', [clientId]);
+    const empresaId = clientDataArr.length > 0 ? clientDataArr[0].empresa_id : null;
 
     // Listener de criação de mensagens
     client.on('message_create', async (message) => {
         try {
             const chat = await message.getChat();
 
-         /*    console.log('Chat', chat);
-
-            console.log('Chat2', chat._data?.from);
- */
-          /*   console.log('check', {
-                chat: chat ? 'ok' : 'não ok',
-                isGroup: !chat?.isGroup ? 'ok' : 'não ok',
-                server: (chat?.id?.server == 'c.us' || chat?.id?.server == 'lid') ? 'ok' : `não ok: ${chat?.id?.server}`,
-                usersJump: !usersJump.includes(chat.id.user) ? 'ok' : `não ok: ${chat.id.user}`
-            }) */
-
-
             if (chat && !chat.isGroup && chat.type != 'e2e_notification' &&
                 (chat.id.server === 'c.us' || chat.id.server === 'lid')
                 && !usersJump.includes(chat.id.user)) {
 
-                    /* console.log('message_create', message);
- */
                 const mappedMsg = await mapearMsg(message, true);
 
                 if (mappedMsg) {
                     mappedMsg.idChat = chat.id._serialized;
-                    mappedMsg.clientId = clientId; // Adiciona ID do client
+                    mappedMsg.clientId = clientId;
 
-                    // Enviar a mensagem para o socket
-                    io.emit('nova-mensagem', mappedMsg);
-                    io.emit(`nova-mensagem-${clientId}`, mappedMsg); // Evento específico do client
+                    // Emite apenas para a empresa dona do client
+                    emitToEmpresa(empresaId, 'nova-mensagem', mappedMsg);
+                    emitToEmpresa(empresaId, `nova-mensagem-${clientId}`, mappedMsg);
 
                     // Integra ao motor de fluxos quando houver mensagem do usuário (não do sistema)
-                    // Apenas processa fluxos se for o client de atendimento
                     if (!message.fromMe && clientId === 'atendimento_1') {
                         try {
                             const { handleIncomingMessage } = require('../flows/core/flowEngine');
-                            let phone;// = chat.id.user; // 55DDDNÚMERO
+                            let phone;
 
                             if(chat.id.server === 'c.us'){
                                 phone = chat.id.user;
                             } else if(chat.id.server === 'lid'){
                                 const contato = await chat.getContact();
-
                                 phone = contato.number;
                             }
 
@@ -80,22 +67,21 @@ function setupClientListeners(clientId) {
                                 console.error('Número de telefone não encontrado');
                                 return;
                             }
-                            
-                            // 🎤 Usar a mídia já processada pelo mapearMsg
+
                             let mediaPath = null;
                             let mediaType = null;
-                            
+
                             if (mappedMsg && mappedMsg.media) {
                                 mediaPath = mappedMsg.media.caminho;
                                 mediaType = mappedMsg.media.mime;
                                 console.log('📎 Mídia detectada do mapearMsg:', mediaPath);
                                 console.log('🎬 Tipo:', mediaType);
                             }
-                            
-                            await handleIncomingMessage({ 
+
+                            await handleIncomingMessage({
                                 clientId,
-                                phone, 
-                                chatId: chat.id._serialized, 
+                                phone,
+                                chatId: chat.id._serialized,
                                 text: message.body || '',
                                 mediaPath,
                                 mediaType
@@ -113,20 +99,20 @@ function setupClientListeners(clientId) {
 
     // Listener de confirmação de mensagem (ACK)
     client.on('message_ack', async (message, ack) => {
-        io.emit('update-mensagem', { 
-            id: message.id._serialized, 
-            ack: ack, 
-            clientId 
+        emitToEmpresa(empresaId, 'update-mensagem', {
+            id: message.id._serialized,
+            ack: ack,
+            clientId
         });
     });
 
     // Listener de edição de mensagem
     client.on('message_edit', async (message) => {
         const { formatarMensagemHTML } = require('./utils');
-        io.emit('update-mensagem', { 
-            id: message.id._serialized, 
-            texto: formatarMensagemHTML(message.body), 
-            clientId 
+        emitToEmpresa(empresaId, 'update-mensagem', {
+            id: message.id._serialized,
+            texto: formatarMensagemHTML(message.body),
+            clientId
         });
     });
 
@@ -168,7 +154,7 @@ async function initDefaultClient() {
         for (const clientId of clientIds) {
             try {
                 const clientData = await dbQuery(
-                    'SELECT * FROM Clients WHERE id = ?', 
+                    'SELECT * FROM Clients WHERE id = ?',
                     [clientId]
                 );
 

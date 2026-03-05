@@ -7,6 +7,7 @@ const { getAgendamentos } = require('../utils/agendaUtils');
 const { variaveisItens } = require('../utils/crmUtils');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
 /**
  * GET /link-atendimento/:id - Buscar link de atendimento por ID
@@ -14,7 +15,9 @@ const dbQuery = require('../utils/dbHelper');
 router.get('/:id', async (req, res) => {
     //Processar link e buscar contato e fonte, antes de tudo, redirecionar para wa.me
     const { id } = req.params;
-    let urlRedirecionar = 'https://oregonservicos.com.br';
+    const { getBrandFromHost } = require('../utils/brandHelper');
+    const brand = getBrandFromHost(req.hostname);
+    let urlRedirecionar = brand.appUrl;
 
     const htmlRedirecionar = (url) => `
     <html>
@@ -63,7 +66,8 @@ router.get('/:id', async (req, res) => {
  */
 router.post('/links', getUserLoggedUser, async (req, res) => {
     try {
-        const links = await dbQuery('SELECT * FROM Options WHERE type = "link_atendimento"');
+        const empresa_id = req.user.empresa_id;
+        const links = await dbQuery('SELECT * FROM Options WHERE type = "link_atendimento" AND empresa_id = ?', [empresa_id]);
 
         let response = links.map(link => {
             return {
@@ -84,6 +88,7 @@ router.post('/links', getUserLoggedUser, async (req, res) => {
  */
 router.post('/save-links', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { links } = req.body;
 
         if (!links || !Array.isArray(links)) {
@@ -96,9 +101,9 @@ router.post('/save-links', getUserLoggedUser, async (req, res) => {
             }
 
             if (link.idOption) {
-                await dbQuery('UPDATE Options SET value = ? WHERE id_option = ?', [JSON.stringify(link), link.idOption]);
+                await dbQuery('UPDATE Options SET value = ? WHERE id_option = ? AND empresa_id = ?', [JSON.stringify(link), link.idOption, empresa_id]);
             } else {
-                await dbQuery('INSERT INTO Options (type, value) VALUES ("link_atendimento", ?)', [JSON.stringify(link)]);
+                await dbQuery('INSERT INTO Options (type, value, empresa_id) VALUES ("link_atendimento", ?, ?)', [JSON.stringify(link), empresa_id]);
             }
         }
 
@@ -112,13 +117,14 @@ router.post('/save-links', getUserLoggedUser, async (req, res) => {
 
 router.delete('/delete-link/:id', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
         if (!id) {
             return res.status(400).json({ message: 'ID do link é obrigatório' });
         }
 
-        await dbQuery('DELETE FROM Options WHERE type = "link_atendimento" AND id_option = ?', [id]);
+        await dbQuery('DELETE FROM Options WHERE type = "link_atendimento" AND id_option = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Link deletado com sucesso' });
     } catch (err) {

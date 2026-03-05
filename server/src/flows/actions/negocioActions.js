@@ -10,6 +10,7 @@
 
 const moment = require('moment');
 const dbQuery = require('../../utils/dbHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 const { replaceVariables } = require('../helpers/contextHelper');
 const { flowLog } = require('../helpers/logHelper');
 
@@ -21,8 +22,11 @@ const { flowLog } = require('../helpers/logHelper');
  */
 async function createNegocio(config, context) {
     flowLog.actionSuccess('create_negocio', { step: 'start', config });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         // Buscar ID do cliente
         let clienteId = context.cliente?.cli_Id || context.cliente?.id;
 
@@ -36,13 +40,13 @@ async function createNegocio(config, context) {
         const descricao = config.descricao ? await replaceVariables(config.descricao, context) : null;
         const valor = config.valor ? parseFloat(await replaceVariables(String(config.valor), context)) || 0 : 0;
         const origem = config.origem ? await replaceVariables(config.origem, context) : 'Fluxo Automático';
-        
+
         // Etapa do funil (usando etapaId conforme estrutura do banco)
         let etapaId = config.etapaId || config.stageId || null;
 
         // Se não forneceu etapa, buscar primeira etapa do funil
         if (!etapaId) {
-            const primeiraEtapa = await dbQuery('SELECT id FROM Funis ORDER BY ordem ASC LIMIT 1');
+            const primeiraEtapa = await dbQuery(`SELECT id FROM Funis WHERE ${ew.sql} ORDER BY ordem ASC LIMIT 1`, [...ew.params]);
             if (primeiraEtapa.length > 0) {
                 etapaId = primeiraEtapa[0].id;
             }
@@ -72,11 +76,11 @@ async function createNegocio(config, context) {
 
         // Inserir no banco - usando estrutura correta da tabela Negocios
         const insertQuery = `
-            INSERT INTO Negocios 
-            (cli_Id, title, status, valor, etapaId, origem, age_id, tags, data_fechamento_esperada, created_at, created_by) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+            INSERT INTO Negocios
+            (cli_Id, title, status, valor, etapaId, origem, age_id, tags, data_fechamento_esperada, created_at, created_by, empresa_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
         `;
-        
+
         const result = await dbQuery(insertQuery, [
             clienteId,
             titulo,
@@ -87,7 +91,8 @@ async function createNegocio(config, context) {
             agendamentoId,
             tagsJson,
             dataFechamentoEsperada,
-            'Sistema (Fluxo)'
+            'Sistema (Fluxo)',
+            empresa_id
         ]);
         
         const negocioId = result.insertId;
@@ -101,7 +106,7 @@ async function createNegocio(config, context) {
         });
 
         // Buscar etapa para adicionar ao contexto
-        const etapaInfo = await dbQuery('SELECT * FROM Funis WHERE id = ?', [etapaId]);
+        const etapaInfo = await dbQuery(`SELECT * FROM Funis WHERE id = ? AND ${ew.sql}`, [etapaId, ...ew.params]);
 
         // Atualizar contexto com negócio criado
         context.negocio = {
@@ -139,8 +144,11 @@ async function createNegocio(config, context) {
  */
 async function updateNegocio(config, context) {
     flowLog.actionSuccess('update_negocio', { step: 'start', config });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         // Identificar o negócio a ser atualizado
         let negocioId = null;
         const identificationType = config.identificationType || 'context';
@@ -152,8 +160,8 @@ async function updateNegocio(config, context) {
             const clienteId = context.cliente?.cli_Id || context.cliente?.id;
             if (clienteId) {
                 const ultimoNegocio = await dbQuery(
-                    'SELECT id FROM Negocios WHERE cli_Id = ? ORDER BY created_at DESC LIMIT 1', 
-                    [clienteId]
+                    `SELECT id FROM Negocios WHERE cli_Id = ? AND ${ew.sql} ORDER BY created_at DESC LIMIT 1`,
+                    [clienteId, ...ew.params]
                 );
                 if (ultimoNegocio.length > 0) {
                     negocioId = ultimoNegocio[0].id;
@@ -170,7 +178,7 @@ async function updateNegocio(config, context) {
         }
 
         // Verificar se negócio existe
-        const negocioExiste = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [negocioId]);
+        const negocioExiste = await dbQuery(`SELECT * FROM Negocios WHERE id = ? AND ${ew.sql}`, [negocioId, ...ew.params]);
         if (negocioExiste.length === 0) {
             return { success: false, error: `Negócio #${negocioId} não encontrado no banco de dados.` };
         }
@@ -287,7 +295,8 @@ async function updateNegocio(config, context) {
         values.push(negocioId);
 
         // Executar update
-        const query = `UPDATE Negocios SET ${updates.join(', ')} WHERE id = ?`;
+        values.push(...ew.params);
+        const query = `UPDATE Negocios SET ${updates.join(', ')} WHERE id = ? AND ${ew.sql}`;
         await dbQuery(query, values);
 
         flowLog.actionSuccess('update_negocio', { 
@@ -297,9 +306,9 @@ async function updateNegocio(config, context) {
         });
 
         // Atualizar contexto
-        const negocioAtualizado = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [negocioId]);
+        const negocioAtualizado = await dbQuery(`SELECT * FROM Negocios WHERE id = ? AND ${ew.sql}`, [negocioId, ...ew.params]);
         if (negocioAtualizado.length > 0) {
-            const etapaInfo = await dbQuery('SELECT * FROM Funis WHERE id = ?', [negocioAtualizado[0].etapaId]);
+            const etapaInfo = await dbQuery(`SELECT * FROM Funis WHERE id = ? AND ${ew.sql}`, [negocioAtualizado[0].etapaId, ...ew.params]);
             context.negocio = {
                 ...negocioAtualizado[0],
                 titulo: negocioAtualizado[0].title,
@@ -326,8 +335,11 @@ async function updateNegocio(config, context) {
  */
 async function moveNegocioToStage(config, context) {
     flowLog.actionSuccess('move_negocio_to_stage', { step: 'start' });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         let negocioId = config.negocioId ? await replaceVariables(String(config.negocioId), context) : context.negocio?.id;
         const etapaId = config.stageId || config.etapaId;
 
@@ -336,15 +348,15 @@ async function moveNegocioToStage(config, context) {
         }
 
         // Verificar se etapa existe
-        const etapaExiste = await dbQuery('SELECT * FROM Funis WHERE id = ?', [etapaId]);
+        const etapaExiste = await dbQuery(`SELECT * FROM Funis WHERE id = ? AND ${ew.sql}`, [etapaId, ...ew.params]);
         if (etapaExiste.length === 0) {
             return { success: false, error: `Etapa #${etapaId} não encontrada` };
         }
 
         // Atualizar negócio
         await dbQuery(
-            'UPDATE Negocios SET etapaId = ?, updated_at = NOW(), updated_by = ? WHERE id = ?', 
-            [etapaId, 'Sistema (Fluxo)', negocioId]
+            `UPDATE Negocios SET etapaId = ?, updated_at = NOW(), updated_by = ? WHERE id = ? AND ${ew.sql}`,
+            [etapaId, 'Sistema (Fluxo)', negocioId, ...ew.params]
         );
 
         // Atualizar contexto
@@ -379,8 +391,11 @@ async function moveNegocioToStage(config, context) {
  */
 async function getNegocio(config, context) {
     flowLog.actionSuccess('get_negocio', { step: 'start' });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         let negocioId = null;
 
         if (config.negocioId) {
@@ -392,8 +407,8 @@ async function getNegocio(config, context) {
             const clienteId = context.cliente?.cli_Id || context.cliente?.id;
             if (clienteId) {
                 const negocios = await dbQuery(
-                    'SELECT id FROM Negocios WHERE cli_Id = ? ORDER BY created_at DESC LIMIT 1',
-                    [clienteId]
+                    `SELECT id FROM Negocios WHERE cli_Id = ? AND ${ew.sql} ORDER BY created_at DESC LIMIT 1`,
+                    [clienteId, ...ew.params]
                 );
                 if (negocios.length > 0) {
                     negocioId = negocios[0].id;
@@ -411,8 +426,8 @@ async function getNegocio(config, context) {
             FROM Negocios n
             LEFT JOIN Funis f ON n.etapaId = f.id
             LEFT JOIN CLIENTES c ON n.cli_Id = c.cli_Id
-            WHERE n.id = ?
-        `, [negocioId]);
+            WHERE n.id = ? AND n.${ew.sql}
+        `, [negocioId, ...ew.params]);
 
         if (negocios.length === 0) {
             return { success: false, error: `Negócio #${negocioId} não encontrado` };

@@ -1454,6 +1454,8 @@ const getFontes = async () => {
     method: "GET",
   });
 
+  console.log('resFontes:', resFontes);
+  
   if (!resFontes) return;
 
   console.log("Fontes:", resFontes);

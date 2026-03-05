@@ -3,6 +3,7 @@ const router = express.Router();
 const moment = require('moment');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const { sanitizeInput } = require('../utils/functions');
 
 /**
@@ -10,6 +11,7 @@ const { sanitizeInput } = require('../utils/functions');
  * Query params: q (busca), sortBy, itemsPerPage, page, orderBy, dataDe, dataAte, produto_id, funcionario_id
  */
 router.get('/list', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     let {
         q = '',
         sortBy = '',
@@ -30,11 +32,11 @@ router.get('/list', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    let baseQuery = `FROM ORDENS_RETIRADA orr 
-        INNER JOIN PRODUTOS p ON orr.or_produto_id = p.prod_id 
+    let baseQuery = `FROM ORDENS_RETIRADA orr
+        INNER JOIN PRODUTOS p ON orr.or_produto_id = p.prod_id
         LEFT JOIN User u ON orr.or_usuario_id = u.id
         LEFT JOIN User f ON orr.or_funcionario_id = f.id
-        WHERE 1 = 1`;
+        WHERE 1 = 1 AND orr.empresa_id = ${parseInt(empresa_id)}`;
     
     // Filtro de busca por nome do produto ou motivo
     if (q) {
@@ -108,11 +110,12 @@ router.get('/list', async (req, res) => {
  * GET /ordens-retirada/get/:id - Buscar ordem de retirada específica
  */
 router.get('/get/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
 
     try {
         let queryOrdem = `
-            SELECT 
+            SELECT
                 orr.*,
                 p.prod_nome,
                 p.prod_sku,
@@ -124,8 +127,8 @@ router.get('/get/:id', async (req, res) => {
             INNER JOIN PRODUTOS p ON orr.or_produto_id = p.prod_id
             LEFT JOIN User u ON orr.or_usuario_id = u.id
             LEFT JOIN User f ON orr.or_funcionario_id = f.id
-            WHERE orr.or_id = ?`;
-        let ordemQuery = await dbQuery(queryOrdem, [id]);
+            WHERE orr.or_id = ? AND orr.empresa_id = ?`;
+        let ordemQuery = await dbQuery(queryOrdem, [id, empresa_id]);
 
         if (!ordemQuery || ordemQuery.length == 0) {
             return res.status(404).json({ message: 'Ordem de retirada não encontrada' });
@@ -145,7 +148,8 @@ router.get('/get/:id', async (req, res) => {
  * Atualiza a quantidade do produto (remove do estoque)
  */
 router.post('/create', async (req, res) => {
-    const { 
+    const empresa_id = req.user.empresa_id;
+    const {
         or_produto_id,
         or_quantidade,
         or_data,
@@ -185,8 +189,8 @@ router.post('/create', async (req, res) => {
         // Criar ordem de retirada
         let query = `INSERT INTO ORDENS_RETIRADA (
             or_produto_id, or_quantidade, or_data, or_motivo,
-            or_funcionario_id, or_observacoes, or_usuario_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+            or_funcionario_id, or_observacoes, or_usuario_id, empresa_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 
         const result = await dbQuery(query, [
             or_produto_id,
@@ -195,7 +199,8 @@ router.post('/create', async (req, res) => {
             or_motivo,
             or_funcionario_id,
             or_observacoes,
-            req.user ? req.user.id : null
+            req.user ? req.user.id : null,
+            empresa_id
         ]);
 
         // Atualizar quantidade do produto (remover do estoque)
@@ -218,8 +223,9 @@ router.post('/create', async (req, res) => {
  * ATENÇÃO: Atualizar uma ordem recalcula a quantidade do produto
  */
 router.post('/update/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
-    const { 
+    const {
         or_quantidade,
         or_data,
         or_motivo = null,
@@ -239,7 +245,7 @@ router.post('/update/:id', async (req, res) => {
 
     try {
         // Buscar ordem atual
-        const ordemAtualQuery = await dbQuery('SELECT * FROM ORDENS_RETIRADA WHERE or_id = ?', [id]);
+        const ordemAtualQuery = await dbQuery('SELECT * FROM ORDENS_RETIRADA WHERE or_id = ? AND empresa_id = ?', [id, empresa_id]);
         if (!ordemAtualQuery || ordemAtualQuery.length === 0) {
             return res.status(404).json({ message: 'Ordem de retirada não encontrada' });
         }
@@ -266,8 +272,8 @@ router.post('/update/:id', async (req, res) => {
         let updateQuery = `UPDATE ORDENS_RETIRADA SET 
             or_quantidade = ?, or_data = ?, or_motivo = ?,
             or_funcionario_id = ?, or_observacoes = ?,
-            updated_at = NOW() 
-            WHERE or_id = ?`;
+            updated_at = NOW()
+            WHERE or_id = ? AND empresa_id = ?`;
 
         await dbQuery(updateQuery, [
             or_quantidade,
@@ -275,7 +281,8 @@ router.post('/update/:id', async (req, res) => {
             or_motivo,
             or_funcionario_id,
             or_observacoes,
-            id
+            id,
+            empresa_id
         ]);
 
         // Atualizar quantidade do produto (diferença negativa = mais retirada, positiva = menos retirada)
@@ -295,11 +302,12 @@ router.post('/update/:id', async (req, res) => {
  * Devolve a quantidade ao estoque do produto
  */
 router.delete('/delete/:id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.params;
 
     try {
         // Buscar ordem
-        const ordemQuery = await dbQuery('SELECT * FROM ORDENS_RETIRADA WHERE or_id = ?', [id]);
+        const ordemQuery = await dbQuery('SELECT * FROM ORDENS_RETIRADA WHERE or_id = ? AND empresa_id = ?', [id, empresa_id]);
         if (!ordemQuery || ordemQuery.length === 0) {
             return res.status(404).json({ message: 'Ordem de retirada não encontrada' });
         }
@@ -318,7 +326,7 @@ router.delete('/delete/:id', async (req, res) => {
         }
 
         // Deletar ordem
-        await dbQuery('DELETE FROM ORDENS_RETIRADA WHERE or_id = ?', [id]);
+        await dbQuery('DELETE FROM ORDENS_RETIRADA WHERE or_id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Ordem de retirada deletada com sucesso' });
     } catch (error) {
@@ -331,20 +339,21 @@ router.delete('/delete/:id', async (req, res) => {
  * GET /ordens-retirada/por-produto/:produto_id - Listar ordens de retirada de um produto específico
  */
 router.get('/por-produto/:produto_id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { produto_id } = req.params;
 
     try {
         const ordens = await dbQuery(`
-            SELECT 
+            SELECT
                 orr.*,
                 u.fullName as usuario_nome,
                 f.fullName as funcionario_nome
             FROM ORDENS_RETIRADA orr
             LEFT JOIN User u ON orr.or_usuario_id = u.id
             LEFT JOIN User f ON orr.or_funcionario_id = f.id
-            WHERE orr.or_produto_id = ?
+            WHERE orr.or_produto_id = ? AND orr.empresa_id = ?
             ORDER BY orr.or_data DESC, orr.created_at DESC
-        `, [produto_id]);
+        `, [produto_id, empresa_id]);
 
         res.status(200).json(ordens);
     } catch (error) {
@@ -357,11 +366,12 @@ router.get('/por-produto/:produto_id', async (req, res) => {
  * GET /ordens-retirada/por-funcionario/:funcionario_id - Listar ordens de retirada de um funcionário específico
  */
 router.get('/por-funcionario/:funcionario_id', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { funcionario_id } = req.params;
 
     try {
         const ordens = await dbQuery(`
-            SELECT 
+            SELECT
                 orr.*,
                 p.prod_nome,
                 p.prod_sku,
@@ -369,9 +379,9 @@ router.get('/por-funcionario/:funcionario_id', async (req, res) => {
             FROM ORDENS_RETIRADA orr
             INNER JOIN PRODUTOS p ON orr.or_produto_id = p.prod_id
             LEFT JOIN User u ON orr.or_usuario_id = u.id
-            WHERE orr.or_funcionario_id = ?
+            WHERE orr.or_funcionario_id = ? AND orr.empresa_id = ?
             ORDER BY orr.or_data DESC, orr.created_at DESC
-        `, [funcionario_id]);
+        `, [funcionario_id, empresa_id]);
 
         res.status(200).json(ordens);
     } catch (error) {

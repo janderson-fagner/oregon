@@ -3,6 +3,7 @@ const router = express.Router();
 const moment = require('moment');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const { sanitizeInput } = require('../utils/functions');
 
 // GET /estoque/list - Listar produtos com filtros
@@ -20,6 +21,7 @@ router.get('/list', async (req, res) => {
         setorId = null
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
     let offset = (page - 1) * itemsPerPage;
 
     if (itemsPerPage == '-1') {
@@ -27,7 +29,7 @@ router.get('/list', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    let baseQuery = `FROM PRODUTOS WHERE 1 = 1`;
+    let baseQuery = `FROM PRODUTOS WHERE empresa_id = ${parseInt(empresa_id)}`;
     
     // Filtro de busca por nome, descrição ou valor
     if (q != null && q != '') {
@@ -77,7 +79,7 @@ router.get('/list', async (req, res) => {
         // Adicionar verificação de limiar
         for (let produto of produtos) {
             produto.estoque_baixo = produto.prod_quantidade < produto.prod_limiar;
-            let setorQuery = await dbQuery('SELECT * FROM SETORES WHERE set_id = ?', [produto.prod_setor_id]);
+            let setorQuery = await dbQuery('SELECT * FROM SETORES WHERE set_id = ? AND empresa_id = ?', [produto.prod_setor_id, empresa_id]);
             if (setorQuery.length > 0) {
                 produto.setor = setorQuery[0];
             }
@@ -98,14 +100,15 @@ router.get('/list', async (req, res) => {
 // GET /estoque/get/:id - Buscar produto específico
 router.get('/get/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
         let queryProduto = `
-            SELECT p.*, s.set_nome 
-            FROM PRODUTOS p 
-            LEFT JOIN SETORES s ON p.prod_setor_id = s.set_id 
-            WHERE p.prod_id = ?`;
-        let produtoQuery = await dbQuery(queryProduto, [id]);
+            SELECT p.*, s.set_nome
+            FROM PRODUTOS p
+            LEFT JOIN SETORES s ON p.prod_setor_id = s.set_id
+            WHERE p.prod_id = ? AND p.empresa_id = ?`;
+        let produtoQuery = await dbQuery(queryProduto, [id, empresa_id]);
 
         if (!produtoQuery || produtoQuery.length == 0) {
             return res.status(404).json({ message: 'Produto não encontrado' });
@@ -123,12 +126,13 @@ router.get('/get/:id', async (req, res) => {
 
 // POST /estoque/create - Criar novo produto
 router.post('/create', async (req, res) => {
-    const { 
-        prod_nome, 
-        prod_descricao = null, 
-        prod_valor, 
-        prod_quantidade = 0, 
-        prod_limiar = 0, 
+    const empresa_id = req.user.empresa_id;
+    const {
+        prod_nome,
+        prod_descricao = null,
+        prod_valor,
+        prod_quantidade = 0,
+        prod_limiar = 0,
         prod_fotos = null,
         prod_sku = null,
         prod_fornecedor = null,
@@ -143,22 +147,22 @@ router.post('/create', async (req, res) => {
     } = req.body;
 
     if (!prod_nome || !prod_valor) {
-        return res.status(400).json({ 
-            message: `Preencha ${!prod_nome ? 'o nome' : 'o valor'} do produto` 
+        return res.status(400).json({
+            message: `Preencha ${!prod_nome ? 'o nome' : 'o valor'} do produto`
         });
     }
 
     try {
         let query = `INSERT INTO PRODUTOS (
             prod_nome, prod_descricao, prod_valor, prod_quantidade, prod_limiar, prod_fotos,
-            prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao, 
-            prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao,
+            prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, empresa_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
         await dbQuery(query, [
             prod_nome, prod_descricao, prod_valor, prod_quantidade, prod_limiar, prod_fotos,
             prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao,
-            prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional
+            prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, empresa_id
         ]);
 
         res.status(201).json({ message: 'Produto cadastrado com sucesso' });
@@ -171,12 +175,13 @@ router.post('/create', async (req, res) => {
 // POST /estoque/update/:id - Atualizar produto (upsert)
 router.post('/update/:id', async (req, res) => {
     const { id } = req.params;
-    const { 
-        prod_nome, 
-        prod_descricao = null, 
-        prod_valor, 
-        prod_quantidade = 0, 
-        prod_limiar = 0, 
+    const empresa_id = req.user.empresa_id;
+    const {
+        prod_nome,
+        prod_descricao = null,
+        prod_valor,
+        prod_quantidade = 0,
+        prod_limiar = 0,
         prod_fotos = null,
         prod_ativo = 1,
         prod_sku = null,
@@ -197,22 +202,22 @@ router.post('/update/:id', async (req, res) => {
 
     try {
         // Verificar se o produto existe
-        let checkQuery = `SELECT * FROM PRODUTOS WHERE prod_id = ?`;
-        let existingProduto = await dbQuery(checkQuery, [id]);
+        let checkQuery = `SELECT * FROM PRODUTOS WHERE prod_id = ? AND empresa_id = ?`;
+        let existingProduto = await dbQuery(checkQuery, [id, empresa_id]);
 
         if (existingProduto && existingProduto.length > 0) {
             // Atualizar produto existente (não atualiza quantidade aqui, apenas via ordens)
-            let updateQuery = `UPDATE PRODUTOS SET 
-                prod_nome = ?, prod_descricao = ?, prod_valor = ?, prod_limiar = ?, 
+            let updateQuery = `UPDATE PRODUTOS SET
+                prod_nome = ?, prod_descricao = ?, prod_valor = ?, prod_limiar = ?,
                 prod_fotos = ?, prod_ativo = ?, prod_sku = ?, prod_fornecedor = ?,
                 prod_setor_id = ?, prod_prateleira = ?, prod_secao = ?, prod_case = ?,
                 prod_caixa = ?, prod_lote = ?, prod_observacoes = ?, prod_info_adicional = ?,
-                updated_at = NOW() 
-                WHERE prod_id = ?`;
+                updated_at = NOW()
+                WHERE prod_id = ? AND empresa_id = ?`;
             await dbQuery(updateQuery, [
                 prod_nome, prod_descricao, prod_valor, prod_limiar, prod_fotos, prod_ativo,
                 prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao,
-                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, id
+                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, id, empresa_id
             ]);
             res.status(200).json({ message: 'Produto atualizado com sucesso' });
         } else {
@@ -220,12 +225,12 @@ router.post('/update/:id', async (req, res) => {
             let insertQuery = `INSERT INTO PRODUTOS (
                 prod_nome, prod_descricao, prod_valor, prod_quantidade, prod_limiar, prod_fotos, prod_ativo,
                 prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao,
-                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, empresa_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
             await dbQuery(insertQuery, [
                 prod_nome, prod_descricao, prod_valor, prod_quantidade, prod_limiar, prod_fotos, prod_ativo,
                 prod_sku, prod_fornecedor, prod_setor_id, prod_prateleira, prod_secao,
-                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional
+                prod_case, prod_caixa, prod_lote, prod_observacoes, prod_info_adicional, empresa_id
             ]);
             res.status(201).json({ message: 'Produto criado com sucesso' });
         }
@@ -238,9 +243,10 @@ router.post('/update/:id', async (req, res) => {
 // DELETE /estoque/delete/:id - Deletar produto
 router.delete('/delete/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery('DELETE FROM PRODUTOS WHERE prod_id = ?', [id]);
+        await dbQuery('DELETE FROM PRODUTOS WHERE prod_id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Produto deletado com sucesso' });
     } catch (error) {
@@ -254,10 +260,11 @@ router.delete('/delete/:id', async (req, res) => {
 
 // GET /estoque/baixo-estoque - Listar produtos com estoque baixo
 router.get('/baixo-estoque', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     try {
-        let query = `SELECT * FROM PRODUTOS WHERE prod_quantidade < prod_limiar AND prod_ativo = 1 ORDER BY (prod_quantidade - prod_limiar) ASC`;
+        let query = `SELECT * FROM PRODUTOS WHERE prod_quantidade < prod_limiar AND prod_ativo = 1 AND empresa_id = ? ORDER BY (prod_quantidade - prod_limiar) ASC`;
 
-        const produtos = await dbQuery(query);
+        const produtos = await dbQuery(query, [empresa_id]);
 
         res.status(200).json({ produtos });
     } catch (error) {

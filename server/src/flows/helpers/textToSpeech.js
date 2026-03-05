@@ -22,6 +22,150 @@ function parseJSON(value) {
 }
 
 /**
+ * Converte número (0-59) para palavras em português
+ * Usado para normalização de datas e horários para TTS
+ * @param {Number} num - Número a converter
+ * @returns {String} - Número por extenso
+ */
+function numberToWords(num) {
+    const unidades = [
+        'zero', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove',
+        'dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete',
+        'dezoito', 'dezenove'
+    ];
+    const dezenas = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta'];
+
+    if (num < 20) return unidades[num];
+    if (num < 60) {
+        const d = Math.floor(num / 10);
+        const u = num % 10;
+        return u === 0 ? dezenas[d] : `${dezenas[d]} e ${unidades[u]}`;
+    }
+    return String(num);
+}
+
+/**
+ * 💰 Converte valor monetário para português por extenso
+ * @param {Number|String} valor - Valor numérico ou string como "306,90"
+ * @returns {String} - Valor por extenso em português
+ * @example valorPorExtenso(306.90) → "trezentos e seis reais e noventa centavos"
+ */
+function valorPorExtenso(valor) {
+    // Normalizar entrada
+    let num = valor;
+    if (typeof valor === 'string') {
+        // Remover R$, espaços e pontos de milhar, converter vírgula para ponto
+        num = parseFloat(valor.replace(/[R$\s.]/g, '').replace(',', '.'));
+    }
+
+    if (isNaN(num) || num === 0) return 'zero reais';
+
+    const unidades = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove',
+        'dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];
+    const dezenas = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'];
+    const centenas = ['', 'cento', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'];
+
+    function converterMenorQue1000(n) {
+        if (n === 0) return '';
+        if (n === 100) return 'cem';
+
+        let resultado = '';
+        if (n >= 100) {
+            resultado = centenas[Math.floor(n / 100)];
+            n = n % 100;
+            if (n > 0) resultado += ' e ';
+        }
+        if (n >= 20) {
+            resultado += dezenas[Math.floor(n / 10)];
+            n = n % 10;
+            if (n > 0) resultado += ' e ';
+        }
+        if (n > 0 && n < 20) {
+            resultado += unidades[n];
+        }
+        return resultado;
+    }
+
+    function converterInteiro(n) {
+        if (n === 0) return '';
+        let resultado = '';
+
+        if (n >= 1000) {
+            const milhares = Math.floor(n / 1000);
+            resultado = milhares === 1 ? 'mil' : converterMenorQue1000(milhares) + ' mil';
+            n = n % 1000;
+            if (n > 0) resultado += n < 100 ? ' e ' : ' ';
+        }
+
+        resultado += converterMenorQue1000(n);
+        return resultado.trim();
+    }
+
+    const reais = Math.floor(num);
+    const centavos = Math.round((num - reais) * 100);
+
+    let resultado = '';
+    if (reais > 0) {
+        resultado = converterInteiro(reais) + (reais === 1 ? ' real' : ' reais');
+    }
+    if (centavos > 0) {
+        if (reais > 0) resultado += ' e ';
+        resultado += converterInteiro(centavos) + (centavos === 1 ? ' centavo' : ' centavos');
+    }
+
+    return resultado || 'zero reais';
+}
+
+/**
+ * 🎤 FORMATAÇÃO DE TEXTO PARA FALA NATURAL (PT-BR)
+ *
+ * Converte texto para formato otimizado para TTS:
+ * - Datas: DD/MM → "dia de mês"
+ * - Horários: HH:MM → "X horas" ou "X e meia"
+ * - Funciona como backup/complemento à normalização nativa do ElevenLabs
+ *
+ * @param {String} text - Texto original
+ * @returns {String} - Texto formatado para fala natural
+ */
+function formatTextForSpeech(text) {
+    if (!text) return '';
+
+    let result = text;
+
+    // Meses por extenso em português
+    const meses = [
+        'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+        'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
+    ];
+
+    // Converter datas DD/MM ou DD/MM/YYYY para "X de mês"
+    result = result.replace(/(\d{1,2})\/(\d{1,2})(?:\/\d{4})?/g, (match, dia, mes) => {
+        const diaNum = parseInt(dia, 10);
+        const mesNum = parseInt(mes, 10);
+        if (mesNum >= 1 && mesNum <= 12) {
+            return `${numberToWords(diaNum)} de ${meses[mesNum - 1]}`;
+        }
+        return match;
+    });
+
+    // Converter horários HH:MM para "X horas" ou "X e meia"
+    result = result.replace(/(\d{1,2}):(\d{2})/g, (match, hora, minuto) => {
+        const h = parseInt(hora, 10);
+        const m = parseInt(minuto, 10);
+
+        if (m === 0) {
+            return `${numberToWords(h)} horas`;
+        } else if (m === 30) {
+            return `${numberToWords(h)} e meia`;
+        } else {
+            return `${numberToWords(h)} e ${numberToWords(m)}`;
+        }
+    });
+
+    return result;
+}
+
+/**
  * Obtém configurações de áudio do banco
  */
 async function getAudioConfig() {
@@ -49,8 +193,10 @@ async function getAudioConfig() {
     console.log('✅ Configuração de áudio carregada:');
     console.log('   ✅ Áudio ativo:', config.audio.ativo || false);
     console.log('   🔑 API Key ElevenLabs:', config.apiKey ? '✓ Configurada' : '✗ Não encontrada');
-    console.log('   🎤 Voice ID customizado:', config.customVoiceId || 'Não definido');
-    
+    console.log('   🎤 Voice ID (lista):', config.audio.voiceId || 'Não selecionado');
+    console.log('   🎤 Voice ID (personalizado):', config.audio.customVoiceId || 'Não definido');
+    console.log('   🎤 Voice ID (banco):', config.customVoiceId || 'Não definido');
+
     return config;
 }
 
@@ -100,43 +246,43 @@ function getVoiceByGender(genero, customVoiceId = null) {
 }
 
 /**
- * 🎯 CONFIGURAÇÕES DE VOZ NATURAL
- * 
- * Para voz clara e profissional (não sussurrada):
- * - stability: 0.65-0.80 (mais alto = mais estável e clara)
- * - similarity_boost: 0.75-0.85 (preserva características da voz)
- * - style: 0.0-0.20 (valores baixos evitam distorções)
- * - use_speaker_boost: true (melhora clareza)
- * 
- * ⚠️ IMPORTANTE: Valores muito baixos de stability causam voz sussurrada!
+ * 🎯 CONFIGURAÇÕES DE VOZ NATURAL - ElevenLabs v3
+ *
+ * Para modelo eleven_v3, os parâmetros de voice_settings são:
+ * - stability: 0.0 (Creative), 0.5 (Natural), 1.0 (Robust)
+ * - similarity_boost: 0.0 a 1.0 (quanto maior, mais fiel à voz original)
+ * - style: 0.0 a 1.0 (exagero de estilo - valores baixos são mais naturais)
+ * - use_speaker_boost: true/false (melhora clareza)
+ *
+ * ⚠️ IMPORTANTE para v3: stability deve ser 0.0, 0.5 ou 1.0!
  */
 const NATURAL_VOICE_SETTINGS = {
-    // Padrão: Voz clara e natural
+    // Padrão: Voz clara e natural (v3 Natural mode)
     natural: {
-        stability: 0.72,           // Estabilidade alta = voz clara, não sussurrada
+        stability: 0.5,            // Natural mode - balanceado
         similarity_boost: 0.80,    // Mantém características da voz
         style: 0.10,               // Expressividade sutil
         use_speaker_boost: true    // Clareza aprimorada
     },
     // Para mensagens mais formais/profissionais
     professional: {
-        stability: 0.78,           // Bem estável para clareza máxima
-        similarity_boost: 0.82,
+        stability: 1.0,            // Robust mode - máxima estabilidade
+        similarity_boost: 0.85,
         style: 0.05,               // Mínima variação
         use_speaker_boost: true
     },
     // Para mensagens amigáveis/casuais
     friendly: {
-        stability: 0.68,           // Levemente mais variado, mas ainda claro
-        similarity_boost: 0.78,
-        style: 0.15,               // Expressividade moderada
+        stability: 0.5,            // Natural mode
+        similarity_boost: 0.75,
+        style: 0.20,               // Expressividade moderada
         use_speaker_boost: true
     },
     // Para mensagens urgentes/alertas
     urgent: {
-        stability: 0.75,           // Estável mas com energia
+        stability: 1.0,            // Robust mode - estável
         similarity_boost: 0.85,
-        style: 0.20,               // Mais ênfase
+        style: 0.25,               // Mais ênfase
         use_speaker_boost: true
     }
 };
@@ -191,15 +337,23 @@ async function generateElevenLabsTTS(text, voiceId, apiKey, options = {}) {
         console.log(`   🎯 Tom detectado: ${tone}`);
         console.log(`   ⚙️ Settings: stability=${voiceSettings.stability}, similarity=${voiceSettings.similarity_boost}, style=${voiceSettings.style}`);
         
-        // Usar modelo multilingual v2 para melhor qualidade em PT-BR
-        const modelId = options.model_id || 'eleven_multilingual_v2';
+        // Usar modelo v3 para maior expressividade e suporte a audio tags
+        // v3 suporta 70+ idiomas incluindo PT-BR e é mais natural/expressivo
+        const modelId = options.model_id || 'eleven_v3';
         
         // Combinar configurações padrão com opções customizadas
-        // Garantir valores mínimos para evitar sussurro
+        // Para v3: stability deve ser 0.0, 0.5 ou 1.0
+        const requestedStability = options.stability ?? voiceSettings.stability;
+        // Mapear para o valor válido mais próximo do v3
+        let v3Stability = 0.5; // default: Natural
+        if (requestedStability <= 0.25) v3Stability = 0.0; // Creative
+        else if (requestedStability >= 0.75) v3Stability = 1.0; // Robust
+        else v3Stability = 0.5; // Natural
+
         const finalSettings = {
-            stability: Math.max(0.65, options.stability ?? voiceSettings.stability),
+            stability: v3Stability,
             similarity_boost: Math.max(0.70, options.similarity_boost ?? voiceSettings.similarity_boost),
-            style: Math.min(0.25, options.style ?? voiceSettings.style), // Limitar style para evitar distorções
+            style: Math.min(0.30, options.style ?? voiceSettings.style), // Limitar style para evitar distorções
             use_speaker_boost: options.use_speaker_boost ?? voiceSettings.use_speaker_boost
         };
         
@@ -208,7 +362,9 @@ async function generateElevenLabsTTS(text, voiceId, apiKey, options = {}) {
         const postData = JSON.stringify({
             text: text,
             model_id: modelId,
-            voice_settings: finalSettings
+            voice_settings: finalSettings,
+            // Normalização automática de datas, horários e valores para PT-BR
+            apply_text_normalization: 'on'
         });
         
         const response = await new Promise((resolve, reject) => {
@@ -286,7 +442,7 @@ async function saveAudioFile(audioBuffer, filename, extension = 'mp3') {
  */
 function cleanTextForTTS(text) {
     if (!text) return '';
-    
+
     // SANITIZAÇÃO ROBUSTA DE UNICODE
     // Converter para buffer e voltar para garantir UTF-8 válido
     let sanitized = '';
@@ -297,7 +453,28 @@ function cleanTextForTTS(text) {
     } catch (e) {
         sanitized = text;
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🎭 PRESERVAR TAGS DE EMOÇÃO PARA ELEVENLABS v3
+    // ═══════════════════════════════════════════════════════════════════
+    const emotionTagPattern = /\[(warmly|cheerfully|reassuringly|whispers|giggles|laughs|sighs|sadly|excitedly|nervously|calmly|seriously|playfully|thoughtfully|urgently|gently|firmly|softly|loudly|slowly|quickly)\]/gi;
+    const emotionTags = [];
+    let tagMatch;
+    let tagIndex = 0;
+
+    // Extrair tags de emoção e guardar com placeholder único
+    const tempSanitized = sanitized;
+    while ((tagMatch = emotionTagPattern.exec(tempSanitized)) !== null) {
+        // Usar placeholder que não será afetado pela limpeza de texto
+        emotionTags.push({ tag: tagMatch[0], placeholder: `EMOTIONTAG${tagIndex}PLACEHOLDER` });
+        tagIndex++;
+    }
+
+    // Substituir tags por placeholders temporários
+    for (const t of emotionTags) {
+        sanitized = sanitized.replace(t.tag, t.placeholder);
+    }
+
     // Remover caracteres Unicode problemáticos manualmente
     sanitized = sanitized
         // Remover unpaired surrogates (high sem low, low sem high)
@@ -358,7 +535,10 @@ function cleanTextForTTS(text) {
         .replace(/\bprox\b/gi, 'próximo')
         .replace(/\bmsg\b/gi, 'mensagem')
         .replace(/\bobs\b/gi, 'observação')
-        .replace(/\bR\$\s*(\d)/gi, '$1 reais')
+        // Converter valores monetários R$ X.XXX,XX para português por extenso
+        .replace(/R\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:[.,]\d{1,2})?)/gi, (match, valor) => {
+            return valorPorExtenso(valor);
+        })
         
         // Melhorar pausas naturais
         .replace(/\n+/g, '. ')            // Quebras de linha = pausas
@@ -374,7 +554,21 @@ function cleanTextForTTS(text) {
     if (cleaned && !/[.!?]$/.test(cleaned)) {
         cleaned += '.';
     }
-    
+
+    // Aplicar formatação de datas/horários para fala natural (backup à normalização nativa)
+    cleaned = formatTextForSpeech(cleaned);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🎭 RESTAURAR TAGS DE EMOÇÃO DO ELEVENLABS v3
+    // ═══════════════════════════════════════════════════════════════════
+    for (const t of emotionTags) {
+        // Restaurar tag com espaços ao redor para melhor parsing
+        cleaned = cleaned.replace(t.placeholder, ' ' + t.tag + ' ');
+    }
+
+    // Normalizar espaços ao redor das tags
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
     return cleaned;
 }
 
@@ -384,16 +578,20 @@ function cleanTextForTTS(text) {
  */
 async function textToSpeech(text, options = {}) {
     console.log('\n🎤 === INICIANDO TEXT-TO-SPEECH ===');
-    
+
     try {
         const config = await getAudioConfig();
-        
-        // Verificar se áudio está ativo
-        if (!config.audio.ativo) {
+
+        // Verificar se áudio está ativo (pode ser forçado via options.force)
+        if (!config.audio.ativo && !options.force) {
             console.log('⚠️ TTS não está ativo nas configurações');
             return { success: false, error: 'TTS não está ativo' };
         }
-        
+
+        if (options.force) {
+            console.log('🔧 TTS forçado via options.force');
+        }
+
         // Verificar API Key
         if (!config.apiKey) {
             console.error('❌ API Key do ElevenLabs não configurada');
@@ -409,12 +607,28 @@ async function textToSpeech(text, options = {}) {
         }
         
         console.log('📝 Texto limpo:', cleanText.substring(0, 80) + '...');
-        
-        // Determinar voice ID
+
+        // Determinar voice ID com ordem de prioridade:
+        // 1. options.voiceId - passado diretamente como opção
+        // 2. config.audio.customVoiceId - ID personalizado inserido manualmente (NOVO)
+        // 3. config.audio.voiceId - voz selecionada da lista
+        // 4. config.customVoiceId - campo antigo do banco (elevenlabs_voice_id)
+        // 5. getVoiceByGender - baseado no gênero configurado
         const genero = config.comportamento.genero || 'neutro';
-        const voiceId = options.voiceId || config.customVoiceId || getVoiceByGender(genero);
-        
-        console.log(`🎤 Voz: ${VOICE_PRESETS[genero]?.name || 'Customizada'} (${voiceId})`);
+        const voiceId = options.voiceId
+            || config.audio.customVoiceId  // ID personalizado tem prioridade
+            || config.audio.voiceId
+            || config.customVoiceId
+            || getVoiceByGender(genero);
+
+        // Identificar qual voz está sendo usada para log
+        let voiceSource = 'padrão (gênero)';
+        if (options.voiceId) voiceSource = 'opção direta';
+        else if (config.audio.customVoiceId) voiceSource = 'ID personalizado';
+        else if (config.audio.voiceId) voiceSource = 'selecionada da lista';
+        else if (config.customVoiceId) voiceSource = 'banco (elevenlabs_voice_id)';
+
+        console.log(`🎤 Voz: ${voiceId} (fonte: ${voiceSource})`);
         
         // Gerar áudio
         const audioBuffer = await generateElevenLabsTTS(cleanText, voiceId, config.apiKey, options);
@@ -461,36 +675,50 @@ async function textToSpeech(text, options = {}) {
 
 /**
  * 🔄 SISTEMA DE ALTERNÂNCIA TEXTO/ÁUDIO
- * 
+ *
  * Alterna entre texto e áudio para experiência mais natural:
- * - Padrão: TEXTO → ÁUDIO (ciclo de 2) - mais natural
+ * - Padrão: TEXTO → TEXTO → ÁUDIO (ciclo de 3) - menos áudio, mais natural
  * - Configurável para diferentes padrões
  */
 let ttsMessageCounter = 0;
-const TTS_CYCLE = 2; // A cada 2 mensagens, alterna texto/áudio
+const TTS_CYCLE = 3; // A cada 3 mensagens, alterna texto/áudio (menos intrusivo)
 
-async function shouldUseTTS(forceCheck = false) {
+/**
+ * Verifica se a próxima mensagem deve ser áudio
+ * @param {Boolean} peekOnly - Se true, apenas verifica sem incrementar o contador
+ *                            Útil para determinar formato de saída ANTES de gerar a mensagem
+ * @returns {Promise<Boolean>} - true se deve usar áudio
+ */
+async function shouldUseTTS(peekOnly = false) {
     try {
         const config = await getAudioConfig();
-        
+
         if (!config.audio.ativo) {
             return false;
         }
-        
+
+        if (peekOnly) {
+            // Apenas espia o próximo valor sem incrementar
+            const nextCounter = ttsMessageCounter + 1;
+            const wouldBeAudio = nextCounter % TTS_CYCLE === 0;
+            console.log(`👀 TTS PEEK: próxima mensagem seria ${wouldBeAudio ? 'ÁUDIO' : 'TEXTO'} (contador atual: ${ttsMessageCounter})`);
+            return wouldBeAudio;
+        }
+
         // Incrementar contador
         ttsMessageCounter++;
-        
-        // Verificar ciclo - agora alterna: texto, áudio, texto, áudio...
+
+        // Verificar ciclo - a cada TTS_CYCLE mensagens, usa áudio
         const useAudio = ttsMessageCounter % TTS_CYCLE === 0;
-        
+
         if (useAudio) {
             console.log(`🎤 TTS: ÁUDIO (mensagem ${ttsMessageCounter})`);
         } else {
             console.log(`📝 TTS: TEXTO (mensagem ${ttsMessageCounter})`);
         }
-        
+
         return useAudio;
-        
+
     } catch (error) {
         console.error('Erro ao verificar TTS:', error);
         return false;
@@ -539,6 +767,9 @@ module.exports = {
     textToSpeech,
     shouldUseTTS,
     cleanTextForTTS,
+    formatTextForSpeech,
+    numberToWords,
+    valorPorExtenso,
     getAudioConfig,
     getVoiceByGender,
     resetTTSCounter,

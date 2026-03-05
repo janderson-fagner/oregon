@@ -24,9 +24,37 @@
     "closeDrawer",
   ]);
 
-  console.log("lembreteData:", props.lembreteData);
-
   const { setAlert } = useAlert();
+
+  // Listas para os autocompletes de destinatários
+  const usuariosList = ref([]);
+  const rolesList = ref([]);
+
+  const fetchUsuarios = async () => {
+    try {
+      const res = await $api("/users/list-simple", { method: "GET" });
+      usuariosList.value = res || [];
+    } catch (e) {
+      usuariosList.value = [];
+    }
+  };
+
+  const fetchRoles = async () => {
+    try {
+      const res = await $api("/roles/list-role", { method: "GET" });
+      rolesList.value = (res.roles || []).map((r) => ({
+        value: r.role_name,
+        title: r.role_name,
+      }));
+    } catch (e) {
+      rolesList.value = [];
+    }
+  };
+
+  onMounted(() => {
+    fetchUsuarios();
+    fetchRoles();
+  });
 
   const lembrete = ref({
     id: 0,
@@ -42,6 +70,8 @@
     notify_zap: 0,
     concluido: 0,
     created_at: null,
+    destinatarios_usuarios: [],
+    destinatarios_funcoes: [],
   });
 
   watch(
@@ -54,11 +84,13 @@
         newVal?.d !== 0
       ) {
         isNewLembrete.value = false;
-        console.log("Não é novo lembrete:", newVal);
-        lembrete.value = newVal;
+        lembrete.value = { ...newVal };
         lembrete.value.agendado_time = moment(newVal.agendado_time).format(
           "YYYY-MM-DD HH:mm"
         );
+        // Garantir que os campos de destinatários sejam arrays
+        lembrete.value.destinatarios_usuarios = newVal.destinatarios_usuarios || [];
+        lembrete.value.destinatarios_funcoes = newVal.destinatarios_funcoes || [];
       }
     }
   );
@@ -67,7 +99,6 @@
     () => props.params,
     (newVal) => {
       if (newVal) {
-        console.log("Params:", newVal);
         lembrete.value.params = newVal;
       }
     }
@@ -80,15 +111,15 @@
     props.lembreteData?.id !== 0
   ) {
     isNewLembrete.value = false;
-    console.log("Não é nova lembrete:", props.lembreteData);
-    lembrete.value = props.lembreteData;
+    lembrete.value = { ...props.lembreteData };
     lembrete.value.agendado_time = moment(
       props.lembreteData.agendado_time
     ).format("YYYY-MM-DD HH:mm");
+    lembrete.value.destinatarios_usuarios = props.lembreteData.destinatarios_usuarios || [];
+    lembrete.value.destinatarios_funcoes = props.lembreteData.destinatarios_funcoes || [];
   }
 
   if (props.params) {
-    console.log("Params:", props.params);
     lembrete.value.params = props.params;
   }
 
@@ -107,6 +138,8 @@
       notify_zap: 0,
       concluido: 0,
       created_at: null,
+      destinatarios_usuarios: [],
+      destinatarios_funcoes: [],
     };
   };
 
@@ -120,8 +153,6 @@
   };
 
   const saveServico = async () => {
-    console.log("Lembrete:", lembrete.value);
-
     if (
       !lembrete.value.title ||
       !lembrete.value.subtitle ||
@@ -165,8 +196,6 @@
 
       if (!res) return;
 
-      console.log("Lembrete cadastrado com sucesso!", res);
-
       setAlert(
         `Lembrete ${
           isNewLembrete.value ? "cadastrado" : "atualizado"
@@ -191,14 +220,6 @@
     }
 
     loading.value = false;
-  };
-
-  const formatValor = (valor) => {
-    if (!valor) return "";
-    return valor.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
   };
 
   const repeatTimesOptions = [
@@ -241,7 +262,6 @@
     <PerfectScrollbar :options="{ wheelPropagation: false }">
       <VCard flat>
         <VCardText class="pt-2">
-          <!-- 👉 Title -->
           <AppDrawerHeaderSection
             :title="isNewLembrete ? 'Cadastrar Lembrete' : 'Editar Lembrete'"
             @cancel="closeNavigationDrawer"
@@ -283,6 +303,49 @@
                 <VIcon icon="tabler-brand-whatsapp" class="mr-2" />
               </VLabel>
               <VSwitch v-model="lembrete.notify_zap" :value="1"/>
+            </VCol>
+          </VRow>
+
+          <!-- Seção Destinatários -->
+          <p class="my-4 font-weight-bold">Destinatários</p>
+
+          <VRow>
+            <VCol cols="12">
+              <VLabel>
+                <VIcon icon="tabler-users" class="mr-2" /> Usuários específicos
+              </VLabel>
+              <VAutocomplete
+                v-model="lembrete.destinatarios_usuarios"
+                :items="usuariosList"
+                item-title="fullName"
+                item-value="id"
+                multiple
+                chips
+                closable-chips
+                placeholder="Selecione usuários"
+                clearable
+              />
+            </VCol>
+
+            <VCol cols="12">
+              <VLabel>
+                <VIcon icon="tabler-shield" class="mr-2" /> Funções (Roles)
+              </VLabel>
+              <VAutocomplete
+                v-model="lembrete.destinatarios_funcoes"
+                :items="rolesList"
+                multiple
+                chips
+                closable-chips
+                placeholder="Selecione funções"
+                clearable
+              />
+            </VCol>
+
+            <VCol cols="12">
+              <p class="mb-0 text-caption text-disabled">
+                Se nenhum destinatário for selecionado, o lembrete será enviado para administradores e gerentes.
+              </p>
             </VCol>
           </VRow>
 
@@ -336,7 +399,6 @@
           </VRow>
 
           <VRow>
-            <!-- 👉 Submit and Cancel -->
             <VCol cols="12" align="center">
               <VBtn
                 class="me-3"

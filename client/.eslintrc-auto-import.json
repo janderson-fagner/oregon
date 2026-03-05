@@ -376,6 +376,10 @@
     "watchTriggerable": true,
     "watchWithFilter": true,
     "whenever": true,
-    "validarConfiguracaoCompleta": true
+    "validarConfiguracaoCompleta": true,
+    "isDaviot": true,
+    "useAssinatura": true,
+    "connectSocket": true,
+    "disconnectSocket": true
   }
 }

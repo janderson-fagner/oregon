@@ -1,4 +1,5 @@
 const dbQuery = require('./dbHelper');
+const { empresaWhere } = require('./dbHelper');
 const moment = require('moment');
 
 /**
@@ -6,18 +7,20 @@ const moment = require('moment');
  * Inclui nome, probabilidade, ordem e instruções de IA de cada etapa
  * @returns {Array} Lista de funis ordenados
  */
-async function getFunisCompletos() {
+async function getFunisCompletos(empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
         const funis = await dbQuery(`
-            SELECT 
-                id, 
-                nome, 
-                probabilidade, 
-                ordem, 
-                instrucoesIa 
-            FROM Funis 
+            SELECT
+                id,
+                nome,
+                probabilidade,
+                ordem,
+                instrucoesIa
+            FROM Funis
+            WHERE ${ew.sql}
             ORDER BY ordem ASC
-        `);
+        `, [...ew.params]);
         
         return funis || [];
     } catch (error) {
@@ -31,8 +34,8 @@ async function getFunisCompletos() {
  * Inclui todas as etapas, suas instruções e como avançar
  * @returns {String} Texto formatado para contexto da IA
  */
-async function getPipelineResumoParaIA() {
-    const funis = await getFunisCompletos();
+async function getPipelineResumoParaIA(empresa_id = null) {
+    const funis = await getFunisCompletos(empresa_id);
     
     if (!funis || funis.length === 0) {
         return '';
@@ -103,10 +106,11 @@ async function getPipelineResumoParaIA() {
  * @param {Number} clienteId - ID do cliente
  * @returns {Array} Lista de negócios do cliente
  */
-async function getNegociosCliente(clienteId) {
+async function getNegociosCliente(clienteId, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
         const negocios = await dbQuery(`
-            SELECT 
+            SELECT
                 n.*,
                 f.nome as etapa_nome,
                 f.probabilidade as etapa_probabilidade,
@@ -116,8 +120,9 @@ async function getNegociosCliente(clienteId) {
             LEFT JOIN Funis f ON f.id = n.etapaId
             WHERE n.cli_Id = ?
             AND n.status NOT IN ('Perdido', 'Cancelado')
+            AND n.${ew.sql}
             ORDER BY n.updated_at DESC, n.created_at DESC
-        `, [clienteId]);
+        `, [clienteId, ...ew.params]);
         
         // Parsear JSONs
         for (const negocio of negocios) {
@@ -139,8 +144,8 @@ async function getNegociosCliente(clienteId) {
  * @param {Number} clienteId - ID do cliente
  * @returns {Object} Resumo formatado com total e texto
  */
-async function getNegociosClienteResumo(clienteId) {
-    const negocios = await getNegociosCliente(clienteId);
+async function getNegociosClienteResumo(clienteId, empresa_id = null) {
+    const negocios = await getNegociosCliente(clienteId, empresa_id);
     
     if (!negocios || negocios.length === 0) {
         return {
@@ -205,18 +210,21 @@ async function getNegociosClienteResumo(clienteId) {
  * @param {Object} params - Parâmetros do negócio
  * @returns {Object} Resultado da criação
  */
-async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = 'IA', descricao = '' }) {
+async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = 'IA', descricao = '', empresa_id = null }) {
     console.log('\n💼 === CRIANDO NEGÓCIO AUTOMATICAMENTE ===');
     console.log('📊 Dados:', { clienteId, titulo, valor, origem });
-    
+
+    const ew = empresaWhere(empresa_id);
+
     try {
         // Buscar primeira etapa do funil (ordem = 1)
         const [primeiraEtapa] = await dbQuery(`
-            SELECT id, nome 
-            FROM Funis 
-            ORDER BY ordem ASC 
+            SELECT id, nome
+            FROM Funis
+            WHERE ${ew.sql}
+            ORDER BY ordem ASC
             LIMIT 1
-        `);
+        `, [...ew.params]);
         
         if (!primeiraEtapa) {
             console.error('❌ Nenhuma etapa do funil encontrada!');
@@ -259,9 +267,9 @@ async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = '
         
         // Inserir no banco
         const result = await dbQuery(`
-            INSERT INTO Negocios 
-            (cli_Id, title, etapaId, status, valor, origem, historico, anotacoes, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO Negocios
+            (cli_Id, title, etapaId, status, valor, origem, historico, anotacoes, created_by, empresa_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
             clienteId,
             titulo,
@@ -271,13 +279,14 @@ async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = '
             origem,
             JSON.stringify(historicoInicial),
             JSON.stringify([anotacaoInicial]),
-            'Sistema - IA'
+            'Sistema - IA',
+            empresa_id
         ]);
         
         const negocioId = result.insertId;
         
         // Atualizar histórico do cliente
-        const [cliente] = await dbQuery('SELECT cli_historico FROM CLIENTES WHERE cli_Id = ?', [clienteId]);
+        const [cliente] = await dbQuery('SELECT cli_historico FROM CLIENTES WHERE cli_Id = ? AND ' + ew.sql, [clienteId, ...ew.params]);
         if (cliente) {
             let historicoCliente = cliente.cli_historico ? JSON.parse(cliente.cli_historico) : [];
             historicoCliente.unshift({
@@ -289,8 +298,8 @@ async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = '
                 icon: 'tabler-briefcase'
             });
             
-            await dbQuery('UPDATE CLIENTES SET cli_historico = ? WHERE cli_Id = ?', 
-                [JSON.stringify(historicoCliente), clienteId]);
+            await dbQuery('UPDATE CLIENTES SET cli_historico = ? WHERE cli_Id = ? AND ' + ew.sql,
+                [JSON.stringify(historicoCliente), clienteId, ...ew.params]);
         }
         
         console.log('✅ Negócio criado com sucesso! ID:', negocioId);
@@ -315,13 +324,15 @@ async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = '
  * @param {Object} params - Parâmetros da atualização
  * @returns {Object} Resultado da atualização
  */
-async function atualizarNegocio({ negocioId, etapaId = null, valor = null, anotacao = null }) {
+async function atualizarNegocio({ negocioId, etapaId = null, valor = null, anotacao = null, empresa_id = null }) {
     console.log('\n💼 === ATUALIZANDO NEGÓCIO ===');
     console.log('📊 Params:', { negocioId, etapaId, valor, anotacao });
-    
+
+    const ew = empresaWhere(empresa_id);
+
     try {
         // Buscar negócio atual
-        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [negocioId]);
+        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND ' + ew.sql, [negocioId, ...ew.params]);
         
         if (!negocio) {
             return { success: false, error: 'Negócio não encontrado' };
@@ -334,7 +345,7 @@ async function atualizarNegocio({ negocioId, etapaId = null, valor = null, anota
         
         // Atualizar etapa
         if (etapaId && etapaId !== negocio.etapaId) {
-            const [novaEtapa] = await dbQuery('SELECT * FROM Funis WHERE id = ?', [etapaId]);
+            const [novaEtapa] = await dbQuery('SELECT * FROM Funis WHERE id = ? AND ' + ew.sql, [etapaId, ...ew.params]);
             
             if (novaEtapa) {
                 // Finalizar etapa antiga
@@ -408,9 +419,9 @@ async function atualizarNegocio({ negocioId, etapaId = null, valor = null, anota
         
         // Executar update
         if (updates.length > 0) {
-            const query = `UPDATE Negocios SET ${updates.join(', ')} WHERE id = ?`;
-            values.push(negocioId);
-            
+            const query = `UPDATE Negocios SET ${updates.join(', ')} WHERE id = ? AND ${ew.sql}`;
+            values.push(negocioId, ...ew.params);
+
             await dbQuery(query, values);
             console.log('✅ Negócio atualizado com sucesso!');
         }
@@ -427,12 +438,14 @@ async function atualizarNegocio({ negocioId, etapaId = null, valor = null, anota
  * @param {Object} params - Parâmetros
  * @returns {Object} Resultado
  */
-async function marcarNegocioGanho({ negocioId, valorFinal = null }) {
+async function marcarNegocioGanho({ negocioId, valorFinal = null, empresa_id = null }) {
     console.log('\n🎉 === MARCANDO NEGÓCIO COMO GANHO ===');
     console.log('📊 Negócio ID:', negocioId, 'Valor:', valorFinal);
-    
+
+    const ew = empresaWhere(empresa_id);
+
     try {
-        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [negocioId]);
+        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND ' + ew.sql, [negocioId, ...ew.params]);
         
         if (!negocio) {
             return { success: false, error: 'Negócio não encontrado' };
@@ -453,23 +466,24 @@ async function marcarNegocioGanho({ negocioId, valorFinal = null }) {
         const valorFinalUsar = valorFinal !== null ? valorFinal : negocio.valor;
         
         await dbQuery(`
-            UPDATE Negocios 
-            SET status = ?, 
-                data_fechamento = ?, 
+            UPDATE Negocios
+            SET status = ?,
+                data_fechamento = ?,
                 valor = ?,
                 historico = ?,
-                motivoPerdido = NULL, 
-                obsPerdido = NULL, 
+                motivoPerdido = NULL,
+                obsPerdido = NULL,
                 dataPerdido = NULL,
                 updated_by = ?
-            WHERE id = ?
+            WHERE id = ? AND ${ew.sql}
         `, [
             'Ganho',
             moment().format('YYYY-MM-DD'),
             valorFinalUsar,
             JSON.stringify(historico),
             'Sistema - IA',
-            negocioId
+            negocioId,
+            ...ew.params
         ]);
         
         console.log('✅ Negócio marcado como ganho!');
@@ -485,12 +499,14 @@ async function marcarNegocioGanho({ negocioId, valorFinal = null }) {
  * @param {Object} params - Parâmetros
  * @returns {Object} Resultado
  */
-async function marcarNegocioPerdido({ negocioId, motivo = 'Não especificado', observacao = null }) {
+async function marcarNegocioPerdido({ negocioId, motivo = 'Não especificado', observacao = null, empresa_id = null }) {
     console.log('\n😞 === MARCANDO NEGÓCIO COMO PERDIDO ===');
     console.log('📊 Negócio ID:', negocioId, 'Motivo:', motivo);
-    
+
+    const ew = empresaWhere(empresa_id);
+
     try {
-        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ?', [negocioId]);
+        const [negocio] = await dbQuery('SELECT * FROM Negocios WHERE id = ? AND ' + ew.sql, [negocioId, ...ew.params]);
         
         if (!negocio) {
             return { success: false, error: 'Negócio não encontrado' };
@@ -509,15 +525,15 @@ async function marcarNegocioPerdido({ negocioId, motivo = 'Não especificado', o
         });
         
         await dbQuery(`
-            UPDATE Negocios 
-            SET status = ?, 
+            UPDATE Negocios
+            SET status = ?,
                 historico = ?,
                 motivoPerdido = ?,
                 obsPerdido = ?,
                 dataPerdido = ?,
                 data_fechamento = NULL,
                 updated_by = ?
-            WHERE id = ?
+            WHERE id = ? AND ${ew.sql}
         `, [
             'Perdido',
             JSON.stringify(historico),
@@ -525,7 +541,8 @@ async function marcarNegocioPerdido({ negocioId, motivo = 'Não especificado', o
             observacao,
             moment().format('YYYY-MM-DD HH:mm:ss'),
             'Sistema - IA',
-            negocioId
+            negocioId,
+            ...ew.params
         ]);
         
         console.log('✅ Negócio marcado como perdido');
@@ -533,6 +550,55 @@ async function marcarNegocioPerdido({ negocioId, motivo = 'Não especificado', o
     } catch (error) {
         console.error('❌ Erro ao marcar como perdido:', error);
         return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Registra evento de orçamento no histórico dos negócios vinculados
+ * @param {Object} params - Parâmetros do evento
+ * @param {Number} params.orcamentoId - ID do orçamento
+ * @param {Array} params.negociosIds - IDs dos negócios vinculados
+ * @param {String} params.evento - Tipo: orcamento-criado, orcamento-enviado, orcamento-aceito, orcamento-negado
+ * @param {Number} params.empresa_id - ID da empresa
+ * @param {Object} params.dadosExtra - Dados adicionais (valor, cliente, etc)
+ */
+async function registrarOrcamentoNosNegocios({ orcamentoId, negociosIds, evento, empresa_id, dadosExtra = {} }) {
+    if (!negociosIds || !Array.isArray(negociosIds) || negociosIds.length === 0) return;
+
+    const ew = empresaWhere(empresa_id);
+
+    const eventoConfig = {
+        'orcamento-criado': { title: 'Orçamento vinculado', color: 'info', icon: 'tabler-file-invoice' },
+        'orcamento-enviado': { title: 'Orçamento enviado ao cliente', color: 'primary', icon: 'tabler-send' },
+        'orcamento-aceito': { title: 'Orçamento aceito pelo cliente', color: 'success', icon: 'tabler-check' },
+        'orcamento-negado': { title: 'Orçamento negado pelo cliente', color: 'error', icon: 'tabler-x' },
+    };
+
+    const cfg = eventoConfig[evento] || { title: evento, color: 'info', icon: 'tabler-file-invoice' };
+
+    for (const negocioId of negociosIds) {
+        try {
+            const [negocio] = await dbQuery('SELECT historico FROM Negocios WHERE id = ? AND ' + ew.sql, [negocioId, ...ew.params]);
+            if (!negocio) continue;
+
+            let historico = negocio.historico ? JSON.parse(negocio.historico) : [];
+
+            historico.unshift({
+                title: cfg.title,
+                description: `Orçamento #${orcamentoId}${dadosExtra.valor ? ` - R$ ${parseFloat(dadosExtra.valor).toFixed(2)}` : ''}`,
+                date: moment().format('YYYY-MM-DD HH:mm:ss'),
+                feitoPor: dadosExtra.feitoPor || 'Sistema',
+                color: cfg.color,
+                icon: cfg.icon,
+                type: evento,
+                orcamentoId
+            });
+
+            await dbQuery('UPDATE Negocios SET historico = ? WHERE id = ? AND ' + ew.sql,
+                [JSON.stringify(historico), negocioId, ...ew.params]);
+        } catch (error) {
+            console.error(`[Orçamento→Negócio] Erro ao registrar evento no negócio ${negocioId}:`, error);
+        }
     }
 }
 
@@ -544,5 +610,6 @@ module.exports = {
     criarNegocioAutomatico,
     atualizarNegocio,
     marcarNegocioGanho,
-    marcarNegocioPerdido
+    marcarNegocioPerdido,
+    registrarOrcamentoNosNegocios
 };

@@ -112,11 +112,11 @@ async function getGeminiConfig() {
  * Constrói as instruções do sistema para a IA - VERSÃO ROBUSTA
  * @param {Object} config - Configuração do Gemini
  * @param {Object} context - Contexto da conversa
- * @param {Object} options - Opções adicionais
+ * @param {Object} options - Opções adicionais (hasPreviousAssistantMessage, outputFormat)
  * @returns {String} - Instruções formatadas
  */
 async function buildSystemInstructions(config, context = {}, options = {}) {
-    const { hasPreviousAssistantMessage = false } = options;
+    const { hasPreviousAssistantMessage = false, outputFormat = 'text' } = options;
     let instructions = '';
 
     const comp = config.comportamento || {};
@@ -148,7 +148,7 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
 
     // Gerenciamento de saudação
     const greetingAlreadySent = hasPreviousAssistantMessage || context?.first_ai_greeting_sent;
-    
+
     if (!greetingAlreadySent) {
         instructions += `📌 **PRIMEIRA MENSAGEM**: Apresente-se brevemente como "${nome}" de forma calorosa.\n`;
         instructions += `Exemplo: "Olá! Sou ${artigoA} ${nome}, como posso ajudar você hoje?"\n\n`;
@@ -158,6 +158,39 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
         instructions += `✅ Seja direto e objetivo, continue de onde a conversa parou.\n`;
         instructions += `✅ Responda diretamente à pergunta ou solicitação do cliente.\n`;
         instructions += `❌ Proibido: "Olá! Como posso ajudar?" - você já se apresentou antes!\n\n`;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CONTEXTO DA CONVERSA ATUAL (histórico do contexto)
+    // ═══════════════════════════════════════════════════════════════════
+    if (context.history && Array.isArray(context.history) && context.history.length > 0) {
+        instructions += '# 💬 CONTEXTO DA CONVERSA ATUAL\n\n';
+        instructions += '⚠️ **IMPORTANTE**: Esta é uma CONVERSA EM ANDAMENTO.\n';
+        instructions += 'Você já está conversando com este cliente. NUNCA inicie com saudação novamente.\n';
+        instructions += 'Responda de forma contextualizada com base no histórico abaixo.\n\n';
+
+        instructions += '**Resumo da conversa até agora:**\n';
+        const lastMessages = context.history.slice(-5); // últimas 5 mensagens
+        for (const msg of lastMessages) {
+            const role = msg.role === 'user' ? '👤 Cliente' : '🤖 Você';
+            const text = msg.parts?.[0]?.text || '';
+            if (text) {
+                const truncated = text.length > 150 ? text.substring(0, 150) + '...' : text;
+                instructions += `${role}: "${truncated}"\n`;
+            }
+        }
+        instructions += '\n';
+
+        instructions += '**📌 REGRAS DE CONTINUIDADE**:\n';
+        instructions += '1. **ENTENDA O CONTEXTO**: Sempre relacione a mensagem atual com o que foi discutido antes\n';
+        instructions += '2. **NÃO REPITA PERGUNTAS**: Se o cliente já informou algo, use essa informação\n';
+        instructions += '3. **SEJA OBJETIVO**: Se o cliente perguntou algo, responda diretamente\n';
+        instructions += '4. **CONDUZA A VENDA**: Sempre direcione para agendamento ou fechamento\n';
+        instructions += '5. **USE O NOME**: Chame o cliente pelo nome para personalizar\n\n';
+
+        instructions += '**Exemplos de continuidade:**\n';
+        instructions += '❌ ERRADO: "Sobre o que você gostaria de saber mais?"\n';
+        instructions += '✅ CERTO: "Sobre a limpeza do sofá que você mencionou, temos disponibilidade..."\n\n';
     }
 
     // Tom e estilo
@@ -222,11 +255,56 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     instructions += '5. **CHAME PELO NOME** - personalização aumenta conversão\n\n';
 
     // ═══════════════════════════════════════════════════════════════════
-    // 5. SERVIÇOS DISPONÍVEIS (com preços e durações)
+    // 4.5 METODOLOGIA DE VENDAS CONSULTIVA
+    // ═══════════════════════════════════════════════════════════════════
+    instructions += '# 🎯 METODOLOGIA DE VENDAS CONSULTIVA\n\n';
+
+    instructions += '⚠️ **REGRA DE OURO**: NUNCA informe preços na primeira ou segunda mensagem!\n\n';
+
+    instructions += '## Fluxo de Qualificação (OBRIGATÓRIO antes de dar preço):\n';
+    instructions += '1. **ENTENDER A NECESSIDADE**: "Qual item você precisa limpar?" / "Pode me contar mais sobre o problema?"\n';
+    instructions += '2. **QUALIFICAR O TAMANHO/TIPO**: "Quantos lugares tem o sofá?" / "É colchão de casal ou solteiro?"\n';
+    instructions += '3. **ENTENDER A CONDIÇÃO**: "Tem manchas específicas?" / "Quando foi a última limpeza?"\n';
+    instructions += '4. **SOLICITAR FOTO** (quando aplicável): "Pode me enviar uma foto para eu avaliar melhor e dar um orçamento mais preciso?"\n';
+    instructions += '5. **CRIAR VALOR**: Explicar benefícios, diferenciais, garantias ANTES do preço\n';
+    instructions += '6. **OFERECER CROSS-SELL**: Sugerir serviços complementares naturalmente\n';
+    instructions += '7. **SÓ ENTÃO DAR PREÇO**: Após entender completamente a necessidade\n\n';
+
+    instructions += '## Perguntas de Qualificação por Serviço:\n';
+    instructions += '- **Sofá**: Quantos lugares? Tecido ou couro? Tem manchas? Qual cor?\n';
+    instructions += '- **Colchão**: Tamanho (solteiro/casal/king)? Tem manchas de urina/suor? Última limpeza?\n';
+    instructions += '- **Tapete**: Dimensões aproximadas? Material? Condição atual?\n';
+    instructions += '- **Cadeira/Poltrona**: Quantas unidades? Material do estofado?\n\n';
+
+    instructions += '## Cross-sell Inteligente:\n';
+    instructions += '- Limpeza de sofá → Sugerir almofadas, poltronas, tapete da sala\n';
+    instructions += '- Limpeza de colchão → Sugerir impermeabilização, travesseiros\n';
+    instructions += '- Limpeza de tapete → Sugerir sofá da mesma sala\n';
+    instructions += '- Qualquer serviço → Mencionar pacotes com desconto\n\n';
+
+    instructions += '## Frases para Criar Valor (use ANTES de dar preço):\n';
+    instructions += '- "Nosso serviço inclui higienização profunda com equipamento profissional"\n';
+    instructions += '- "Usamos produtos hipoalergênicos, seguros para crianças e pets"\n';
+    instructions += '- "O serviço tem garantia de satisfação"\n';
+    instructions += '- "Nossos profissionais são treinados e certificados"\n';
+    instructions += '- "O resultado é visível na hora, o sofá fica como novo"\n\n';
+
+    instructions += '## Quando Receber Imagem do Cliente:\n';
+    instructions += '1. **ANALISE** visualmente a imagem (você consegue ver!)\n';
+    instructions += '2. **DESCREVA** o que observa: "Vejo que seu sofá tem manchas na parte central..."\n';
+    instructions += '3. **CHAME** `analisarImagemCliente` com suas observações\n';
+    instructions += '4. **USE** o resultado para dar orçamento preciso\n\n';
+
+    instructions += '❌ **PROIBIDO**: Dar preço antes de fazer pelo menos 2 perguntas de qualificação\n';
+    instructions += '❌ **PROIBIDO**: Listar tabela completa de preços\n';
+    instructions += '✅ **CORRETO**: Conversar, entender, qualificar, criar valor, depois precificar\n\n';
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 5. SERVIÇOS DISPONÍVEIS (variações disponíveis - SEM mostrar preços diretos)
     // ═══════════════════════════════════════════════════════════════════
     if (agend.servicos && agend.servicos.length > 0) {
-        instructions += '\n# 🛠️ SERVIÇOS E PRECIFICAÇÃO\n\n';
-        
+        instructions += '\n# 🛠️ SERVIÇOS DISPONÍVEIS\n\n';
+
         for (const servico of agend.servicos) {
             instructions += `## ${servico.nome}${servico.isSub ? ' (Subserviço)' : ''}\n`;
             if (servico.descricao) {
@@ -234,18 +312,20 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
             }
 
             if (servico.regrasPrecificacao && servico.regrasPrecificacao.length > 0) {
-                instructions += '**Tabela de Preços:**\n';
+                instructions += '**Variações Disponíveis** (use `buscarServicoPorNome` para preços após qualificar):\n';
                 for (const regra of servico.regrasPrecificacao) {
-                    instructions += `| ${regra.titulo} | R$ ${(regra.preco || 0).toFixed(2)}`;
+                    instructions += `- ${regra.titulo}`;
                     if (regra.duracaoMinutos) {
-                        instructions += ` | ${regra.duracaoMinutos} min`;
+                        instructions += ` (~${regra.duracaoMinutos} min)`;
                     }
-                    instructions += ' |\n';
+                    instructions += '\n';
                     if (regra.descricao) instructions += `  _${regra.descricao}_\n`;
-                    if (regra.condicoes) instructions += `  Condição: ${regra.condicoes}\n`;
+                    if (regra.condicoes) instructions += `  Quando aplicar: ${regra.condicoes}\n`;
+                    // PREÇO NÃO É MOSTRADO - IA deve qualificar antes
                 }
+                instructions += '\n⚠️ Use `buscarServicoPorNome` SOMENTE após qualificar o cliente.\n';
             }
-            
+
             if (servico.observacoes) {
                 instructions += `\n⚠️ **Obs**: ${servico.observacoes}\n`;
             }
@@ -375,10 +455,11 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     
     instructions += '## 📅 Agendamentos\n';
     instructions += '⚠️ **REGRA OBRIGATÓRIA**: Quando cliente perguntar "meu agendamento", "último agendamento", "histórico", "agendamentos anteriores" → USE `consultarAgendamentosCliente` IMEDIATAMENTE!\n\n';
+    instructions += '- `buscarServicoPorNome(nomeServico, tamanho)` - **OBRIGATÓRIO ANTES DE AGENDAR**: Busca o serviço pelo nome para obter servicoId e preço correto. SEMPRE chame ANTES de criarAgendamento!\n';
     instructions += '- `consultarAgendamentosCliente(tipo)` - **USE QUANDO PERGUNTAREM SOBRE AGENDAMENTOS** (tipo: "ultimos", "proximos", "todos", "hoje")\n';
     instructions += '- `buscarDisponibilidades(dataInicio, dataFim, duracaoMinutos, periodoPreferido, servicoId)` - **SEMPRE use antes de confirmar novo horário**\n';
     instructions += '- `verificarHorarioDisponivel(data, horaInicio, horaFim, servicoId)` - Verificar horário específico\n';
-    instructions += '- `criarAgendamento(data, horaInicio, horaFim, funcionarioId, servicoId, endereco, observacoes)` - Criar novo agendamento\n';
+    instructions += '- `criarAgendamento(data, horaInicio, horaFim, funcionarioId, servicoId, endereco, observacoes)` - Criar novo agendamento (REQUER servicoId!)\n';
     instructions += '- `atualizarAgendamento(agendamentoId, data, horaInicio, status, observacoes)` - Atualizar existente\n';
     instructions += '- `cancelarAgendamento(agendamentoId, motivo)` - Cancelar agendamento\n\n';
     
@@ -428,13 +509,15 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     
     instructions += '## Fluxo Completo:\n\n';
     instructions += '1. **Cliente demonstra interesse** → Chame `criarNegocio` para tracking\n';
-    instructions += '2. **Verificar se já tem agendamento** → Chame `consultarAgendamentosCliente("proximos")`\n';
-    instructions += '3. **Se tem agendamento pendente e quer mudar** → Use `atualizarAgendamento`\n';
-    instructions += '4. **Se NÃO tem agendamento** → Siga fluxo de criação:\n';
-    instructions += '   - Coletar serviço, endereço, preferência de data\n';
+    instructions += '2. **Identificar serviço desejado** → Chame `buscarServicoPorNome` com o nome do serviço (sofá, colchão, tapete, etc) e tamanho (3 lugares, casal, etc)\n';
+    instructions += '3. **Verificar se já tem agendamento** → Chame `consultarAgendamentosCliente("proximos")`\n';
+    instructions += '4. **Se tem agendamento pendente e quer mudar** → Use `atualizarAgendamento`\n';
+    instructions += '5. **Se NÃO tem agendamento** → Siga fluxo de criação:\n';
+    instructions += '   - Usar servicoId obtido do passo 2\n';
+    instructions += '   - Coletar endereço, preferência de data\n';
     instructions += '   - Buscar disponibilidade com `buscarDisponibilidades`\n';
-    instructions += '   - Apresentar opções e quando escolher → `criarAgendamento`\n';
-    instructions += '5. **Confirmar ao cliente**: Após função executar, envie resumo\n\n';
+    instructions += '   - Apresentar opções e quando escolher → `criarAgendamento` (com servicoId!)\n';
+    instructions += '6. **Confirmar ao cliente**: Após função executar, envie resumo\n\n';
     
     instructions += '## Exemplos de Chamadas de Função:\n\n';
     instructions += '```\n';
@@ -520,6 +603,68 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     instructions += '**Tamanho Ideal**: 2-4 linhas para respostas rápidas, máximo 8-10 para resumos\n\n';
 
     // ═══════════════════════════════════════════════════════════════════
+    // 12.5 APRESENTAÇÃO INTELIGENTE DE HORÁRIOS
+    // ═══════════════════════════════════════════════════════════════════
+    instructions += '\n# 🕐 APRESENTAÇÃO INTELIGENTE DE HORÁRIOS\n\n';
+
+    instructions += '## Regras para Disponibilidades\n';
+    instructions += 'Ao apresentar horários disponíveis, seja INTELIGENTE e CONCISO:\n\n';
+
+    instructions += '**Se horários são SEQUENCIAIS** (diferença de 1h entre eles):\n';
+    instructions += '✅ "Tenho disponibilidade das 8h às 11h"\n';
+    instructions += '✅ "Posso atender entre 14h e 17h"\n';
+    instructions += '❌ NÃO liste cada horário individualmente (08:00, 09:00, 10:00...)\n\n';
+
+    instructions += '**Se horários são ESPAÇADOS** (poucos, não sequenciais):\n';
+    instructions += '✅ "Tenho horário às 9h, 14h e 16h"\n';
+    instructions += '✅ "Disponível às 10h ou às 15h"\n\n';
+
+    instructions += '**Formato de horário em TEXTO**:\n';
+    instructions += '- Use "8h", "14h30", "9h" (curto e claro)\n';
+    instructions += '- NUNCA use zeros à esquerda: "08:00" → "8h"\n';
+    instructions += '- Para intervalos: "das 8h às 11h" ou "entre 14h e 17h"\n\n';
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 12.6 MODO ÁUDIO - INSTRUÇÕES ESPECIAIS (quando outputFormat === 'audio')
+    // ═══════════════════════════════════════════════════════════════════
+    if (outputFormat === 'audio') {
+        instructions += '\n# 🎤 MODO ÁUDIO ATIVO\n\n';
+        instructions += '⚠️ **IMPORTANTE**: Esta resposta será convertida em ÁUDIO. Siga estas regras:\n\n';
+
+        instructions += '## Formatação para Áudio\n';
+        instructions += '1. **Seja CONCISO** - áudios longos cansam o ouvinte\n';
+        instructions += '2. **Escreva datas por extenso**: "dois de fevereiro" não "02/02"\n';
+        instructions += '3. **Escreva horários por extenso**: "oito horas" não "08:00"\n';
+        instructions += '4. **Use intervalos**: "das oito às onze" não lista de horários\n';
+        instructions += '5. **Evite emojis** - não fazem sentido em áudio\n';
+        instructions += '6. **Evite formatação**: *negrito* e _itálico_ serão ignorados\n';
+        instructions += '7. **Máximo 3-4 frases** por resposta de áudio\n\n';
+
+        instructions += '## 🎭 EXPRESSIVIDADE (Audio Tags)\n\n';
+        instructions += 'Use tags de expressividade para soar mais natural e humano:\n\n';
+
+        instructions += '**Tags úteis para atendimento:**\n';
+        instructions += '- `[warmly]` - tom acolhedor, ótimo para saudações\n';
+        instructions += '- `[cheerfully]` - tom alegre\n';
+        instructions += '- `[reassuringly]` - tom tranquilizador\n';
+        instructions += '- `[whispers]` - para informações mais íntimas\n';
+        instructions += '- `[giggles]` ou `[laughs]` - momentos leves\n';
+        instructions += '- `[sighs]` - compreensão ou resignação\n\n';
+
+        instructions += '**Exemplos de uso natural:**\n';
+        instructions += '✅ "[warmly] Que bom falar com você! Sobre a limpeza do sofá..."\n';
+        instructions += '✅ "Perfeito! [cheerfully] Consegui um horário ótimo..."\n';
+        instructions += '✅ "[whispers] Entre nós, esse horário é bem tranquilo"\n';
+        instructions += '✅ "Ah, entendo... [sighs] Vamos encontrar uma solução"\n\n';
+
+        instructions += '**REGRAS de Audio Tags:**\n';
+        instructions += '- Use 1-2 tags por mensagem no MÁXIMO\n';
+        instructions += '- Tags devem parecer reações NATURAIS e espontâneas\n';
+        instructions += '- NUNCA force uma tag que não faça sentido no contexto\n';
+        instructions += '- `[warmly]` é ideal para início de atendimento\n\n';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // 13. EXEMPLOS DE RESPOSTAS
     // ═══════════════════════════════════════════════════════════════════
     instructions += '\n# 💡 EXEMPLOS DE RESPOSTAS\n\n';
@@ -535,7 +680,60 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     instructions += '"Oi! Só passando pra confirmar nosso agendamento de amanhã às 9h. Tudo certo? 😊"\n\n';
 
     // ═══════════════════════════════════════════════════════════════════
-    // 14. REGRAS FINAIS INVIOLÁVEIS
+    // 14. ENDEREÇOS E LOCAIS - GOOGLE MAPS GROUNDING
+    // ═══════════════════════════════════════════════════════════════════
+    instructions += '\n# 📍 ENDEREÇOS E LOCAIS\n\n';
+
+    instructions += '## Quando cliente informar um LOCAL em vez de endereço completo:\n';
+    instructions += '**OBRIGATÓRIO**: Use `buscarEnderecoPorLocal` para converter o local em endereço!\n\n';
+
+    instructions += '**Exemplos de LOCAIS** (precisam de busca):\n';
+    instructions += '- "Perto do Shopping Palladium"\n';
+    instructions += '- "No Terminal Pinheirinho"\n';
+    instructions += '- "Próximo à Praça Osório"\n';
+    instructions += '- "No centro de Curitiba"\n';
+    instructions += '- "Bairro Água Verde"\n\n';
+
+    instructions += '**O que fazer**:\n';
+    instructions += '1. Chame `buscarEnderecoPorLocal(local, "Curitiba, PR")`\n';
+    instructions += '2. A função retorna endereço completo com rua, número, bairro\n';
+    instructions += '3. Use esse endereço no agendamento\n';
+    instructions += '4. IMPORTANTE: Calcule também a taxa de deslocamento!\n\n';
+
+    instructions += '## Taxa de Deslocamento:\n';
+    instructions += '- Após obter o endereço, chame `calcularTaxaDeslocamento`\n';
+    instructions += '- Se o endereço estiver fora do raio base, informe a taxa ao cliente\n';
+    instructions += '- Formato: "O endereço fica a X km, há uma taxa adicional de R$ Y"\n\n';
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 15. SERVIÇOS - SEMPRE VINCULAR AO AGENDAMENTO
+    // ═══════════════════════════════════════════════════════════════════
+    instructions += '\n# 🛠️ VINCULAÇÃO DE SERVIÇOS AO AGENDAMENTO\n\n';
+
+    instructions += '⚠️ **REGRA CRÍTICA**: Todo agendamento DEVE ter serviço e valor vinculados!\n\n';
+
+    instructions += '**Antes de criar agendamento**:\n';
+    instructions += '1. Se souber o nome do serviço mas não o ID, chame `buscarServicoPorNome`\n';
+    instructions += '2. A função retorna o ID do serviço, preço e duração\n';
+    instructions += '3. Use esses dados ao chamar `criarAgendamento`\n\n';
+
+    instructions += '**Ao chamar `criarAgendamento`, SEMPRE inclua**:\n';
+    instructions += '- `servicoId` ou `nomeServico`: para vincular o serviço\n';
+    instructions += '- `valor`: valor do serviço (obtido de buscarServicoPorNome ou tabela de preços)\n';
+    instructions += '- `endereco`: endereço do atendimento (pode vir de buscarEnderecoPorLocal)\n\n';
+
+    instructions += '**Exemplo de fluxo correto**:\n';
+    instructions += '```\n';
+    instructions += '1. Cliente: "Quero limpeza de sofá 3 lugares"\n';
+    instructions += '2. Você: buscarServicoPorNome("sofá", "3 lugares") → ID 5, R$ 306,90\n';
+    instructions += '3. Cliente: "Pode ser na quinta às 10h, perto do Shopping"\n';
+    instructions += '4. Você: buscarEnderecoPorLocal("Shopping Palladium", "Curitiba, PR")\n';
+    instructions += '5. Você: calcularTaxaDeslocamento(...) → taxa R$ 15,00\n';
+    instructions += '6. Você: criarAgendamento(data, hora, servicoId: 5, valor: 321.90, endereco: {...})\n';
+    instructions += '```\n\n';
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 16. REGRAS FINAIS INVIOLÁVEIS
     // ═══════════════════════════════════════════════════════════════════
     instructions += '\n# 🚫 FRASES ABSOLUTAMENTE PROIBIDAS\n\n';
     instructions += '❌ "não tenho acesso" - USE AS FERRAMENTAS!\n';
@@ -544,10 +742,12 @@ async function buildSystemInstructions(config, context = {}, options = {}) {
     instructions += '❌ "sou uma IA" / "sou um chatbot" / "assistente virtual"\n';
     instructions += '❌ "não consigo ver" / "não consigo acessar"\n';
     instructions += '❌ Repetir saudação ("Olá!") em conversa em andamento\n\n';
-    
+
     instructions += '✅ **QUANDO PERGUNTAREM SOBRE AGENDAMENTOS**: Chame `consultarAgendamentosCliente("ultimos")` IMEDIATAMENTE!\n';
     instructions += '✅ **SE PRECISAR DE AJUDA**: Diga "Um momento, vou verificar" e use suas ferramentas.\n';
-    instructions += '✅ **VOCÊ TEM ACESSO A TUDO** através das ferramentas. Use-as!\n\n';
+    instructions += '✅ **VOCÊ TEM ACESSO A TUDO** através das ferramentas. Use-as!\n';
+    instructions += '✅ **LOCAL ≠ ENDEREÇO**: Se cliente falar um LOCAL, use `buscarEnderecoPorLocal`!\n';
+    instructions += '✅ **SEMPRE VINCULE SERVIÇO**: Agendamento sem serviço = ERRO!\n\n';
 
     return instructions;
 }
@@ -731,13 +931,20 @@ async function generateGeminiText({
     // Verificar se já houve mensagem do assistente
     const hasPreviousAssistantMessage = fullHistory.some(m => m.role === 'model');
 
+    // Determinar formato de saída (audio ou text) - passado pelo contexto ou opções
+    const outputFormat = context.outputFormat || 'text';
+
     // Construir instruções do sistema
-    let systemInstructions = await buildSystemInstructions(config, context, { hasPreviousAssistantMessage });
+    let systemInstructions = await buildSystemInstructions(config, context, {
+        hasPreviousAssistantMessage,
+        outputFormat
+    });
 
     // Adicionar pipeline da empresa
     try {
         const { getPipelineResumoParaIA } = require('./negocioHelper');
-        const resumoPipeline = await getPipelineResumoParaIA();
+        const empresa_id = context?.empresa_id || null;
+        const resumoPipeline = await getPipelineResumoParaIA(empresa_id);
 
         if (resumoPipeline && resumoPipeline.trim()) {
             systemInstructions += `\n\n# 🎯 PIPELINE DE VENDAS\n\n${resumoPipeline}\n`;
@@ -751,7 +958,8 @@ async function generateGeminiText({
         try {
             const clienteId = context.cliente.cli_Id || context.cliente.id;
             const { getResumoClienteParaIA } = require('./clienteHelper');
-            const resumoCliente = await getResumoClienteParaIA(clienteId);
+            const empresa_id_cli = context?.empresa_id || null;
+            const resumoCliente = await getResumoClienteParaIA(clienteId, empresa_id_cli);
 
             if (resumoCliente && resumoCliente.textoResumo) {
                 systemInstructions += `\n\n# 👤 INFORMAÇÕES DO CLIENTE ATUAL\n\n${resumoCliente.textoResumo}\n`;
@@ -1062,15 +1270,24 @@ async function generateGeminiTextWithActions(params) {
             try {
                 const execResult = await executeToolFunction(fnName, args, geminiParams.context || {});
                 actionsExecuted.push({ function: fnName, result: execResult });
-                Object.assign(contextUpdates, execResult?.contextUpdates || {});
-                
+
+                // Aplicar contextUpdates imediatamente ao contexto para funções subsequentes no mesmo turno
+                if (execResult?.contextUpdates) {
+                    Object.assign(contextUpdates, execResult.contextUpdates);
+                    // Aplicar também ao contexto atual para que próximas funções vejam os valores
+                    if (geminiParams.context) {
+                        Object.assign(geminiParams.context, execResult.contextUpdates);
+                        console.log(`   📝 Context atualizado:`, Object.keys(execResult.contextUpdates));
+                    }
+                }
+
                 functionResponses.push({
                     functionResponse: {
                         name: fnName,
                         response: execResult
                     }
                 });
-                
+
                 console.log(`   ✅ ${fnName} executado com sucesso`);
             } catch (err) {
                 console.error(`   ❌ Erro em ${fnName}:`, err.message);

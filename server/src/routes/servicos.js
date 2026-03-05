@@ -13,6 +13,7 @@ const util = require('util');
 require('dotenv').config();
 const paginateArray = (array, perPage, page) => array.slice((page - 1) * perPage, page * perPage)
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const caminhoimg = path.join(__dirname, '../uploads/fotos-perfil');
 
 const storage = multer.diskStorage({
@@ -36,14 +37,15 @@ router.get('/list', async (req, res) => {
         search = false
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
     const offset = (page - 1) * itemsPerPage;
 
-    let query = `SELECT * FROM SERVICOS_NEW WHERE 1 = 1`;
+    let query = `SELECT * FROM SERVICOS_NEW WHERE empresa_id = ${parseInt(empresa_id)}`;
 
     if (q) {
         let idsSubs = [];
 
-        let subsQ = await dbQuery(`SELECT * FROM SERVICOS_SUBS WHERE ser_nome LIKE '%${q}%' OR ser_descricao LIKE '%${q}%' OR ser_valor LIKE '%${q}%'`);
+        let subsQ = await dbQuery(`SELECT * FROM SERVICOS_SUBS WHERE empresa_id = ? AND (ser_nome LIKE '%${q}%' OR ser_descricao LIKE '%${q}%' OR ser_valor LIKE '%${q}%')`, [empresa_id]);
 
         if (subsQ && subsQ.length > 0) {
             idsSubs = subsQ.map(s => s.ser_pai);
@@ -70,12 +72,12 @@ router.get('/list', async (req, res) => {
     }
 
     try {
-        let totalServicos = await dbQuery(`SELECT COUNT(*) AS total FROM SERVICOS_NEW`);
+        let totalServicos = await dbQuery(`SELECT COUNT(*) AS total FROM SERVICOS_NEW WHERE empresa_id = ?`, [empresa_id]);
 
         const servicos = await dbQuery(query);
 
         for (let servico of servicos) {
-            let subservicos = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_pai = ?', [servico.ser_id]);
+            let subservicos = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_pai = ? AND empresa_id = ?', [servico.ser_id, empresa_id]);
             servico.ser_subservicos = subservicos.map(sub => {
                 if (sub.ser_data) {
                     sub.ser_data = JSON.parse(sub.ser_data);
@@ -130,16 +132,17 @@ router.get('/list', async (req, res) => {
 
 router.get('/get/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        const servicoQuery = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ?', [id]);
+        const servicoQuery = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND empresa_id = ?', [id, empresa_id]);
         if (servicoQuery.length === 0) {
             return res.status(404).json({ message: 'Serviço não encontrado' });
         }
 
         const servico = servicoQuery[0];
 
-        let subservicos = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_pai = ?', [servico.ser_id]);
+        let subservicos = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_pai = ? AND empresa_id = ?', [servico.ser_id, empresa_id]);
 
         servico.ser_subservicos = subservicos.map(sub => {
             if (sub.ser_data) {
@@ -157,6 +160,7 @@ router.get('/get/:id', async (req, res) => {
 })
 
 router.post('/upsert', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { ser_id = null, ser_nome, ser_descricao, ser_valor, ser_comissao_type = null, ser_comissao = null, ser_subservicos = [] } = req.body;
 
     if (!ser_nome) {
@@ -169,8 +173,8 @@ router.post('/upsert', async (req, res) => {
 
     try {
         if (!ser_id) {
-            let novoServico = await dbQuery('INSERT INTO SERVICOS_NEW (ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao) VALUES (?, ?, ?, ?, ?)',
-                [ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao]);
+            let novoServico = await dbQuery('INSERT INTO SERVICOS_NEW (ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao, empresa_id) VALUES (?, ?, ?, ?, ?, ?)',
+                [ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao, empresa_id]);
 
             const servicoId = novoServico.insertId;
 
@@ -188,15 +192,15 @@ router.post('/upsert', async (req, res) => {
                     objSub.ser_data = JSON.stringify(subservico.ser_data);
                 }
 
-                let novoSub = await dbQuery('INSERT INTO SERVICOS_SUBS (ser_nome, ser_descricao, ser_valor, ser_pai, ser_data, ser_comissao_type, ser_comissao) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_pai, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null]);
+                let novoSub = await dbQuery('INSERT INTO SERVICOS_SUBS (ser_nome, ser_descricao, ser_valor, ser_pai, ser_data, ser_comissao_type, ser_comissao, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_pai, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null, empresa_id]);
             }
         } else {
-            await dbQuery('UPDATE SERVICOS_NEW SET ser_nome = ?, ser_descricao = ?, ser_valor = ?, ser_comissao_type = ?, ser_comissao = ? WHERE ser_id = ?',
-                [ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao, ser_id]);
+            await dbQuery('UPDATE SERVICOS_NEW SET ser_nome = ?, ser_descricao = ?, ser_valor = ?, ser_comissao_type = ?, ser_comissao = ? WHERE ser_id = ? AND empresa_id = ?',
+                [ser_nome, ser_descricao, ser_valor, ser_comissao_type, ser_comissao, ser_id, empresa_id]);
 
             const atualizados = [];
-            const subsAtuais = await dbQuery('SELECT ser_id FROM SERVICOS_SUBS WHERE ser_pai = ?', [ser_id]);
+            const subsAtuais = await dbQuery('SELECT ser_id FROM SERVICOS_SUBS WHERE ser_pai = ? AND empresa_id = ?', [ser_id, empresa_id]);
 
             for (let subservico of ser_subservicos) {
                 if (subservico.ser_id) {
@@ -213,8 +217,8 @@ router.post('/upsert', async (req, res) => {
                         objSub.ser_data = JSON.stringify(subservico.ser_data);
                     }
 
-                    await dbQuery('UPDATE SERVICOS_SUBS SET ser_nome = ?, ser_descricao = ?, ser_valor = ?, ser_data = ?, ser_comissao_type = ?, ser_comissao = ? WHERE ser_id = ?',
-                        [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null, subservico.ser_id]);
+                    await dbQuery('UPDATE SERVICOS_SUBS SET ser_nome = ?, ser_descricao = ?, ser_valor = ?, ser_data = ?, ser_comissao_type = ?, ser_comissao = ? WHERE ser_id = ? AND empresa_id = ?',
+                        [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null, subservico.ser_id, empresa_id]);
 
                     atualizados.push(subservico.ser_id);
                 } else {
@@ -232,15 +236,15 @@ router.post('/upsert', async (req, res) => {
                         objSub.ser_data = JSON.stringify(subservico.ser_data);
                     }
 
-                    let novoSub = await dbQuery('INSERT INTO SERVICOS_SUBS (ser_nome, ser_descricao, ser_valor, ser_pai, ser_data, ser_comissao_type, ser_comissao) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_pai, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null]);
+                    let novoSub = await dbQuery('INSERT INTO SERVICOS_SUBS (ser_nome, ser_descricao, ser_valor, ser_pai, ser_data, ser_comissao_type, ser_comissao, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                        [objSub.ser_nome, objSub.ser_descricao, objSub.ser_valor, objSub.ser_pai, objSub.ser_data || null, objSub.ser_comissao_type || null, objSub.ser_comissao || null, empresa_id]);
                 }
             }
 
             const excluidos = subsAtuais.filter(s => !atualizados.includes(s.ser_id)).map(s => s.ser_id);
 
             if (excluidos.length > 0) {
-                await dbQuery(`DELETE FROM SERVICOS_SUBS WHERE ser_id IN (${excluidos.join(',')})`);
+                await dbQuery(`DELETE FROM SERVICOS_SUBS WHERE ser_id IN (${excluidos.join(',')}) AND empresa_id = ?`, [empresa_id]);
             }
         }
 
@@ -253,10 +257,11 @@ router.post('/upsert', async (req, res) => {
 
 router.get('/delete/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery('DELETE FROM SERVICOS_NEW WHERE ser_id = ?', [id]);
-        await dbQuery('DELETE FROM SERVICOS_SUBS WHERE ser_pai = ?', [id]);
+        await dbQuery('DELETE FROM SERVICOS_NEW WHERE ser_id = ? AND empresa_id = ?', [id, empresa_id]);
+        await dbQuery('DELETE FROM SERVICOS_SUBS WHERE ser_pai = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Serviço deletado com sucesso' });
     } catch (error) {
@@ -267,14 +272,15 @@ router.get('/delete/:id', async (req, res) => {
 
 router.post('/removeOldServico', async (req, res) => {
     const { ser_id, age_id } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     if (!ser_id || !age_id) {
         return res.status(400).json({ message: 'O ID do serviço e do agendamento são obrigatórios' });
     }
 
     try {
-        await dbQuery('DELETE FROM AGENDAMENTO_X_SERVICOS WHERE ser_id = ? AND age_id = ?', [ser_id, age_id]);
-        await dbQuery('DELETE FROM SERVICOS WHERE ser_id = ?', [ser_id]);
+        await dbQuery('DELETE FROM AGENDAMENTO_X_SERVICOS WHERE ser_id = ? AND age_id = ? AND empresa_id = ?', [ser_id, age_id, empresa_id]);
+        await dbQuery('DELETE FROM SERVICOS WHERE ser_id = ? AND empresa_id = ?', [ser_id, empresa_id]);
 
         res.status(200).json({ message: 'Serviço removido com sucesso' });
     } catch (error) {
@@ -285,13 +291,14 @@ router.post('/removeOldServico', async (req, res) => {
 
 router.post('/mover-subservico', async (req, res) => {
     const { ser_pai, sub_id } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     if (!ser_pai || !sub_id) {
         return res.status(400).json({ message: 'Dados inválidos' });
     }
-    
+
     try {
-        await dbQuery('UPDATE SERVICOS_SUBS SET ser_pai = ? WHERE ser_id = ?', [ser_pai, sub_id]);
+        await dbQuery('UPDATE SERVICOS_SUBS SET ser_pai = ? WHERE ser_id = ? AND empresa_id = ?', [ser_pai, sub_id, empresa_id]);
 
         res.status(200).json({ message: 'Subserviço movido com sucesso' });
     } catch (error) {

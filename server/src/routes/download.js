@@ -119,4 +119,37 @@ router.get('/templates/file/:filename', (req, res) => {
     });
 });
 
+router.get('/docs/contratos/:id/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const id = req.params.id;
+    const directoryPath = path.join(__dirname, `../files/contratos/${id}`);
+    const filePath = path.join(directoryPath, filename);
+
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+    res.sendFile(filePath, (err) => {
+        if (err) {
+            res.status(500).send({
+                message: "Não foi possível exibir o arquivo. " + err,
+            });
+        }
+    });
+});
+
+router.get('/docs/orcamentos/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const directoryPath = path.join(__dirname, `../files/orcamentos`);
+    const filePath = path.join(directoryPath, filename);
+
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+    res.sendFile(filePath, (err) => {
+        if (err) {
+            res.status(500).send({
+                message: "Não foi possível exibir o arquivo. " + err,
+            });
+        }
+    });
+});
+
 module.exports = router;

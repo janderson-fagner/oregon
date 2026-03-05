@@ -64,6 +64,7 @@ router.post('/format-content', async (req, res) => {
 
 router.get('/seg/list', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             q = '',
             sortBy = '',
@@ -73,7 +74,8 @@ router.get('/seg/list', async (req, res) => {
         } = req.query;
 
         // SQL
-        let query = 'SELECT * FROM Segmentacoes WHERE 1 = 1';
+        let query = 'SELECT * FROM Segmentacoes WHERE 1 = 1 AND empresa_id = ?';
+        let queryParams = [empresa_id];
 
         // Adicione filtros condicionais
         if (q) {
@@ -90,9 +92,9 @@ router.get('/seg/list', async (req, res) => {
         // Adicione paginação
         query += ` LIMIT ${parseInt(itemsPerPage)} OFFSET ${(page - 1) * parseInt(itemsPerPage)}`;
 
-        let segmentacoes = await dbQuery(query);
+        let segmentacoes = await dbQuery(query, queryParams);
 
-        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Segmentacoes');
+        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Segmentacoes WHERE empresa_id = ?', [empresa_id]);
         let totalSegmentacoes = !q ? totalQuery[0].total : segmentacoes.length;
 
 
@@ -115,19 +117,20 @@ router.get('/seg/list', async (req, res) => {
 
 router.get('/seg/gets', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { retornarUsers = false } = req.query;
 
-        let query = 'SELECT * FROM Segmentacoes';
-        let segmentacoes = await dbQuery(query);
+        let query = 'SELECT * FROM Segmentacoes WHERE empresa_id = ?';
+        let segmentacoes = await dbQuery(query, [empresa_id]);
 
         for (let seg of segmentacoes) {
             let rules = seg.rules ? JSON.parse(seg.rules) : [];
             seg.rules = rules;
 
             if (!retornarUsers) {
-                seg.totalUsers = await getSegTotalUsers(rules);
+                seg.totalUsers = await getSegTotalUsers(rules, empresa_id);
             } else {
-                let users = await getSegUsers(rules);
+                let users = await getSegUsers(rules, empresa_id);
                 seg.users = users;
                 for (let user of users) {
                     user.address = user.address ? JSON.parse(user.address) : null;
@@ -146,6 +149,7 @@ router.get('/seg/gets', async (req, res) => {
 
 router.post('/seg/save', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             data
         } = req.body;
@@ -170,11 +174,11 @@ router.post('/seg/save', async (req, res) => {
         }
 
         if (id) {
-            let query = 'UPDATE Segmentacoes SET name = ?, description = ?, rules = ? WHERE id = ?';
-            await dbQuery(query, [name, description, JSON.stringify(rules), id]);
+            let query = 'UPDATE Segmentacoes SET name = ?, description = ?, rules = ? WHERE id = ? AND empresa_id = ?';
+            await dbQuery(query, [name, description, JSON.stringify(rules), id, empresa_id]);
         } else {
-            let query = 'INSERT INTO Segmentacoes (name, description, rules) VALUES (?, ?, ?)';
-            await dbQuery(query, [name, description, JSON.stringify(rules)]);
+            let query = 'INSERT INTO Segmentacoes (name, description, rules, empresa_id) VALUES (?, ?, ?, ?)';
+            await dbQuery(query, [name, description, JSON.stringify(rules), empresa_id]);
         }
 
         res.status(200).send('Segmentação criada com sucesso');
@@ -186,12 +190,13 @@ router.post('/seg/save', async (req, res) => {
 
 router.delete('/seg/delete/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             id
         } = req.params;
 
-        let query = 'DELETE FROM Segmentacoes WHERE id = ?';
-        await dbQuery(query, [id]);
+        let query = 'DELETE FROM Segmentacoes WHERE id = ? AND empresa_id = ?';
+        await dbQuery(query, [id, empresa_id]);
 
         res.status(200).send('Segmentação deletada com sucesso');
     } catch (error) {
@@ -202,12 +207,13 @@ router.delete('/seg/delete/:id', async (req, res) => {
 
 router.get('/get-seg/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             id
         } = req.params;
 
-        let query = 'SELECT * FROM Segmentacoes WHERE id = ?';
-        let segmentacao = await dbQuery(query, [id]);
+        let query = 'SELECT * FROM Segmentacoes WHERE id = ? AND empresa_id = ?';
+        let segmentacao = await dbQuery(query, [id, empresa_id]);
 
         if (segmentacao.length === 0) {
             return res.status(404).send('Segmentação não encontrada');
@@ -226,6 +232,7 @@ router.get('/get-seg/:id', async (req, res) => {
 
 router.post('/seg/totalUsers', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             data
         } = req.body;
@@ -234,7 +241,7 @@ router.post('/seg/totalUsers', async (req, res) => {
             return res.status(400).send('Dados inválidos');
         }
 
-        let result = await getSegTotalUsers(data.rules);
+        let result = await getSegTotalUsers(data.rules, empresa_id);
 
         res.status(200).send(result);
     } catch (error) {
@@ -245,6 +252,7 @@ router.post('/seg/totalUsers', async (req, res) => {
 
 router.get('/seg/get-infos-users', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         //let query = 'SELECT * FROM CLIENTES WHERE cli_celular IS NOT NULL AND cli_celular != "" AND cli_email IS NOT NULL AND cli_email != ""';
 
         let query = `
@@ -286,6 +294,7 @@ router.get('/seg/get-infos-users', async (req, res) => {
                         )
                     ) AS negocios
                 FROM Negocios
+                WHERE empresa_id = ?
                 GROUP BY cli_id
             ) n ON n.cli_id = c.cli_id
             LEFT JOIN (
@@ -305,14 +314,16 @@ router.get('/seg/get-infos-users', async (req, res) => {
                 LEFT JOIN PAGAMENTO p
                     ON p.age_id = a.age_id
                 AND p.pgt_data IS NOT NULL
+                WHERE a.empresa_id = ?
                 GROUP BY a.cli_id
             ) p ON p.cli_id = c.cli_id
             WHERE (NULLIF(TRIM(c.cli_celular), '') IS NOT NULL
-            OR NULLIF(TRIM(c.cli_email),   '') IS NOT NULL);
+            OR NULLIF(TRIM(c.cli_email),   '') IS NOT NULL)
+            AND c.empresa_id = ?
         `;
 
 
-        let clientes = await dbQuery(query);
+        let clientes = await dbQuery(query, [empresa_id, empresa_id, empresa_id]);
 
         console.log('clientes', clientes[0]);
 
@@ -416,6 +427,7 @@ router.get('/seg/get-infos-users', async (req, res) => {
 
 router.get('/campanhas/list', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             dataEnvioDe = null,
             dataEnvioAte = null,
@@ -429,7 +441,8 @@ router.get('/campanhas/list', async (req, res) => {
         } = req.query;
 
         // SQL
-        let query = 'SELECT * FROM Campanhas WHERE 1 = 1';
+        let query = 'SELECT * FROM Campanhas WHERE 1 = 1 AND empresa_id = ?';
+        let queryParams = [empresa_id];
 
         if (i) {
             query += ` AND id = ${i}`;
@@ -476,7 +489,7 @@ router.get('/campanhas/list', async (req, res) => {
         // Adicione paginação
         query += ` LIMIT ${parseInt(itemsPerPage)} OFFSET ${(page - 1) * parseInt(itemsPerPage)}`;
 
-        let campanhas = await dbQuery(query);
+        let campanhas = await dbQuery(query, queryParams);
 
         let idsCampanhas = campanhas.map(c => c.id);
 
@@ -484,12 +497,12 @@ router.get('/campanhas/list', async (req, res) => {
             let content = campanha.content ? JSON.parse(campanha.content) : [];
             campanha.content = content
 
-            let segmentacao = await dbQuery('SELECT * FROM Segmentacoes WHERE id = ?', [campanha.segmentacao]);
+            let segmentacao = await dbQuery('SELECT * FROM Segmentacoes WHERE id = ? AND empresa_id = ?', [campanha.segmentacao, empresa_id]);
 
             if (segmentacao.length > 0) {
                 campanha.segmentacao = segmentacao[0];
                 campanha.segmentacao.rules = campanha.segmentacao.rules ? JSON.parse(campanha.segmentacao.rules) : [];
-                campanha.segmentacao.totalUsers = await getSegTotalUsers(campanha.segmentacao.rules);
+                campanha.segmentacao.totalUsers = await getSegTotalUsers(campanha.segmentacao.rules, empresa_id);
             }
 
             campanha.data_envio = moment(campanha.data_envio).format('YYYY-MM-DD');
@@ -498,15 +511,15 @@ router.get('/campanhas/list', async (req, res) => {
             campanha.dataLog = dataLog;
 
             if (campanha.dataLog) {
-                let messages = await dbQuery('SELECT * FROM MessagesLog WHERE idCampanha = ?', [campanha.id]);
+                let messages = await dbQuery('SELECT * FROM MessagesLog WHERE idCampanha = ? AND empresa_id = ?', [campanha.id, empresa_id]);
                 campanha.dataLog.messagesLog = messages ?? [];
             }
         }
 
-        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Campanhas');
+        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Campanhas WHERE empresa_id = ?', [empresa_id]);
         let totalCampanhas = totalQuery[0].total;
 
-        let allSegmentacoes = await dbQuery('SELECT * FROM Segmentacoes');
+        let allSegmentacoes = await dbQuery('SELECT * FROM Segmentacoes WHERE empresa_id = ?', [empresa_id]);
 
         res.status(200).send({ campanhas, totalCampanhas, allSegmentacoes });
     } catch (error) {
@@ -517,7 +530,8 @@ router.get('/campanhas/list', async (req, res) => {
 
 router.get('/adjuste-logs', async (req, res) => {
     try {
-        const campanhas = await dbQuery('SELECT * FROM Campanhas WHERE dataLog IS NOT NULL');
+        const empresa_id = req.user.empresa_id;
+        const campanhas = await dbQuery('SELECT * FROM Campanhas WHERE dataLog IS NOT NULL AND empresa_id = ?', [empresa_id]);
 
         const campanhasComLogs = campanhas.filter(c => {
             try {
@@ -543,16 +557,17 @@ router.get('/adjuste-logs', async (req, res) => {
                 m.phone || null,
                 m.cliente || null,
                 m.message || null,
-                m.sucesso || 0
+                m.sucesso || 0,
+                empresa_id
             ]);
 
             if (values.length === 0) continue;
 
-            const placeholders = values.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
+            const placeholders = values.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
             const flatValues = values.flat(); // achata o array para 1 nível
 
             const query = `
-                INSERT INTO MessagesLog (idCampanha, data, phone, cliente, message, sucesso)
+                INSERT INTO MessagesLog (idCampanha, data, phone, cliente, message, sucesso, empresa_id)
                 VALUES ${placeholders}
             `;
 
@@ -565,7 +580,7 @@ router.get('/adjuste-logs', async (req, res) => {
                 const newDataLog = dataLog;
                 delete newDataLog.messagesLog; // Remove o campo messagesLog
 
-                await dbQuery('UPDATE Campanhas SET dataLog = ? WHERE id = ?', [JSON.stringify(newDataLog), campanha.id]);
+                await dbQuery('UPDATE Campanhas SET dataLog = ? WHERE id = ? AND empresa_id = ?', [JSON.stringify(newDataLog), campanha.id, empresa_id]);
                 console.log(`Campanha ${campanha.id} atualizada para concluída`);
             }
         }
@@ -580,12 +595,13 @@ router.get('/adjuste-logs', async (req, res) => {
 
 router.get('/campanhas/get/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             id
         } = req.params;
 
-        let query = 'SELECT * FROM Campanhas WHERE id = ?';
-        let campanha = await dbQuery(query, [id]);
+        let query = 'SELECT * FROM Campanhas WHERE id = ? AND empresa_id = ?';
+        let campanha = await dbQuery(query, [id, empresa_id]);
 
         if (campanha.length === 0) {
             return res.status(404).send('Campanha não encontrada');
@@ -599,13 +615,13 @@ router.get('/campanhas/get/:id', async (req, res) => {
         campanha.modeloEmail = campanha.modeloEmail ? campanha.modeloEmail : null; */
 
         if(campanha.modeloMensagem) {
-            let modeloMensagem = await dbQuery('SELECT * FROM Templates WHERE id = ?', [campanha.modeloMensagem]);
+            let modeloMensagem = await dbQuery('SELECT * FROM Templates WHERE id = ? AND empresa_id = ?', [campanha.modeloMensagem, empresa_id]);
             campanha.modeloDataZap = modeloMensagem?.length > 0 ? modeloMensagem[0] : null;
             campanha.modeloDataZap.content = campanha.modeloDataZap?.content ? JSON.parse(campanha.modeloDataZap.content) : null;
         }
 
         if(campanha.modeloEmail) {
-            let modeloEmail = await dbQuery('SELECT * FROM Templates WHERE id = ?', [campanha.modeloEmail]);
+            let modeloEmail = await dbQuery('SELECT * FROM Templates WHERE id = ? AND empresa_id = ?', [campanha.modeloEmail, empresa_id]);
             campanha.modeloDataEmail = modeloEmail?.length > 0 ? modeloEmail[0] : null;
             campanha.modeloDataEmail.content = campanha.modeloDataEmail?.content ? JSON.parse(campanha.modeloDataEmail.content) : null;
         }
@@ -619,12 +635,13 @@ router.get('/campanhas/get/:id', async (req, res) => {
 
 router.get('/campanhas/duplicate/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             id
         } = req.params;
 
-        let query = 'SELECT * FROM Campanhas WHERE id = ?';
-        let campanha = await dbQuery(query, [id]);
+        let query = 'SELECT * FROM Campanhas WHERE id = ? AND empresa_id = ?';
+        let campanha = await dbQuery(query, [id, empresa_id]);
 
         if (campanha.length === 0) {
             return res.status(404).send('Campanha não encontrada');
@@ -638,8 +655,8 @@ router.get('/campanhas/duplicate/:id', async (req, res) => {
         delete campanha.updated_at;
 
         // Insere a nova campanha duplicada
-        query = 'INSERT INTO Campanhas (name, description, segmentacao, content, status) VALUES (?, ?, ?, ?, ?)';
-        let inserido = await dbQuery(query, [campanha.name + ' (Cópia)', campanha.description, campanha.segmentacao, campanha.content, 'Rascunho']);
+        query = 'INSERT INTO Campanhas (name, description, segmentacao, content, status, empresa_id) VALUES (?, ?, ?, ?, ?, ?)';
+        let inserido = await dbQuery(query, [campanha.name + ' (Cópia)', campanha.description, campanha.segmentacao, campanha.content, 'Rascunho', empresa_id]);
 
         if (inserido.affectedRows > 0) {
             // Recupera o ID da nova campanha inserida
@@ -662,6 +679,7 @@ router.get('/campanhas/duplicate/:id', async (req, res) => {
 
 router.post('/campanhas/save', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             data
         } = req.body;
@@ -706,11 +724,12 @@ router.post('/campanhas/save', async (req, res) => {
             modeloEmail,
             status: 'Criada',
             intervalo,
-            play: 1
+            play: 1,
+            empresa_id
         }
 
         if (id) {
-            await dbQuery('UPDATE Campanhas SET ? WHERE id = ?', [obj, id]);
+            await dbQuery('UPDATE Campanhas SET ? WHERE id = ? AND empresa_id = ?', [obj, id, empresa_id]);
         } else {
             await dbQuery('INSERT INTO Campanhas SET ?', [obj]);
         }
@@ -724,12 +743,13 @@ router.post('/campanhas/save', async (req, res) => {
 
 router.delete('/campanhas/delete/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let {
             id
         } = req.params;
 
-        let query = 'DELETE FROM Campanhas WHERE id = ?';
-        await dbQuery(query, [id]);
+        let query = 'DELETE FROM Campanhas WHERE id = ? AND empresa_id = ?';
+        await dbQuery(query, [id, empresa_id]);
 
         res.status(200).send('Campanha deletada com sucesso');
     } catch (error) {
@@ -740,11 +760,12 @@ router.delete('/campanhas/delete/:id', async (req, res) => {
 
 router.put('/campanhas/handlePlay/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             id
         } = req.params;
 
-        let checkQuery = await dbQuery('SELECT * FROM Campanhas WHERE id = ?', [id]);
+        let checkQuery = await dbQuery('SELECT * FROM Campanhas WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
         if (checkQuery.length === 0) {
             return res.status(404).send('Campanha não encontrada');
         }
@@ -757,8 +778,8 @@ router.put('/campanhas/handlePlay/:id', async (req, res) => {
 
         if (campanha.play) {
             //pausar
-            let query = 'UPDATE Campanhas SET status = ?, play = ? WHERE id = ?';
-            await dbQuery(query, ['Pausada', 0, id]);
+            let query = 'UPDATE Campanhas SET status = ?, play = ? WHERE id = ? AND empresa_id = ?';
+            await dbQuery(query, ['Pausada', 0, id, empresa_id]);
         } else {
             //retomar
             // let hora_envio = campanha.hora_envio ? campanha.hora_envio : moment().format('HH:mm:ss');
@@ -771,8 +792,8 @@ router.put('/campanhas/handlePlay/:id', async (req, res) => {
                 data_envio = moment().format('YYYY-MM-DD');
             }
 
-            await dbQuery('UPDATE Campanhas SET status = ?, play = ?, data_envio = ?, hora_envio = ? WHERE id = ?',
-                ['Agendada', 1, moment(data_envio).format('YYYY-MM-DD'), hora_envio, id]
+            await dbQuery('UPDATE Campanhas SET status = ?, play = ?, data_envio = ?, hora_envio = ? WHERE id = ? AND empresa_id = ?',
+                ['Agendada', 1, moment(data_envio).format('YYYY-MM-DD'), hora_envio, id, empresa_id]
             );
         }
 

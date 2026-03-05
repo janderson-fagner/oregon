@@ -7,6 +7,7 @@ const axios = require('axios');
 const fs = require('fs');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const { sanitizeInput } = require('../utils/functions');
 
 const caminhoMidias = path.join(__dirname, '../files/templates');
@@ -45,6 +46,7 @@ const uploadImagens = multer({ storage: storageImagens });
 
 router.get('/', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             type = 'mensagem',
             q = '',
@@ -54,7 +56,7 @@ router.get('/', async (req, res) => {
             orderBy = 'asc'
         } = req.query;
 
-        let query = `SELECT * FROM Templates WHERE 1=1 AND type = '${sanitizeInput(type)}'`;
+        let query = `SELECT * FROM Templates WHERE 1=1 AND type = '${sanitizeInput(type)}' AND empresa_id = ${parseInt(empresa_id)}`;
 
         if (q) {
             q = sanitizeInput(q);
@@ -74,7 +76,7 @@ router.get('/', async (req, res) => {
 
         const templates = await dbQuery(query);
 
-        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Templates WHERE type = ?', [type]);
+        let totalQuery = await dbQuery('SELECT COUNT(*) as total FROM Templates WHERE type = ? AND empresa_id = ?', [type, empresa_id]);
 
         let totalTemplates = !q ? totalQuery[0].total : templates.length;
 
@@ -121,13 +123,14 @@ router.get('/', async (req, res) => {
 
 router.get('/get/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
         if (!id) {
             return res.status(400).json({ message: 'ID do template não fornecido!' });
         }
 
-        const templateQuery = await dbQuery('SELECT * FROM Templates WHERE id = ?', [id]);
+        const templateQuery = await dbQuery('SELECT * FROM Templates WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         if (templateQuery.length === 0) {
             return res.status(404).json({ message: 'Template não encontrado!' });
@@ -179,6 +182,7 @@ router.post('/save-file', upload.single('file'), async (req, res) => {
 
 router.post('/', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { name, content, midia = null, type } = req.body;
 
         if (!name || !content || !type) {
@@ -190,7 +194,8 @@ router.post('/', async (req, res) => {
             type,
             content: content ? JSON.stringify(content) : null,
             midia: midia ? JSON.stringify(midia) : null,
-            created_at: moment().format('YYYY-MM-DD HH:mm:ss')
+            created_at: moment().format('YYYY-MM-DD HH:mm:ss'),
+            empresa_id
         };
 
         const result = await dbQuery('INSERT INTO Templates SET ?', newTemplate);
@@ -204,6 +209,7 @@ router.post('/', async (req, res) => {
 
 router.put('/', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id, name, content, midia = null, type } = req.body;
 
         if (!id || !name || !content || !type) {
@@ -218,7 +224,7 @@ router.put('/', async (req, res) => {
 
         };
 
-        await dbQuery('UPDATE Templates SET ? WHERE id = ?', [updatedTemplate, id]);
+        await dbQuery('UPDATE Templates SET ? WHERE id = ? AND empresa_id = ?', [updatedTemplate, id, empresa_id]);
 
         res.status(200).json({ ...updatedTemplate });
     } catch (error) {
@@ -229,13 +235,14 @@ router.put('/', async (req, res) => {
 
 router.delete('/delete/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.params;
 
         if (!id) {
             return res.status(400).json({ message: 'ID do template não fornecido!' });
         }
 
-        await dbQuery('DELETE FROM Templates WHERE id = ?', [id]);
+        await dbQuery('DELETE FROM Templates WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
 
         res.status(200).json({ message: 'Template excluído com sucesso!' });
     } catch (error) {

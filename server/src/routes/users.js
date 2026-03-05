@@ -11,6 +11,9 @@ const moment = require('moment-timezone');
 
 const paginateArray = (array, perPage, page) => array.slice((page - 1) * perPage, page * perPage)
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
+const { checkEmployeeLimit } = require('../utils/featureMiddleware');
+const { getBrandFromHost } = require('../utils/brandHelper');
 const caminhoimg = path.join(__dirname, '../uploads/fotos-perfil');
 
 const storage = multer.diskStorage({
@@ -24,8 +27,24 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
+// Endpoint leve para autocomplete/seletores - retorna apenas dados essenciais dos usuários ativos
+router.get('/list-simple', async (req, res) => {
+    try {
+        const empresa_id = req.user.empresa_id;
+        const users = await dbQuery(
+            'SELECT id, fullName, email, role, avatar FROM User WHERE ativo = 1 AND empresa_id = ? ORDER BY fullName ASC',
+            [empresa_id]
+        );
+        res.status(200).json(users);
+    } catch (error) {
+        console.error('Erro ao recuperar usuários (list-simple):', error);
+        res.status(500).send('Erro no servidor.');
+    }
+});
+
 router.get('/list', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const {
             q = '',
             role,
@@ -37,7 +56,8 @@ router.get('/list', async (req, res) => {
         } = req.query;
 
         // SQL
-        let baseQuery = 'FROM User WHERE 1 = 1';
+        let baseQuery = 'FROM User WHERE 1 = 1 AND empresa_id = ?';
+        let queryParams = [empresa_id];
         let r;
 
         // Adicione filtros condicionais
@@ -71,8 +91,8 @@ router.get('/list', async (req, res) => {
         if (itemsPerPage !== '-1' && itemsPerPage !== -1)
             query += ` LIMIT ${parseInt(itemsPerPage)} OFFSET ${(page - 1) * parseInt(itemsPerPage)}`;
 
-
-        const users = await dbQuery(query);
+        // Duplicar empresa_id param para subquery COUNT and main query
+        const users = await dbQuery(query, [...queryParams, ...queryParams]);
 
         res.status(200).json({
             users: users,
@@ -84,7 +104,8 @@ router.get('/list', async (req, res) => {
     }
 });
 
-router.post('/add-user', upload.single('avatar'), async (req, res) => {
+router.post('/add-user', checkEmployeeLimit(), upload.single('avatar'), async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     let { fullname, email, password, role, color = null, expIni = null, expFim = null, podeAgendamento = 0, phone = null } = req.body;
 
     // Verificação de campos obrigatórios
@@ -101,9 +122,22 @@ router.post('/add-user', upload.single('avatar'), async (req, res) => {
     color = color ? color.trim() : null;
     phone = phone ? phone.trim() : null;
 
+    // Bloqueia roles reservadas para outras empresas
+    if (empresa_id !== 1 && ['admin', 'gerente'].includes(role.toLowerCase())) {
+        return res.status(403).send('A função selecionada é reservada e não pode ser atribuída.');
+    }
+
+    // Verifica se a role pertence à empresa
+    if (empresa_id !== 1) {
+        const roleCheck = await dbQuery('SELECT id FROM Roles WHERE role_name = ? AND empresa_id = ?', [role, empresa_id]);
+        if (roleCheck.length === 0) {
+            return res.status(403).send('A função selecionada não pertence à sua empresa.');
+        }
+    }
+
     try {
         // Verificar se o email já está cadastrado
-        let userExists = await dbQuery('SELECT * FROM User WHERE email = ?', [email]);
+        let userExists = await dbQuery('SELECT * FROM User WHERE email = ? AND empresa_id = ?', [email, empresa_id]);
 
         if (userExists.length > 0) {
             // Verifica se o usuário está ativo
@@ -116,9 +150,9 @@ router.post('/add-user', upload.single('avatar'), async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Inicializar consulta SQL
-        let query = 'INSERT INTO User (fullname, email, password, role, podeAgendamento, phone';
-        let placeholders = '?, ?, ?, ?, ?, ?'; // Para os valores que serão substituídos
-        let queryParams = [fullname, email, hashedPassword, role, podeAgendamento, phone]; // Os valores reais
+        let query = 'INSERT INTO User (fullname, email, password, role, podeAgendamento, phone, empresa_id';
+        let placeholders = '?, ?, ?, ?, ?, ?, ?'; // Para os valores que serão substituídos
+        let queryParams = [fullname, email, hashedPassword, role, podeAgendamento, phone, empresa_id]; // Os valores reais
 
         console.log(query, placeholders, queryParams);
 
@@ -177,7 +211,8 @@ router.post('/add-user', upload.single('avatar'), async (req, res) => {
     }
 });
 
-router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
+router.post('/add-user-generate', checkEmployeeLimit(), upload.single('avatar'), async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     let { fullname, email, role, color = null, expIni = null, expFim = null, podeAgendamento = false, phone = null } = req.body;
 
     // Verificação de campos obrigatórios
@@ -194,10 +229,22 @@ router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
     color = color ? color.trim() : null;
     phone = phone ? phone.trim() : null;
 
+    // Bloqueia roles reservadas para outras empresas
+    if (empresa_id !== 1 && ['admin', 'gerente'].includes(role.toLowerCase())) {
+        return res.status(403).send('A função selecionada é reservada e não pode ser atribuída.');
+    }
+
+    if (empresa_id !== 1) {
+        const roleCheck = await dbQuery('SELECT id FROM Roles WHERE role_name = ? AND empresa_id = ?', [role, empresa_id]);
+        if (roleCheck.length === 0) {
+            return res.status(403).send('A função selecionada não pertence à sua empresa.');
+        }
+    }
+
     try {
 
         // Verificar se o email já está cadastrado
-        let userExists = await dbQuery('SELECT * FROM User WHERE email = ?', [email]);
+        let userExists = await dbQuery('SELECT * FROM User WHERE email = ? AND empresa_id = ?', [email, empresa_id]);
 
         if (userExists.length > 0) {
             //Verifica se o usuário está ativo
@@ -209,9 +256,9 @@ router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
         }
 
         // Inicializar consulta SQL
-        let query = 'INSERT INTO User (fullname, email, role, podeAgendamento, phone';
-        let placeholders = '?, ?, ?, ?, ?'; // Para os valores que serão substituídos
-        let queryParams = [fullname, email, role, podeAgendamento, phone]; // Os valores reais
+        let query = 'INSERT INTO User (fullname, email, role, podeAgendamento, phone, empresa_id';
+        let placeholders = '?, ?, ?, ?, ?, ?'; // Para os valores que serão substituídos
+        let queryParams = [fullname, email, role, podeAgendamento, phone, empresa_id]; // Os valores reais
 
         // Incluir avatar na consulta se um arquivo foi carregado
         if (req.file) {
@@ -263,7 +310,8 @@ router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
         //Gerar Token Email
         const tokenEmail = jwt.sign({ id: results.insertId, email: email }, 'oregon_k_g', { expiresIn: '1d' });
 
-        const link_redefinicao = `https://app.oregonservicos.com.br/novaSenha?token=${tokenEmail}`;
+        const brand = getBrandFromHost(req.hostname);
+        const link_redefinicao = `${brand.appUrl}/novaSenha?token=${tokenEmail}`;
 
         // Caminho para o seu template HTML
         const templatePath = path.join(__dirname, '../email-templates', 'resetar-senha.html');
@@ -271,23 +319,25 @@ router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
         const template = handlebars.compile(source);
         const replacements = {
             titulo: 'Defina uma nova senha',
-            descricao_curta: 'Uma conta foi criada para você no sistema da Oregon. Defina agora uma nova senha para acessar o sistema.',
+            descricao_curta: `Uma conta foi criada para você no sistema ${brand.appName}. Defina agora uma nova senha para acessar o sistema.`,
             nome: fullname,
-            mensagem: 'Seja bem-vindo ao sistema da Oregon! Uma conta foi criada para você. Defina agora uma nova senha para aproveitar todos os recursos do nosso sistema.',
+            mensagem: `Seja bem-vindo ao sistema ${brand.appName}! Uma conta foi criada para você. Defina agora uma nova senha para aproveitar todos os recursos do nosso sistema.`,
             tipo: 'Definir',
             link_redefinicao: link_redefinicao,
             exp: '24 horas',
-            email_contato: 'automatico@oregonservicos.com.br',
-            termos: 'app.oregonservicos.com.br'
-
+            email_contato: brand.emailContato,
+            termos: brand.appUrl,
+            app_name: brand.appName,
+            app_url: brand.appUrl,
+            app_logo_url: brand.appUrl + brand.logoUrl,
         };
         const htmlToSend = template(replacements);
 
         // Enviar e-mail com o link para redefinição de senha
         const mailOptions = {
-            from: 'Oregon Higienização <' + process.env.SMTP_FROM + '>',
+            from: brand.emailFrom,
             to: email,
-            subject: 'Bem vindo a Oregon - defina uma nova senha!',
+            subject: `Bem vindo ao ${brand.appName} - defina uma nova senha!`,
             html: htmlToSend
         };
 
@@ -317,6 +367,7 @@ router.post('/add-user-generate', upload.single('avatar'), async (req, res) => {
 router.post('/get-user', async (req, res) => {
 
     try {
+        const empresa_id = req.user.empresa_id;
         const { id } = req.body;
 
         if (!id) {
@@ -324,8 +375,8 @@ router.post('/get-user', async (req, res) => {
         }
 
         // Consulta ao banco de dados
-        const query = 'SELECT * FROM User WHERE id = ?';
-        const results = await dbQuery(query, [id]);
+        const query = 'SELECT * FROM User WHERE id = ? AND empresa_id = ?';
+        const results = await dbQuery(query, [id, empresa_id]);
 
         if (results.length === 0) {
             return res.status(404).json({ message: 'Nenhum usuário encontrado.' });
@@ -339,7 +390,7 @@ router.post('/get-user', async (req, res) => {
 });
 
 router.get('/get-user-id', async (req, res) => {
-
+    const empresa_id = req.user.empresa_id;
     const { id } = req.query;
 
     if (!id) {
@@ -348,8 +399,8 @@ router.get('/get-user-id', async (req, res) => {
 
     try {
         // Consulta ao banco de dados
-        const query = 'SELECT * FROM User WHERE id = ?';
-        const resultsUser = await dbQuery(query, [id]);
+        const query = 'SELECT * FROM User WHERE id = ? AND empresa_id = ?';
+        const resultsUser = await dbQuery(query, [id, empresa_id]);
 
         if (resultsUser.length === 0) {
             return res.status(404).send('Nenhum usuário encontrado.');
@@ -366,6 +417,7 @@ router.get('/get-user-id', async (req, res) => {
 
 router.post('/update-user', upload.single('avatar'), async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         console.log("Update user data", req.body);
 
         let { id, fullname, email, role, password, color, expIni = null, expFim = null, podeAgendamento = false, phone = null } = req.body;
@@ -382,6 +434,17 @@ router.post('/update-user', upload.single('avatar'), async (req, res) => {
         password = password ? password.trim() : null;
         podeAgendamento = podeAgendamento == '1' || podeAgendamento == 'true' ? 1 : 0;
 
+        // Bloqueia roles reservadas para outras empresas
+        if (empresa_id !== 1 && ['admin', 'gerente'].includes(role.toLowerCase())) {
+            return res.status(403).send('A função selecionada é reservada e não pode ser atribuída.');
+        }
+
+        if (empresa_id !== 1) {
+            const roleCheck = await dbQuery('SELECT id FROM Roles WHERE role_name = ? AND empresa_id = ?', [role, empresa_id]);
+            if (roleCheck.length === 0) {
+                return res.status(403).send('A função selecionada não pertence à sua empresa.');
+            }
+        }
 
         let query = 'UPDATE User SET fullname = ?, email = ?, role = ?, podeAgendamento = ?, phone = ?';
         const queryParams = [fullname, email, role, podeAgendamento, phone];
@@ -432,20 +495,21 @@ router.post('/update-user', upload.single('avatar'), async (req, res) => {
             }
         }
 
-        query += ' WHERE id = ?';
+        query += ' WHERE id = ? AND empresa_id = ?';
         queryParams.push(id);
+        queryParams.push(empresa_id);
 
         let results = await dbQuery(query, queryParams);
 
-        const users = await dbQuery('SELECT * FROM User');
+        const users = await dbQuery('SELECT * FROM User WHERE empresa_id = ?', [empresa_id]);
 
         for (let user of users) {
             let dataAgora = moment().tz('America/Sao_Paulo');
 
             if (dataAgora.isAfter(user.expIni) && dataAgora.isBefore(user.expFim) && user.ativo == 0) {
-                await dbQuery('UPDATE User SET ativo = 0 WHERE id = ?', [user.id]);
+                await dbQuery('UPDATE User SET ativo = 0 WHERE id = ? AND empresa_id = ?', [user.id, empresa_id]);
             } else if (dataAgora.isAfter(user.expFim)) {
-                await dbQuery('UPDATE User SET ativo = 0 WHERE id = ?', [user.id]);
+                await dbQuery('UPDATE User SET ativo = 0 WHERE id = ? AND empresa_id = ?', [user.id, empresa_id]);
             }
         }
 
@@ -459,6 +523,7 @@ router.post('/update-user', upload.single('avatar'), async (req, res) => {
 });
 
 router.post('/delete-user', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.body;
 
     if (!id) {
@@ -467,8 +532,8 @@ router.post('/delete-user', async (req, res) => {
 
     // Consulta ao banco de dados
     try {
-        const query = 'UPDATE User SET ativo = 0 WHERE id = ?';
-        await dbQuery(query, [id]);
+        const query = 'UPDATE User SET ativo = 0 WHERE id = ? AND empresa_id = ?';
+        await dbQuery(query, [id, empresa_id]);
 
         res.status(200).json({ message: 'Usuário deletado com sucesso.' });
     } catch (error) {
@@ -478,6 +543,7 @@ router.post('/delete-user', async (req, res) => {
 });
 
 router.post('/restore-user', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
     const { id } = req.body;
 
     if (!id) {
@@ -486,8 +552,8 @@ router.post('/restore-user', async (req, res) => {
 
     // Consulta ao banco de dados
     try {
-        const query = 'UPDATE User SET ativo = 1, expIni = null, expFim = null WHERE id = ?';
-        const results = await dbQuery(query, [id]);
+        const query = 'UPDATE User SET ativo = 1, expIni = null, expFim = null WHERE id = ? AND empresa_id = ?';
+        const results = await dbQuery(query, [id, empresa_id]);
 
         res.status(200).json({ message: 'Usuário restaurado com sucesso.' });
     } catch (error) {

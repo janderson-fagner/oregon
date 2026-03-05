@@ -5,7 +5,7 @@
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const dbQuery = require('../utils/dbHelper');
-const { getIO } = require('../socket');
+const { emitToEmpresa } = require('../socket');
 
 // Armazena as instâncias dos clients ativos
 const clients = new Map();
@@ -125,28 +125,27 @@ async function initClient(clientId) {
             }
         });
 
-        const io = getIO();
+        // empresa_id do client para isolamento de socket
+        const empresaId = clientData[0].empresa_id;
 
         // Evento: QR Code gerado
         client.on('qr', async (qr) => {
             console.log(`📱 QR Code recebido para client ${clientId}`);
             await updateClientStatus(clientId, 'qr_ready', { qr_code: qr });
-            io.emit(`qr-${clientId}`, qr);
-            io.emit('qr', { clientId, qr }); // Mantém compatibilidade
+            emitToEmpresa(empresaId, `qr-${clientId}`, qr);
         });
 
         // Evento: Autenticado
         client.on('authenticated', async () => {
             console.log(`✅ Client ${clientId} autenticado`);
             await updateClientStatus(clientId, 'connected', { qr_code: null });
-            io.emit(`autentica-zap-${clientId}`, 'Autenticado com sucesso!');
-            io.emit('autentica-zap', { clientId, message: 'Autenticado com sucesso!' });
+            emitToEmpresa(empresaId, `autentica-zap-${clientId}`, 'Autenticado com sucesso!');
         });
 
         // Evento: Pronto para uso
         client.once('ready', async () => {
             console.log(`✅ Client ${clientId} está pronto!`);
-            
+
             // Pega informações do número
             try {
                 const info = await client.info;
@@ -162,8 +161,7 @@ async function initClient(clientId) {
         client.on('auth_failure', async (msg) => {
             console.error(`❌ Falha de autenticação do client ${clientId}:`, msg);
             await updateClientStatus(clientId, 'disconnected', { qr_code: null });
-            io.emit(`autentica-error-zap-${clientId}`, 'Houve um erro na autenticação!');
-            io.emit('autentica-error-zap', { clientId, message: 'Houve um erro na autenticação!' });
+            emitToEmpresa(empresaId, `autentica-error-zap-${clientId}`, 'Houve um erro na autenticação!');
         });
 
         // Evento: Desconectado
@@ -171,8 +169,7 @@ async function initClient(clientId) {
             console.log(`⚠️ Client ${clientId} desconectado:`, reason);
             await updateClientStatus(clientId, 'disconnected', { qr_code: null });
             clients.delete(clientId);
-            io.emit(`desconectado-zap-${clientId}`, 'WhatsApp desconectado!');
-            io.emit('desconectado-zap', { clientId, message: 'WhatsApp desconectado!' });
+            emitToEmpresa(empresaId, `desconectado-zap-${clientId}`, 'WhatsApp desconectado!');
         });
 
         // Inicializa o client
@@ -223,11 +220,19 @@ async function disconnectClient(clientId) {
 
 /**
  * Obtém todos os clients cadastrados
+ * @param {number|null} empresa_id - ID da empresa para filtrar (opcional)
  * @returns {Promise<Array>} Lista de clients
  */
-async function getAllClients() {
+async function getAllClients(empresa_id = null) {
     try {
-        const clientsList = await dbQuery('SELECT * FROM Clients ORDER BY created_at DESC');
+        let query = 'SELECT * FROM Clients';
+        let params = [];
+        if (empresa_id) {
+            query += ' WHERE empresa_id = ?';
+            params.push(empresa_id);
+        }
+        query += ' ORDER BY created_at DESC';
+        const clientsList = await dbQuery(query, params);
         return clientsList;
     } catch (error) {
         console.error('Erro ao obter lista de clients:', error);
@@ -239,20 +244,21 @@ async function getAllClients() {
  * Cria um novo client no banco de dados
  * @param {string} clientId - ID único do client
  * @param {string} name - Nome do client
+ * @param {number|null} empresa_id - ID da empresa (opcional)
  * @returns {Promise<Object>} Resultado da criação
  */
-async function createClient(clientId, name) {
+async function createClient(clientId, name, empresa_id = null) {
     try {
         // Verifica se já existe
         const existing = await dbQuery('SELECT * FROM Clients WHERE id = ?', [clientId]);
-        
+
         if (existing.length > 0) {
             return { success: false, message: 'Client já existe' };
         }
 
         await dbQuery(
-            'INSERT INTO Clients (id, name, status) VALUES (?, ?, ?)',
-            [clientId, name, 'disconnected']
+            'INSERT INTO Clients (id, name, status, empresa_id) VALUES (?, ?, ?, ?)',
+            [clientId, name, 'disconnected', empresa_id]
         );
 
         console.log(`✅ Client ${clientId} criado no banco de dados`);

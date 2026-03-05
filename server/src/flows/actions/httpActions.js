@@ -88,15 +88,17 @@ async function executeHttp(config, context) {
         // Mapear variáveis personalizadas
         if (config.responseVariables && Array.isArray(config.responseVariables)) {
             for (const varConfig of config.responseVariables) {
-                if (varConfig.path && varConfig.variableName) {
+                // Aceitar tanto 'variableName' (backend) quanto 'name' (frontend) para compatibilidade
+                const varName = varConfig.variableName || varConfig.name;
+                if (varConfig.path && varName) {
                     try {
                         // Usar eval para acessar propriedades aninhadas
                         // ex: path = "data.user.name" -> response.data.user.name
                         const value = eval(`response.${varConfig.path}`);
-                        contextUpdates[varConfig.variableName] = value;
-                        flowLog.log('INFO', `Variável mapeada: ${varConfig.variableName} = ${value}`);
+                        contextUpdates[varName] = value;
+                        flowLog.log('INFO', `Variável mapeada: ${varName} = ${value}`);
                     } catch (error) {
-                        flowLog.log('WARN', `Erro ao mapear variável ${varConfig.variableName}: ${error.message}`);
+                        flowLog.log('WARN', `Erro ao mapear variável ${varName}: ${error.message}`);
                     }
                 }
             }

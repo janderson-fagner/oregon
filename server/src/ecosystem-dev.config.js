@@ -12,12 +12,14 @@ module.exports = {
               'files',
               'uploads',
               'midias',
+              'logs',
               'session-zap',
               '.wwebjs_auth',
-              '.wwebjs_cache'
+              '.wwebjs_cache',
+              '*.log'
           ],
           watch_options: {
-              followSymlinks: false
+              followSymlinks: false,
           },
           env: {
               NODE_ENV: 'dev' // Definindo a variável de ambiente NODE_ENV

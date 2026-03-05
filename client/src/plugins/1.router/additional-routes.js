@@ -17,7 +17,7 @@ export const routes = [
     path: '/apps/user/view/:id',
     name: 'usuario',
     component: () => import('@/pages/apps/user/view/[id].vue'),
-    meta: { action: 'manage', subject: 'all' },
+    meta: { action: 'manage', subject: 'config_user' },
   },
 
   //Lista Usuários
@@ -27,7 +27,7 @@ export const routes = [
     component: () => import('@/pages/apps/user/list/index.vue'),
     meta: {
       action: 'manage',
-      subject: 'all',
+      subject: 'config_user',
     },
   },
 
@@ -100,7 +100,7 @@ export const routes = [
     component: () => import('@/pages/apps/config/config.vue'),
     meta: {
       action: 'manage',
-      subject: 'all',
+      subject: 'config_gerais',
     },
   },
 
@@ -112,6 +112,7 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -121,6 +122,7 @@ export const routes = [
     meta: {
       action: 'manage',
       subject: 'crm_modelos_mensagens',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -130,6 +132,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_funil_vendas',
+      feature: 'acessoCRM',
     },
   },
    {
@@ -139,6 +142,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_funil_vendas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -148,6 +152,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_funil_vendas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -157,6 +162,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_funil_vendas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -166,6 +172,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_fluxos',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -175,6 +182,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_campanhas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -184,6 +192,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_campanhas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -193,6 +202,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_campanhas',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -202,6 +212,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_chat',
+      feature: 'acessoCRM',
     },
   },
   {
@@ -211,6 +222,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_chat',
+      feature: 'acessoCRM',
     },
   },
 
@@ -234,6 +246,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'estoque',
+      feature: 'gerenciamentoEstoque',
       role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
     },
   },
@@ -244,6 +257,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'estoque',
+      feature: 'gerenciamentoEstoque',
       role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
     },
   },
@@ -254,6 +268,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'estoque',
+      feature: 'gerenciamentoEstoque',
       role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
     },
   },
@@ -264,6 +279,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'estoque',
+      feature: 'gerenciamentoEstoque',
       role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
     },
   },
@@ -425,10 +441,164 @@ export const routes = [
     },
   },
 
+  //Relatórios/Contratos
+  {
+    path: '/relatorios/contratos',
+    name: 'relatoriosContratos',
+    component: () => import('@/pages/apps/relatorios/relatorios.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['financeiro', 'admin', 'gerente']
+    },
+  },
+  //Relatórios/Orçamentos
+  {
+    path: '/relatorios/orcamentos',
+    name: 'relatoriosOrcamentos',
+    component: () => import('@/pages/apps/relatorios/relatorios.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['financeiro', 'admin', 'gerente']
+    },
+  },
+
 /*   {
     path: '/loginn',
     name: 'loginn',
     component: () => import('@/pages/login.vue'),
     meta: { layout: 'blank', unauthenticatedOnly: true },
   }, */
+
+  //SaaS
+  {
+    path: '/saas/empresas',
+    name: 'saas-empresas',
+    component: () => import('@/pages/apps/saas/empresas.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['admin'],
+    },
+  },
+  {
+    path: '/saas/planos',
+    name: 'saas-planos',
+    component: () => import('@/pages/apps/saas/planos.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['admin'],
+    },
+  },
+  {
+    path: '/saas/assinaturas',
+    name: 'saas-assinaturas',
+    component: () => import('@/pages/apps/saas/assinaturas.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['admin'],
+    },
+  },
+  {
+    path: '/saas/config',
+    name: 'saas-configuracoes',
+    component: () => import('@/pages/apps/saas/config.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+      role: ['admin'],
+    },
+  },
+  {
+    path: '/saas/minha-empresa',
+    name: 'saas-minha-empresa',
+    component: () => import('@/pages/apps/saas/minha-empresa.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+    },
+  },
+  {
+    path: '/saas/minha-assinatura',
+    name: 'saas-minha-assinatura',
+    component: () => import('@/pages/apps/saas/minha-assinatura.vue'),
+    meta: {
+      action: 'read',
+      subject: 'all',
+    },
+  },
+  //Contratos
+  {
+    path: '/contratos',
+    name: 'contratos',
+    component: () => import('@/pages/apps/contratos/contratos.vue'),
+    meta: {
+      action: 'view',
+      subject: 'cliente',
+    },
+  },
+  {
+    path: '/contratos/modelos',
+    name: 'contratos-modelos',
+    component: () => import('@/pages/apps/contratos/modelos.vue'),
+    meta: {
+      action: 'view',
+      subject: 'cliente',
+    },
+  },
+  {
+    path: '/contrato/painel/:id',
+    name: 'contrato-painel-cliente',
+    component: () => import('@/pages/apps/contratos/painel-cliente.vue'),
+    meta: {
+      layout: 'blank',
+      unauthenticatedOnly: true,
+      public: true,
+    },
+  },
+  {
+    path: '/contrato/assinar/:token',
+    name: 'contrato-assinatura-publica',
+    component: () => import('@/pages/apps/contratos/assinatura-publica.vue'),
+    meta: {
+      layout: 'blank',
+      unauthenticatedOnly: true,
+    },
+  },
+
+  //Calculadora de Precificação
+  {
+    path: '/calculadora',
+    name: 'calculadora',
+    component: () => import('@/pages/apps/calculadora/index.vue'),
+    meta: {
+      action: 'view',
+      subject: 'calculadora',
+      feature: 'acessoCalculadora',
+    },
+  },
+
+  {
+    path: '/cadastro-empresa',
+    name: 'cadastro',
+    component: () => import('@/pages/cadastro-page.vue'),
+    meta: {
+      layout: 'blank',
+      unauthenticatedOnly: true,
+      public: true,
+    },
+  },
+  {
+    path: '/conheca',
+    name: 'landing',
+    component: () => import('@/pages/landing.vue'),
+    meta: {
+      layout: 'blank',
+      unauthenticatedOnly: true,
+      public: true,
+    },
+  },
 ]

@@ -174,30 +174,6 @@
       });
     });
 
-    // Listeners globais (compatibilidade com eventos antigos)
-    socket.on("qr", (data) => {
-      // Se o evento global não especificar client, assume default (atendimento)
-      if (data.clientId) {
-        const client = clients.value.find(c => c.id === data.clientId);
-        if (client) {
-          QRCode.toDataURL(data.qr || data, (err, url) => {
-            client.qrCode = url;
-            client.conectado = false;
-          });
-        }
-      }
-    });
-
-    socket.on("autentica-zap", (data) => {
-      if (data?.clientId) {
-        const client = clients.value.find(c => c.id === data.clientId);
-        if (client) {
-          setAlert(`${client.name} conectado com sucesso!`, "success", "tabler-check", 5000);
-          client.qrCode = null;
-          client.conectado = true;
-        }
-      }
-    });
   };
 
   // Inicialização

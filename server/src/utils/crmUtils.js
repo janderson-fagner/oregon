@@ -8,11 +8,11 @@ const path = require('path');
 const moment = require('moment');
 const axios = require('axios');
 
-// Importar getIO de forma segura para permitir testes
-let io = null;
+// Importar emitToEmpresa de forma segura para permitir testes
+let emitToEmpresa = () => {};
 try {
-    const { getIO } = require('../socket');
-    io = getIO();
+    const socketModule = require('../socket');
+    emitToEmpresa = socketModule.emitToEmpresa;
 } catch (error) {
     console.warn('⚠️ Socket.io não disponível - rodando em modo de teste');
 }
@@ -20,6 +20,7 @@ try {
 const { sendZapMessage, sendZapMessageImage } = require('../zap');
 
 const dbQuery = require('./dbHelper');
+const { empresaWhere } = require('./dbHelper');
 
 async function waitIntervaloAleatorio(min, max) {
     min = !min ? 15000 : min;
@@ -37,7 +38,8 @@ async function waitIntervaloAleatorio(min, max) {
     return intervaloAleatorio;
 }
 
-async function getSegTotalUsers(rules) {
+async function getSegTotalUsers(rules, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     let qtdRules = rules.length;
 
     if (qtdRules == 0) {
@@ -49,7 +51,7 @@ async function getSegTotalUsers(rules) {
     }
 
     let query = `
-        SELECT 
+        SELECT
             COUNT(DISTINCT c.cli_Id) as total,
             COUNT(DISTINCT CASE WHEN NULLIF(TRIM(c.cli_email), '') IS NOT NULL THEN c.cli_Id END) as totalEmails,
             COUNT(DISTINCT CASE WHEN NULLIF(TRIM(c.cli_celular), '') IS NOT NULL THEN c.cli_Id END) as totalWhatsapp
@@ -77,6 +79,7 @@ async function getSegTotalUsers(rules) {
         ) neg ON neg.cli_Id = c.cli_Id
         WHERE (NULLIF(TRIM(c.cli_celular), '') IS NOT NULL
         OR NULLIF(TRIM(c.cli_email), '') IS NOT NULL)
+        AND c.${ew.sql}
     `;
 
     console.log('RULES:', rules);
@@ -313,7 +316,7 @@ async function getSegTotalUsers(rules) {
 
     console.log('QUERY:', query);
 
-    let result = await dbQuery(query);
+    let result = await dbQuery(query, [...ew.params]);
     let { total, totalEmails, totalWhatsapp } = result[0];
 
     return {
@@ -323,7 +326,8 @@ async function getSegTotalUsers(rules) {
     };
 }
 
-async function getSegUsers(rules) {
+async function getSegUsers(rules, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     let qtdRules = rules.length;
 
     if (qtdRules == 0) {
@@ -400,6 +404,7 @@ async function getSegUsers(rules) {
         ) pag ON pag.cli_id = c.cli_Id
         WHERE (NULLIF(TRIM(c.cli_celular), '') IS NOT NULL
         OR NULLIF(TRIM(c.cli_email), '') IS NOT NULL)
+        AND c.${ew.sql}
     `;
 
     console.log('RULES:', rules);
@@ -636,7 +641,7 @@ async function getSegUsers(rules) {
 
     console.log('QUERY 2:', query);
 
-    let results = await dbQuery(query);
+    let results = await dbQuery(query, [...ew.params]);
     
     // Processar os resultados para converter JSON strings para objetos
     for (let cliente of results) {
@@ -663,11 +668,12 @@ const cleanNumber = (number) => {
 };
 
 // Função para obter transporter SMTP
-async function getSMTPTransporter() {
+async function getSMTPTransporter(empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
         const smtpConfig = await dbQuery(
-            'SELECT value FROM Options WHERE type = ?',
-            ['credenciais_smtp']
+            'SELECT value FROM Options WHERE type = ? AND ' + ew.sql,
+            ['credenciais_smtp', ...ew.params]
         );
 
         if (!smtpConfig || smtpConfig.length === 0) {
@@ -728,8 +734,9 @@ async function getSMTPTransporter() {
     }
 }
 
-async function dispararCampanhas() {
-    let campanhas = await dbQuery('SELECT * FROM Campanhas WHERE (status = "Agendada" OR status = "Criada") AND data_envio IS NOT NULL AND data_envio = ?', [moment().format('YYYY-MM-DD')]);
+async function dispararCampanhas(empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
+    let campanhas = await dbQuery('SELECT * FROM Campanhas WHERE (status = "Agendada" OR status = "Criada") AND data_envio IS NOT NULL AND data_envio = ? AND ' + ew.sql, [moment().format('YYYY-MM-DD'), ...ew.params]);
 
     const saveCampanha = async (campanha, dataLog, status = 'Pausada') => {
         dataLog.dataFim = moment().format('YYYY-MM-DD HH:mm:ss');
@@ -737,14 +744,14 @@ async function dispararCampanhas() {
         const saveDateLog = dataLog;
         delete saveDateLog.messagesLog;
 
-        await dbQuery('UPDATE Campanhas SET status = ?, dataLog = ? WHERE id = ?', [status, JSON.stringify(saveDateLog), campanha.id]);
-        io.emit('atualizacampanha', { id: campanha.id });
+        await dbQuery('UPDATE Campanhas SET status = ?, dataLog = ? WHERE id = ? AND ' + ew.sql, [status, JSON.stringify(saveDateLog), campanha.id, ...ew.params]);
+        emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
 
         console.log('Campanha Salva', campanha.id);
     }
 
     const saveMessageLog = async (campanha, message) => {
-        await dbQuery('INSERT INTO MessagesLog (idCampanha, data, phone, email, cliente, message, tipo, sucesso) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+        await dbQuery('INSERT INTO MessagesLog (idCampanha, data, phone, email, cliente, message, tipo, sucesso, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
             campanha.id,
             message.data || moment().format('YYYY-MM-DD HH:mm:ss'),
             message.phone || null,
@@ -752,7 +759,8 @@ async function dispararCampanhas() {
             message.cliente || '',
             message.message || '',
             message.tipo || 'whatsapp',
-            message.sucesso || false
+            message.sucesso || false,
+            empresa_id
         ]);
     }
 
@@ -768,8 +776,8 @@ async function dispararCampanhas() {
                 continue;
             } else if (moment().hour() > campanha.hora_envio.split(':')[0] || moment().hour() == campanha.hora_envio.split(':')[0] && moment().minute() > campanha.hora_envio.split(':')[1]) {
                 console.log(`❌ Agora é ${moment().format('YYYY-MM-DD HH:mm:ss')} e a campanha ${campanha.id} já deveria ter sido enviada.`);
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Horário de envio passado" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Horário de envio passado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
@@ -787,8 +795,8 @@ async function dispararCampanhas() {
                 
                 if (!clientConnected) {
                     console.error('❌ WhatsApp de Disparos não conectado!');
-                    await dbQuery('UPDATE Campanhas SET status = "Erro: WhatsApp de Disparos não conectado" WHERE id = ?', [campanha.id]);
-                    io.emit('atualizacampanha', { id: campanha.id });
+                    await dbQuery('UPDATE Campanhas SET status = "Erro: WhatsApp de Disparos não conectado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                    emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                     continue;
                 }
             }
@@ -799,8 +807,8 @@ async function dispararCampanhas() {
                 smtpData = await getSMTPTransporter();
                 if (!smtpData) {
                     console.error('❌ SMTP não configurado!');
-                    await dbQuery('UPDATE Campanhas SET status = "Erro: SMTP não configurado" WHERE id = ?', [campanha.id]);
-                    io.emit('atualizacampanha', { id: campanha.id });
+                    await dbQuery('UPDATE Campanhas SET status = "Erro: SMTP não configurado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                    emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                     continue;
                 }
             }
@@ -813,12 +821,12 @@ async function dispararCampanhas() {
                 enviosEmail: { sucesso: 0, erro: 0 }
             };
 
-            let segQuery = await dbQuery('SELECT * FROM Segmentacoes WHERE id = ?', [campanha.segmentacao]);
+            let segQuery = await dbQuery('SELECT * FROM Segmentacoes WHERE id = ? AND ' + ew.sql, [campanha.segmentacao, ...ew.params]);
 
             if (segQuery.length == 0) {
                 console.error('❌ Segmentação não encontrada!');
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Segmentação não encontrada" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Segmentação não encontrada" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
@@ -826,19 +834,19 @@ async function dispararCampanhas() {
 
             if (!segmentacao.rules || segmentacao.rules.length == 0 || segmentacao.rules == 'null') {
                 console.error('❌ Segmentação sem regras!');
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Segmentação sem regras" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Segmentação sem regras" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
             let rules = JSON.parse(segmentacao.rules);
-            let clientes = await getSegUsers(rules);
+            let clientes = await getSegUsers(rules, empresa_id);
 
             console.log('📊 Qtd Clientes:', clientes.length);
             dataLog.qtdClientes = clientes.length;
 
             const dataLogInit = campanha.dataLog ? typeof campanha.dataLog === 'string' ? JSON.parse(campanha.dataLog) : campanha.dataLog : null;
-            const messagesLogs = await dbQuery('SELECT * FROM MessagesLog WHERE idCampanha = ?', [campanha.id]);
+            const messagesLogs = await dbQuery('SELECT * FROM MessagesLog WHERE idCampanha = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
 
             if (dataLogInit && messagesLogs.length > 0) {
                 dataLog = dataLogInit;
@@ -853,8 +861,8 @@ async function dispararCampanhas() {
 
             if (clientes.length == 0) {
                 console.error('❌ Nenhum cliente encontrado!');
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Nenhum cliente encontrado" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Nenhum cliente encontrado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
@@ -863,7 +871,7 @@ async function dispararCampanhas() {
             let modeloEmail = null;
 
             if (hasWhatsApp && campanha.modeloMensagem) {
-                const modeloQuery = await dbQuery('SELECT * FROM Templates WHERE id = ?', [campanha.modeloMensagem]);
+                const modeloQuery = await dbQuery('SELECT * FROM Templates WHERE id = ? AND ' + ew.sql, [campanha.modeloMensagem, ...ew.params]);
                 if (modeloQuery && modeloQuery.length > 0) {
                     modeloWhatsApp = modeloQuery[0];
                     modeloWhatsApp.content = typeof modeloWhatsApp.content === 'string' ? JSON.parse(modeloWhatsApp.content) : modeloWhatsApp.content;
@@ -872,7 +880,7 @@ async function dispararCampanhas() {
             }
 
             if (hasEmail && campanha.modeloEmail) {
-                const modeloQuery = await dbQuery('SELECT * FROM Templates WHERE id = ?', [campanha.modeloEmail]);
+                const modeloQuery = await dbQuery('SELECT * FROM Templates WHERE id = ? AND ' + ew.sql, [campanha.modeloEmail, ...ew.params]);
                 if (modeloQuery && modeloQuery.length > 0) {
                     modeloEmail = modeloQuery[0];
                     modeloEmail.content = typeof modeloEmail.content === 'string' ? JSON.parse(modeloEmail.content) : modeloEmail.content;
@@ -883,36 +891,36 @@ async function dispararCampanhas() {
             // Validar se tem os modelos necessários
             if (hasWhatsApp && !modeloWhatsApp) {
                 console.error('❌ Modelo de WhatsApp não encontrado!');
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Modelo de WhatsApp não encontrado" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Modelo de WhatsApp não encontrado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
             if (hasEmail && !modeloEmail) {
                 console.error('❌ Modelo de Email não encontrado!');
-                await dbQuery('UPDATE Campanhas SET status = "Erro: Modelo de Email não encontrado" WHERE id = ?', [campanha.id]);
-                io.emit('atualizacampanha', { id: campanha.id });
+                await dbQuery('UPDATE Campanhas SET status = "Erro: Modelo de Email não encontrado" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+                emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                 continue;
             }
 
-            await dbQuery('UPDATE Campanhas SET status = "Realizando disparo" WHERE id = ?', [campanha.id]);
-            io.emit('atualizacampanha', { id: campanha.id });
+            await dbQuery('UPDATE Campanhas SET status = "Realizando disparo" WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
+            emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
             console.log('🚀 Iniciando disparo...');
 
             for (const cliente of clientes) {
-                const checkPlayQuery = await dbQuery('SELECT * FROM Campanhas WHERE id = ?', [campanha.id]);
+                const checkPlayQuery = await dbQuery('SELECT * FROM Campanhas WHERE id = ? AND ' + ew.sql, [campanha.id, ...ew.params]);
 
                 if (checkPlayQuery.length == 0) {
                     console.error('❌ Campanha não encontrada!');
                     await saveCampanha(campanha, dataLog, "Erro: Campanha não encontrada");
-                    io.emit('atualizacampanha', { id: campanha.id });
+                    emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                     return;
                 }
 
                 if (checkPlayQuery[0].play == 0) {
                     console.log('⏸️ Campanha pausada - interrompendo disparo.');
                     await saveCampanha(campanha, dataLog, "Pausada");
-                    io.emit('atualizacampanha', { id: campanha.id });
+                    emitToEmpresa(empresa_id, 'atualizacampanha', { id: campanha.id });
                     return;
                 }
 

@@ -431,15 +431,6 @@ body .fc .event-card div {
   transition: .3s;
 }
 
-.noti-bar2 {
-  position: fixed;
-  top: 15px;
-  right: 15px;
-  background-color: white;
-  box-shadow: -1px 0px 5px 1px #0000001a;
-  border-radius: 100%;
-  z-index: 999999999999999999999999999999;
-}
 
 @media(max-width: 768px) {
   body .fc .fc-header-toolbar {
@@ -472,10 +463,6 @@ body .fc .event-card div {
 
   .fc-scroller-harness.fc-scroller-harness-liquid {
     height: 700px !important;
-  }
-
-  .noti-bar2 {
-    display: none;
   }
 
   .layout-page-content {

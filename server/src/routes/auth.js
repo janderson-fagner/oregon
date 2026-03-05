@@ -24,6 +24,7 @@ const createToken = async (payload, expiresIn = '8h') => {
 };
 
 const dbQuery = require('../utils/dbHelper');
+const { getBrandFromHost } = require('../utils/brandHelper');
 
 router.post('/login', async (req, res) => {
   const { email, password, rememberMe } = req.body;
@@ -55,6 +56,37 @@ router.post('/login', async (req, res) => {
       }
 
     }
+
+    // Verificação de empresa e assinatura (bypass para empresa_id = 1)
+    let empresaPendente = false;
+    if (results[0].empresa_id && results[0].empresa_id !== 1) {
+      const empresa = await dbQuery(
+        'SELECT id, status, deleted_at FROM Empresas WHERE id = ? AND deleted_at IS NULL',
+        [results[0].empresa_id]
+      );
+      if (!empresa.length) {
+        return res.status(407).send('Empresa não encontrada ou foi removida.');
+      }
+
+      // Empresa pendente: permite login restrito para Gestor gerenciar assinatura
+      if (empresa[0].status === 'pendente' && results[0].role === 'Gestor') {
+        empresaPendente = true;
+      } else if (empresa[0].status !== 'ativa') {
+        return res.status(406).send('A empresa está inativa ou suspensa.');
+      }
+
+      if (!empresaPendente) {
+        const assinatura = await dbQuery(
+          "SELECT id, status FROM Assinaturas WHERE empresa_id = ? AND status IN ('ativa','trial') ORDER BY created_at DESC LIMIT 1",
+          [results[0].empresa_id]
+        );
+        if (!assinatura.length) {
+          return res.status(405).send('Nenhuma assinatura ativa encontrada para esta empresa.');
+        }
+      }
+    }
+    // Adicionar flag de empresa pendente ao resultado do user
+    results[0].empresaPendente = empresaPendente;
 
     // Geração do token JWT
     const token = await createToken({ id: results[0].id }, expiresIn);
@@ -183,6 +215,36 @@ router.post('/auth-cookie', async (req, res) => {
       return res.status(403).send('Usuário desativado.');
     }
 
+    // Verificação de empresa e assinatura (bypass para empresa_id = 1)
+    let empresaPendente = false;
+    if (results[0].empresa_id && results[0].empresa_id !== 1) {
+      const empresa = await dbQuery(
+        'SELECT id, status, deleted_at FROM Empresas WHERE id = ? AND deleted_at IS NULL',
+        [results[0].empresa_id]
+      );
+      if (!empresa.length) {
+        return res.status(407).send('Empresa não encontrada ou foi removida.');
+      }
+
+      // Empresa pendente: permite login restrito para Gestor gerenciar assinatura
+      if (empresa[0].status === 'pendente' && results[0].role === 'Gestor') {
+        empresaPendente = true;
+      } else if (empresa[0].status !== 'ativa') {
+        return res.status(406).send('A empresa está inativa ou suspensa.');
+      }
+
+      if (!empresaPendente) {
+        const assinatura = await dbQuery(
+          "SELECT id, status FROM Assinaturas WHERE empresa_id = ? AND status IN ('ativa','trial') ORDER BY created_at DESC LIMIT 1",
+          [results[0].empresa_id]
+        );
+        if (!assinatura.length) {
+          return res.status(405).send('Nenhuma assinatura ativa encontrada para esta empresa.');
+        }
+      }
+    }
+    // Adicionar flag de empresa pendente ao resultado do user
+    results[0].empresaPendente = empresaPendente;
 
     // Geração do token JWT
     const token = await createToken({ id: results[0].id }, exp);
@@ -294,7 +356,8 @@ router.post('/resetar-senha', async (req, res) => {
     // Gerar token para redefinição de senha
     const token = jwt.sign({ id: results[0].id, email: email }, process.env.KEY_SECRET_TOKEN, { expiresIn: '24h' });
 
-    const link_redefinicao = process.env.APP_URL + `/redefinirSenha?token=${token}`;
+    const brand = getBrandFromHost(req.hostname);
+    const link_redefinicao = brand.appUrl + `/redefinirSenha?token=${token}`;
 
     // Caminho para o seu template HTML
     const templatePath = path.join(__dirname, '../email-templates', 'resetar-senha.html');
@@ -303,23 +366,25 @@ router.post('/resetar-senha', async (req, res) => {
     const dataehoraagora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const replacements = {
       titulo: 'Redefinição de Senha',
-      descricao_curta: 'Altere sua senha no sistema da Oregon',
+      descricao_curta: `Altere sua senha no sistema ${brand.appName}`,
       nome: results[0].fullName,
-      mensagem: 'Recebemos uma solicitação para redefinir a senha da sua conta sistema da Oregon, em ' + dataehoraagora + '. Não foi você? Não se preocue, pode ignorar este e-mail.',
+      mensagem: `Recebemos uma solicitação para redefinir a senha da sua conta no sistema ${brand.appName}, em ${dataehoraagora}. Não foi você? Não se preocupe, pode ignorar este e-mail.`,
       tipo: 'Redefinir',
       link_redefinicao: link_redefinicao,
       exp: '24 horas',
-      email_contato: 'contato@oregonservicos.com.br',
-      termos: 'app.oregonservicos.com.br'
-
+      email_contato: brand.emailContato,
+      termos: brand.appUrl,
+      app_name: brand.appName,
+      app_url: brand.appUrl,
+      app_logo_url: brand.appUrl + brand.logoUrl,
     };
     const htmlToSend = template(replacements);
 
     // Enviar e-mail com o link para redefinição de senha
     const mailOptions = {
-      from: 'Oregon Higienização <' + process.env.SMTP_FROM + '>',
+      from: brand.emailFrom,
       to: email,
-      subject: 'Oregon - Alteração de Senha',
+      subject: `${brand.appName} - Alteração de Senha`,
       html: htmlToSend
     };
 

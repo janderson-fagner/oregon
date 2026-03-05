@@ -11,6 +11,7 @@
  */
 
 const dbQuery = require('../../utils/dbHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 const { replaceVariables } = require('../helpers/contextHelper');
 const { flowLog } = require('../helpers/logHelper');
 
@@ -22,8 +23,11 @@ const { flowLog } = require('../helpers/logHelper');
  */
 async function updateCliente(config, context) {
     flowLog.actionSuccess('update_cliente', { step: 'start', config });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         // Buscar ID do cliente
         let clienteId = context.cliente?.cli_Id || context.cliente?.id;
 
@@ -108,7 +112,7 @@ async function updateCliente(config, context) {
                 case 'add_tags':
                     // Buscar tags atuais e adicionar novas
                     if (Array.isArray(processedValue) && processedValue.length > 0) {
-                        const clienteAtual = await dbQuery('SELECT cli_tags FROM CLIENTES WHERE cli_Id = ?', [clienteId]);
+                        const clienteAtual = await dbQuery(`SELECT cli_tags FROM CLIENTES WHERE cli_Id = ? AND ${ew.sql}`, [clienteId, ...ew.params]);
                         let tagsAtuais = [];
                         try {
                             tagsAtuais = clienteAtual[0]?.cli_tags 
@@ -127,7 +131,7 @@ async function updateCliente(config, context) {
                 case 'remove_tags':
                     // Buscar tags atuais e remover
                     if (Array.isArray(processedValue) && processedValue.length > 0) {
-                        const clienteAtualRemove = await dbQuery('SELECT cli_tags FROM CLIENTES WHERE cli_Id = ?', [clienteId]);
+                        const clienteAtualRemove = await dbQuery(`SELECT cli_tags FROM CLIENTES WHERE cli_Id = ? AND ${ew.sql}`, [clienteId, ...ew.params]);
                         let tagsAtuaisRemove = [];
                         try {
                             tagsAtuaisRemove = clienteAtualRemove[0]?.cli_tags 
@@ -202,11 +206,12 @@ async function updateCliente(config, context) {
         values.push(clienteId);
 
         // Executar update
-        const query = `UPDATE CLIENTES SET ${updates.join(', ')} WHERE cli_Id = ?`;
+        values.push(...ew.params);
+        const query = `UPDATE CLIENTES SET ${updates.join(', ')} WHERE cli_Id = ? AND ${ew.sql}`;
         await dbQuery(query, values);
 
         // Buscar dados atualizados do cliente
-        const clientesAtualizados = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [clienteId]);
+        const clientesAtualizados = await dbQuery(`SELECT * FROM CLIENTES WHERE cli_Id = ? AND ${ew.sql}`, [clienteId, ...ew.params]);
         if (clientesAtualizados.length > 0) {
             context.cliente = clientesAtualizados[0];
         }
@@ -234,37 +239,43 @@ async function updateCliente(config, context) {
  * @param {String} phone - Telefone
  * @param {String} name - Nome (opcional)
  * @param {Object} whatsappContact - Dados do contato WhatsApp (opcional)
+ * @param {Number|null} empresa_id - ID da empresa para isolamento multi-tenant (opcional)
  * @returns {Promise<Object>} - Cliente encontrado ou criado
  */
-async function createOrUpdateCliente(phone, name, whatsappContact = {}) {
+async function createOrUpdateCliente(phone, name, whatsappContact = {}, empresa_id = null) {
     flowLog.actionSuccess('create_or_update_cliente', { step: 'start', phone });
-    
+
     try {
+        const ew = empresaWhere(empresa_id);
+
         // Limpar telefone
         const cleanPhone = phone.replace(/\D/g, '');
         const last8 = cleanPhone.slice(-8);
 
-        // Buscar cliente existente
+        // Buscar cliente existente (filtrado por empresa_id)
         // Busca em cli_celular, cli_celular2 e cli_contatos (JSON)
         const clientes = await dbQuery(`
             SELECT DISTINCT c.*
             FROM CLIENTES c
-            WHERE RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
-            OR RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular2, ''), '[^0-9]', ''), 8) = ?
-            OR EXISTS (
-                SELECT 1
-                FROM JSON_TABLE(
-                    COALESCE(c.cli_contatos, '[]'),
-                    '$[*]' COLUMNS(
-                        type VARCHAR(20) PATH '$.type',
-                        val VARCHAR(64) PATH '$.value'
-                    )
-                ) jt
-                WHERE jt.type = 'phone'
-                AND RIGHT(REGEXP_REPLACE(COALESCE(jt.val, ''), '[^0-9]', ''), 8) = ?
+            WHERE ${ew.sql}
+            AND (
+                RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
+                OR RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular2, ''), '[^0-9]', ''), 8) = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM JSON_TABLE(
+                        COALESCE(c.cli_contatos, '[]'),
+                        '$[*]' COLUMNS(
+                            type VARCHAR(20) PATH '$.type',
+                            val VARCHAR(64) PATH '$.value'
+                        )
+                    ) jt
+                    WHERE jt.type = 'phone'
+                    AND RIGHT(REGEXP_REPLACE(COALESCE(jt.val, ''), '[^0-9]', ''), 8) = ?
+                )
             )
             LIMIT 1
-        `, [last8, last8, last8]);
+        `, [...ew.params, last8, last8, last8]);
 
         let cliente;
 
@@ -275,30 +286,21 @@ async function createOrUpdateCliente(phone, name, whatsappContact = {}) {
 
             // Atualizar dados se fornecidos
             if (name && (!cliente.cli_nome || cliente.cli_nome.trim() === '')) {
-                await dbQuery('UPDATE CLIENTES SET cli_nome = ? WHERE cli_Id = ?', [name, cliente.cli_Id]);
+                await dbQuery(`UPDATE CLIENTES SET cli_nome = ? WHERE cli_Id = ? AND ${ew.sql}`, [name, cliente.cli_Id, ...ew.params]);
                 cliente.cli_nome = name;
                 flowLog.actionSuccess('create_or_update_cliente', { step: 'nome_atualizado' });
-            }
-
-            // Atualizar foto do WhatsApp se disponível
-            if (whatsappContact.profilePicUrl && whatsappContact.profilePicUrl !== cliente.cli_foto) {
-                await dbQuery('UPDATE CLIENTES SET cli_foto = ? WHERE cli_Id = ?', [whatsappContact.profilePicUrl, cliente.cli_Id]);
-                cliente.cli_foto = whatsappContact.profilePicUrl;
-                flowLog.actionSuccess('create_or_update_cliente', { step: 'foto_atualizada' });
             }
 
         } else {
             // Criar novo cliente
             const nomeCliente = name || whatsappContact.pushname || whatsappContact.name || 'Cliente';
-            
+
             const insertData = {
                 cli_nome: nomeCliente,
                 cli_celular: cleanPhone,
-                cli_foto: whatsappContact.profilePicUrl || null,
-                cli_whatsapp: 1,
-                cli_status: 'ativo',
+                cli_ativo: 1,
                 flows_blocked: 0,
-                created_at: new Date()
+                empresa_id: empresa_id
             };
 
             const result = await dbQuery('INSERT INTO CLIENTES SET ?', insertData);
@@ -309,8 +311,8 @@ async function createOrUpdateCliente(phone, name, whatsappContact = {}) {
                 ...insertData
             };
 
-            flowLog.actionSuccess('create_or_update_cliente', { 
-                step: 'cliente_criado', 
+            flowLog.actionSuccess('create_or_update_cliente', {
+                step: 'cliente_criado',
                 clienteId,
                 nome: nomeCliente
             });
@@ -327,12 +329,14 @@ async function createOrUpdateCliente(phone, name, whatsappContact = {}) {
 /**
  * Buscar cliente por telefone
  * @param {String} phone - Telefone do WhatsApp
+ * @param {Number|null} empresa_id - ID da empresa para isolamento multi-tenant (opcional)
  * @returns {Promise<Object|null>} - Cliente encontrado ou null
  */
-async function getClienteByPhone(phone) {
+async function getClienteByPhone(phone, empresa_id = null) {
     flowLog.actionSuccess('get_cliente_by_phone', { step: 'start', phone });
-    
+
     try {
+        const ew = empresaWhere(empresa_id);
         const cleanPhone = phone.replace(/\D/g, '');
         const last8 = cleanPhone.slice(-8);
 
@@ -341,22 +345,25 @@ async function getClienteByPhone(phone) {
         const clientes = await dbQuery(`
             SELECT DISTINCT c.*
             FROM CLIENTES c
-            WHERE RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
-            OR RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular2, ''), '[^0-9]', ''), 8) = ?
-            OR EXISTS (
-                SELECT 1
-                FROM JSON_TABLE(
-                    COALESCE(c.cli_contatos, '[]'),
-                    '$[*]' COLUMNS(
-                        type VARCHAR(20) PATH '$.type',
-                        val VARCHAR(64) PATH '$.value'
-                    )
-                ) jt
-                WHERE jt.type = 'phone'
-                AND RIGHT(REGEXP_REPLACE(COALESCE(jt.val, ''), '[^0-9]', ''), 8) = ?
+            WHERE ${ew.sql}
+            AND (
+                RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular, ''), '[^0-9]', ''), 8) = ?
+                OR RIGHT(REGEXP_REPLACE(COALESCE(c.cli_celular2, ''), '[^0-9]', ''), 8) = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM JSON_TABLE(
+                        COALESCE(c.cli_contatos, '[]'),
+                        '$[*]' COLUMNS(
+                            type VARCHAR(20) PATH '$.type',
+                            val VARCHAR(64) PATH '$.value'
+                        )
+                    ) jt
+                    WHERE jt.type = 'phone'
+                    AND RIGHT(REGEXP_REPLACE(COALESCE(jt.val, ''), '[^0-9]', ''), 8) = ?
+                )
             )
             LIMIT 1
-        `, [last8, last8, last8]);
+        `, [...ew.params, last8, last8, last8]);
 
         if (clientes.length > 0) {
             const cliente = clientes[0];
@@ -398,8 +405,11 @@ async function getClienteByPhone(phone) {
  */
 async function blockUnblockClientFlows(config, context) {
     flowLog.actionSuccess('block_unblock_client_flows', { step: 'start', config });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         let clienteId = context.cliente?.cli_Id || context.cliente?.id;
 
         if (!clienteId) {
@@ -409,7 +419,7 @@ async function blockUnblockClientFlows(config, context) {
         const action = config.action || 'block'; // 'block' ou 'unblock'
         const flowsBlocked = action === 'block' ? 1 : 0;
 
-        await dbQuery('UPDATE CLIENTES SET flows_blocked = ?, updated_at = NOW() WHERE cli_Id = ?', [flowsBlocked, clienteId]);
+        await dbQuery(`UPDATE CLIENTES SET flows_blocked = ?, updated_at = NOW() WHERE cli_Id = ? AND ${ew.sql}`, [flowsBlocked, clienteId, ...ew.params]);
 
         // Atualizar contexto
         if (context.cliente) {

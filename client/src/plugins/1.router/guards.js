@@ -1,12 +1,15 @@
 import { canNavigate } from '@layouts/plugins/casl'
 import { useCookieStore } from '@layouts/stores/config'
 import { useAlert } from '@/composables/useAlert'
+import { useAssinatura } from '@/composables/useAssinatura'
+import { disconnectSocket } from '@/composables/useSocket'
 
 const { setAlert } = useAlert()
 
 export const setupGuards = router => {
   router.beforeEach(async (to, from, next) => {
 
+    console.log('to', to);
 
     const token = useCookie('accessToken').value;
     const usuario = useCookie('userData').value;
@@ -26,7 +29,7 @@ export const setupGuards = router => {
       return;
     }
 
-    if (!token && !['login', 'register', 'forgot-password', 'reset-password'].includes(to.name)) {
+    if (!token && !['login', 'register', 'forgot-password', 'reset-password', 'cadastro', 'landing'].includes(to.name)) {
       console.log('Não há token');
 
       if (usuario) {
@@ -48,7 +51,7 @@ export const setupGuards = router => {
 
       next({ name: 'login', query: { next: irPara } });
       return;
-    } else if (!token && ['register', 'forgot-password', 'reset-password', 'login'].includes(to.name)) {
+    } else if (!token && ['register', 'forgot-password', 'reset-password', 'login', 'cadastro', 'landing'].includes(to.name)) {
       console.log('Não há token register', to.name);
       next();
       return;
@@ -86,6 +89,27 @@ export const setupGuards = router => {
             accessToken: tokenValue,
             maxAge: maxAgeValue,
           });
+
+          // Verificar empresa pendente - só permite acesso à assinatura
+          if (userData?.empresaPendente) {
+            const allowedRoutes = ['saas-minha-assinatura', 'saas-minha-empresa'];
+            if (!allowedRoutes.includes(to.name)) {
+              setAlert('Sua empresa está pendente. Regularize sua assinatura para acessar o sistema.', 'warning', 'tabler-alert-triangle', 5000);
+              next({ name: 'saas-minha-assinatura' });
+              return;
+            }
+          }
+
+          // Verificar feature da rota (se definida em meta.feature)
+          if (to.meta.feature) {
+            const { temFeature, carregarAssinatura } = useAssinatura();
+            await carregarAssinatura();
+            if (!temFeature(to.meta.feature)) {
+              setAlert('Seu plano não inclui acesso a este recurso. Faça upgrade para liberar.', 'error', 'tabler-lock-access-off', 5000);
+              next('/');
+              return;
+            }
+          }
 
           next();
         }
@@ -125,4 +149,5 @@ function clearAuthCookies() {
   useCookie('userAbilityRules').value = null;
   useCookie('userData').value = null;
   useCookie('accessToken').value = null;
+  disconnectSocket();
 }

@@ -1,10 +1,17 @@
 <script setup>
   import { VForm } from "vuetify/components/VForm";
   import bklogin from "@images/pages/login-bk.jpg";
+  import logoOregon from "@images/logo.png";
+  import logoDaviot from "@images/daviot-logo.png";
+  import { isDaviot } from "@/utils/typeClient";
   import { themeConfig } from "@themeConfig";
   import { useAlert } from "@/composables/useAlert";
   import { temaAtual } from "@/@core/stores/config";
+  import { connectSocket } from "@/composables/useSocket";
   const { setAlert } = useAlert();
+
+  const currentLogo = isDaviot() ? logoDaviot : logoOregon;
+  const canRegister = computed(() => isDaviot() || import.meta.env.DEV);
 
   definePage({
     meta: {
@@ -129,6 +136,9 @@
       useCookie("userAbilityRules", cookieOptions).value = userAbilityRules;
       useCookie("accessToken", cookieOptions).value = accessToken;
 
+      // Conecta o socket com o novo token de autenticação
+      connectSocket();
+
       setAlert(
         "Login realizado com sucesso! Você será redirecionado...",
         "success",
@@ -191,12 +201,12 @@
     >
       <VCardText class="text-center d-lg-flex align-center justify-center">
         <img
-          src="@images/logo.png"
+          :src="currentLogo"
           alt="logo"
           style="width: 35%; max-width: 100%; height: auto"
         />
       </VCardText>
-      <VCard flat :max-width="500" class="mt-12 mt-sm-0 pa-4">
+      <VCard flat :max-width="500" class="mt-12 mt-sm-0 pa-4" rounded="xl">
         <VCardText>
           <h3 class="text-h3 mb-5">
             Bem vindo ao
@@ -254,6 +264,25 @@
               </VCol>
             </VRow>
           </VForm>
+
+          <div v-if="canRegister" class="d-flex flex-column align-center mt-5 gap-2">
+            <VBtn
+              variant="outlined"
+              color="primary"
+              block
+              to="/cadastro-empresa"
+              prepend-icon="tabler-user-plus"
+            >
+              Criar conta
+            </VBtn>
+            <RouterLink
+              class="text-primary text-sm mt-1"
+              style="cursor: pointer; font-size: 13px"
+              to="/conheca"
+            >
+              Conhecer a plataforma 
+            </RouterLink>
+          </div>
         </VCardText>
       </VCard>
     </VCol>

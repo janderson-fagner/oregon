@@ -3,14 +3,17 @@ const moment = require('moment');
 const { sanitizeInput } = require('../utils/functions');
 
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
-async function getAgendamentos(dataQuery, queryParams) {
+async function getAgendamentos(dataQuery, queryParams, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
+    console.log('Empresa ID:', empresa_id, 'ew:', ew);
     try {
         const agendamentos = await dbQuery(dataQuery, queryParams);
 
         for (let agendamento of agendamentos) {
             try {
-                agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [agendamento.cli_id]);
+                agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ? AND ' + ew.sql, [agendamento.cli_id, ...ew.params]);
 
                 if (agendamento.cliente.length > 0 && agendamento.cliente[0].cli_contratos) {
                     agendamento.cliente[0].cli_contratos = JSON.parse(agendamento.cliente[0].cli_contratos);
@@ -20,23 +23,23 @@ async function getAgendamentos(dataQuery, queryParams) {
                     }
                 }
 
-                agendamento.funcionario = await dbQuery('SELECT * FROM User WHERE id = ?', [agendamento.fun_id]);
+                agendamento.funcionario = await dbQuery('SELECT * FROM User WHERE id = ? AND ' + ew.sql, [agendamento.fun_id, ...ew.params]);
                 agendamento.age_metragem = agendamento.age_metragem ? JSON.parse(agendamento.age_metragem) : { interno: '', externo: '', total: '' };
-                agendamento.endereco = agendamento.age_endereco ? await dbQuery('SELECT * FROM ENDERECO WHERE end_id = ?', [agendamento.age_endereco])
-                    : await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [agendamento.cli_id]);
+                agendamento.endereco = agendamento.age_endereco ? await dbQuery('SELECT * FROM ENDERECO WHERE end_id = ? AND ' + ew.sql, [agendamento.age_endereco, ...ew.params])
+                    : await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ? AND ' + ew.sql, [agendamento.cli_id, ...ew.params]);
 
                 let servicos = [];
 
 
-                let axs = await dbQuery('SELECT * FROM AXS WHERE age_id = ?', [agendamento.age_id]);
+                let axs = await dbQuery('SELECT * FROM AXS WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
 
                 for (let ax of axs) {
                     let servico;
 
                     if (ax.ser_sub_id) {
-                        servico = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_id = ?', [ax.ser_sub_id]);
+                        servico = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_id = ? AND ' + ew.sql, [ax.ser_sub_id, ...ew.params]);
                     } else {
-                        servico = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ?', [ax.ser_id]);
+                        servico = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND ' + ew.sql, [ax.ser_id, ...ew.params]);
                     }
 
                     if (servico.length > 0) {
@@ -52,7 +55,7 @@ async function getAgendamentos(dataQuery, queryParams) {
                         };
 
                         if (objPush.isSub) {
-                            const paiQuery = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ?', [servico[0].ser_pai]);
+                            const paiQuery = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND ' + ew.sql, [servico[0].ser_pai, ...ew.params]);
                             if (paiQuery.length > 0) {
                                 objPush.pai_name = paiQuery[0].ser_nome;
 
@@ -77,10 +80,10 @@ async function getAgendamentos(dataQuery, queryParams) {
 
                 }
 
-                let axs_old = await dbQuery('SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ?', [agendamento.age_id]);
+                let axs_old = await dbQuery('SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
 
                 for (let ax of axs_old) {
-                    let servico = await dbQuery('SELECT * FROM SERVICOS WHERE ser_id = ?', [ax.ser_id]);
+                    let servico = await dbQuery('SELECT * FROM SERVICOS WHERE ser_id = ? AND ' + ew.sql, [ax.ser_id, ...ew.params]);
 
                     if (!servico.length) continue;
 
@@ -93,17 +96,17 @@ async function getAgendamentos(dataQuery, queryParams) {
                 agendamento.servicos = servicos;
 
                 if (agendamento.age_type == 'retrabalho' && !agendamento.age_retrabalho) {
-                    await dbQuery('UPDATE AGENDAMENTO SET age_retrabalho = 1 WHERE age_id = ?', [agendamento.age_id]);
+                    await dbQuery('UPDATE AGENDAMENTO SET age_retrabalho = 1 WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
                     agendamento.age_retrabalho = true;
                 }
 
                 agendamento.age_retrabalho = agendamento.age_retrabalho ? true : false;
-                agendamento.imagens = await dbQuery('SELECT * FROM IMAGENS_AGE WHERE age_id = ?', [agendamento.age_id]);
+                agendamento.imagens = await dbQuery('SELECT * FROM IMAGENS_AGE WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
 
-                let status = await dbQuery('SELECT * FROM AGENDAMENTO_STATUS WHERE ast_id = ?', [agendamento.ast_id]);
+                let status = await dbQuery('SELECT * FROM AGENDAMENTO_STATUS WHERE ast_id = ? AND ' + ew.sql, [agendamento.ast_id, ...ew.params]);
 
                 agendamento.status = status.length > 0 ? status[0].ast_descricao : 'Agendado';
-                agendamento.statusColors = await dbQuery('SELECT * FROM Options WHERE type IN ("cor_atendido", "cor_cancelado", "cor_remarcado", "cor_bloqueio")');
+                agendamento.statusColors = await dbQuery('SELECT * FROM Options WHERE type IN ("cor_atendido", "cor_cancelado", "cor_remarcado", "cor_bloqueio") AND ' + ew.sql, [...ew.params]);
 
                 if (agendamento.age_type == 'bloqueio') {
                     agendamento.bkColor = agendamento.statusColors.length > 0 ? agendamento.statusColors.find(cor => cor.type === 'cor_bloqueio').value : '#000000';
@@ -117,7 +120,7 @@ async function getAgendamentos(dataQuery, queryParams) {
                     agendamento.bkColor = agendamento.funcionario[0] ? agendamento.funcionario[0].color : '#BDBDBD';
                 }
 
-                const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ?`, [agendamento.age_id]);
+                const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND ` + ew.sql, [agendamento.age_id, ...ew.params]);
 
                 let age_valor = servicos.reduce((total, servico) => total + (parseFloat(servico.ser_valor || 0) * (servico.ser_quantity ?? 1)), 0);
                 age_valor = parseFloat(age_valor.toFixed(2));
@@ -125,7 +128,7 @@ async function getAgendamentos(dataQuery, queryParams) {
                 if (age_valor != agendamento.age_valor) {
                     console.log("Valor do agendamento diferente do valor calculado", age_valor, agendamento.age_valor);
                     agendamento.age_valor = age_valor;
-                    await dbQuery('UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ?', [age_valor, agendamento.age_id]);
+                    await dbQuery('UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ? AND ' + ew.sql, [age_valor, agendamento.age_id, ...ew.params]);
                 }
 
                 let valorPago = 0;
@@ -154,17 +157,24 @@ async function getAgendamentos(dataQuery, queryParams) {
     }
 }
 
-async function checkPagamentos(age_id) {
+async function checkPagamentos(age_id, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
-        let agendamentoQuery = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_id = ?`, [age_id]);
+        let agendamentoQuery = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_id = ? AND ` + ew.sql, [age_id, ...ew.params]);
         if (!agendamentoQuery.length) return false;
 
         let agendamento = agendamentoQuery[0];
+
+        // Ignorar agendamentos não-atendidos (não devem ter pagamentos)
+        const statusAtendido = await dbQuery(`SELECT ast_id FROM AGENDAMENTO_STATUS WHERE ast_descricao = 'Atendido' AND ` + ew.sql, [...ew.params]);
+        const idsAtendido = statusAtendido.map(s => s.ast_id);
+        if (!idsAtendido.includes(agendamento.ast_id)) return false;
+
         let age_valor = agendamento.age_valor - (agendamento.age_desconto ?? 0);
 
         if(age_valor == 0) return false;
 
-        const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ?`, [age_id]);
+        const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND ` + ew.sql, [age_id, ...ew.params]);
 
         let alterado = false;
         if (pagamentos.length) {
@@ -180,7 +190,7 @@ async function checkPagamentos(age_id) {
             let valorRestante = age_valor - valorTotalPagamentos;
             if (valorRestante > 0) {
                 console.log('valorRestante: ', valorRestante);
-                let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO');
+                let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO WHERE ' + ew.sql, [...ew.params]);
                 let fpg_id = formasPagamento.find(f => f.fpg_descricao.toLowerCase() === 'dinheiro')?.fpg_id ?? formasPagamento[0]?.fpg_id ?? 1;
 
                 let objF = [
@@ -190,19 +200,19 @@ async function checkPagamentos(age_id) {
                     }
                 ]
 
-                await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json) VALUES (?, ?, ?)',
-                    [age_id, valorRestante, JSON.stringify(objF)]);
+                await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json, empresa_id) VALUES (?, ?, ?, ?)',
+                    [age_id, valorRestante, JSON.stringify(objF), empresa_id]);
 
                 alterado = true;
             } else if (valorRestante < 0) {
                 console.log('valorRestante negativo: ', valorRestante);
                 //Remover o pagamento que está sobrando
-                await dbQuery(`DELETE FROM PAGAMENTO WHERE age_id = ? AND pgt_data IS NULL`, [age_id]);
+                await dbQuery(`DELETE FROM PAGAMENTO WHERE age_id = ? AND pgt_data IS NULL AND ` + ew.sql, [age_id, ...ew.params]);
 
                 alterado = true;
             }
         } else {
-            let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO');
+            let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO WHERE ' + ew.sql, [...ew.params]);
             let fpg_id = formasPagamento.find(f => f.fpg_descricao.toLowerCase() === 'dinheiro')?.fpg_id ?? formasPagamento[0]?.fpg_id ?? 1;
 
             let objF = [
@@ -213,8 +223,8 @@ async function checkPagamentos(age_id) {
             ]
 
             console.log('Inserindo pagamento: ', age_id, age_valor, JSON.stringify(objF));
-            await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json) VALUES (?, ?, ?)',
-                [age_id, age_valor, JSON.stringify(objF)]);
+            await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json, empresa_id) VALUES (?, ?, ?, ?)',
+                [age_id, age_valor, JSON.stringify(objF), empresa_id]);
 
             alterado = true;
         }
@@ -226,20 +236,28 @@ async function checkPagamentos(age_id) {
     }
 }
 
-async function createPagamento(age_id) {
+async function createPagamento(age_id, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
 
         if (!age_id) return { status: 400, message: 'Agendamento não informado' };
 
-        let agendamento = await dbQuery('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [age_id]);
+        let agendamento = await dbQuery('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND ' + ew.sql, [age_id, ...ew.params]);
 
         if (agendamento.length === 0) {
             return { status: 404, message: 'Agendamento não encontrado' };
         }
 
+        // Validar que o agendamento está atendido
+        const statusAtendido = await dbQuery(`SELECT ast_id FROM AGENDAMENTO_STATUS WHERE ast_descricao = 'Atendido' AND ` + ew.sql, [...ew.params]);
+        const idsAtendido = statusAtendido.map(s => s.ast_id);
+        if (!idsAtendido.includes(agendamento[0].ast_id)) {
+            return { status: 400, message: 'Somente agendamentos atendidos podem receber pagamento.' };
+        }
+
         let valor = agendamento[0].age_valor - (agendamento[0].age_desconto ?? 0);
 
-        let pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ${age_id}`);
+        let pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND ` + ew.sql, [age_id, ...ew.params]);
 
         if (pagamentos.length > 0) {
             let totalPagamentos = pagamentos.reduce((acc, curr) => acc + curr.pgt_valor, 0);
@@ -263,7 +281,7 @@ async function createPagamento(age_id) {
             }
         }
 
-        let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO');
+        let formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO WHERE ' + ew.sql, [...ew.params]);
         let fpg_id = formasPagamento.find(f => f.fpg_descricao.toLowerCase() === 'dinheiro')?.fpg_id ?? formasPagamento[0]?.fpg_id ?? 1;
 
         let objF = [
@@ -273,8 +291,8 @@ async function createPagamento(age_id) {
             }
         ]
 
-        let pagamento = await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json) VALUES (?, ?, ?)',
-            [age_id, valor, JSON.stringify(objF)]);
+        let pagamento = await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json, empresa_id) VALUES (?, ?, ?, ?)',
+            [age_id, valor, JSON.stringify(objF), empresa_id]);
 
 
         return { status: 200, message: 'Pagamento criado com sucesso', pagamento: pagamento.insertId };
@@ -284,14 +302,15 @@ async function createPagamento(age_id) {
     }
 }
 
-async function getHistoricoAgendamento(age_id) {
+async function getHistoricoAgendamento(age_id, empresa_id = null) {
     if (!age_id) return [];
 
+    const ew = empresaWhere(empresa_id);
     try {
-        let historicoQuery = await dbQuery('SELECT * FROM AGENDAMENTO_HISTORICO WHERE age_id = ?', [age_id]);
+        let historicoQuery = await dbQuery('SELECT * FROM AGENDAMENTO_HISTORICO WHERE age_id = ? AND ' + ew.sql, [age_id, ...ew.params]);
 
         if (!historicoQuery.length) {
-            await dbQuery('INSERT INTO AGENDAMENTO_HISTORICO (age_id, historico) VALUES (?, ?)', [age_id, JSON.stringify([])]);
+            await dbQuery('INSERT INTO AGENDAMENTO_HISTORICO (age_id, historico, empresa_id) VALUES (?, ?, ?)', [age_id, JSON.stringify([]), empresa_id]);
             return [];
         }
 
@@ -311,11 +330,12 @@ async function getHistoricoAgendamento(age_id) {
     }
 }
 
-async function setHistoricoAgendamento(age_id, newHist) {
+async function setHistoricoAgendamento(age_id, newHist, empresa_id = null) {
     if (!newHist || !age_id) return false;
 
+    const ew = empresaWhere(empresa_id);
     try {
-        let historico = await getHistoricoAgendamento(age_id);
+        let historico = await getHistoricoAgendamento(age_id, empresa_id);
 
         if (!historico || !Array.isArray(historico)) {
             historico = [];
@@ -348,7 +368,7 @@ async function setHistoricoAgendamento(age_id, newHist) {
 
         historico = historico.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-        await dbQuery('UPDATE AGENDAMENTO_HISTORICO SET historico = ? WHERE age_id = ?', [JSON.stringify(historico), age_id]);
+        await dbQuery('UPDATE AGENDAMENTO_HISTORICO SET historico = ? WHERE age_id = ? AND ' + ew.sql, [JSON.stringify(historico), age_id, ...ew.params]);
 
         return true;
     } catch (error) {
@@ -357,27 +377,28 @@ async function setHistoricoAgendamento(age_id, newHist) {
     }
 }
 
-async function getAgendamentosSimple(dataQuery, queryParams) {
+async function getAgendamentosSimple(dataQuery, queryParams, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     try {
         const agendamentos = await dbQuery(dataQuery, queryParams);
 
         for (let agendamento of agendamentos) {
             try {
-                agendamento.cliente = await dbQuery('SELECT cli_Id, cli_nome FROM CLIENTES WHERE cli_Id = ?', [agendamento.cli_id]);
-                agendamento.funcionario = await dbQuery('SELECT id, fullName FROM User WHERE id = ?', [agendamento.fun_id]);
+                agendamento.cliente = await dbQuery('SELECT cli_Id, cli_nome FROM CLIENTES WHERE cli_Id = ? AND ' + ew.sql, [agendamento.cli_id, ...ew.params]);
+                agendamento.funcionario = await dbQuery('SELECT id, fullName FROM User WHERE id = ? AND ' + ew.sql, [agendamento.fun_id, ...ew.params]);
 
                 let servicos = [];
 
                 // Buscar serviços novos (AXS)
-                let axs = await dbQuery('SELECT * FROM AXS WHERE age_id = ?', [agendamento.age_id]);
+                let axs = await dbQuery('SELECT * FROM AXS WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
 
                 for (let ax of axs) {
                     let servico;
 
                     if (ax.ser_sub_id) {
-                        servico = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_id = ?', [ax.ser_sub_id]);
+                        servico = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_id = ? AND ' + ew.sql, [ax.ser_sub_id, ...ew.params]);
                     } else {
-                        servico = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ?', [ax.ser_id]);
+                        servico = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND ' + ew.sql, [ax.ser_id, ...ew.params]);
                     }
 
                     if (servico.length > 0) {
@@ -399,10 +420,10 @@ async function getAgendamentosSimple(dataQuery, queryParams) {
                 }
 
                 // Buscar serviços antigos (AGENDAMENTO_X_SERVICOS)
-                let axs_old = await dbQuery('SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ?', [agendamento.age_id]);
+                let axs_old = await dbQuery('SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
 
                 for (let ax of axs_old) {
-                    let servico = await dbQuery('SELECT * FROM SERVICOS WHERE ser_id = ?', [ax.ser_id]);
+                    let servico = await dbQuery('SELECT * FROM SERVICOS WHERE ser_id = ? AND ' + ew.sql, [ax.ser_id, ...ew.params]);
 
                     if (!servico.length) continue;
 
@@ -419,11 +440,11 @@ async function getAgendamentosSimple(dataQuery, queryParams) {
                 if (parseFloat(age_valor.toFixed(2)) != parseFloat(agendamento.age_valor.toFixed(2))) {
                     console.log("Valor do agendamento diferente do valor calculado", age_valor, agendamento.age_valor);
                     agendamento.age_valor = age_valor;
-                    await dbQuery('UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ?', [age_valor.toFixed(2), agendamento.age_id]);
+                    await dbQuery('UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ? AND ' + ew.sql, [age_valor.toFixed(2), agendamento.age_id, ...ew.params]);
                 }
 
                 if (agendamento.age_type == 'retrabalho' && !agendamento.age_retrabalho) {
-                    await dbQuery('UPDATE AGENDAMENTO SET age_retrabalho = 1 WHERE age_id = ?', [agendamento.age_id]);
+                    await dbQuery('UPDATE AGENDAMENTO SET age_retrabalho = 1 WHERE age_id = ? AND ' + ew.sql, [agendamento.age_id, ...ew.params]);
                     agendamento.age_retrabalho = true;
                 }
 

@@ -244,7 +244,7 @@ const updateConfig = async (config) => {
     </VWindowItem>
 
     <VWindowItem value="Atendente Virtual">
-      <Gemini />
+      <Gemini :key="'gemini-config'" />
     </VWindowItem>
   </VWindow>
 </template>

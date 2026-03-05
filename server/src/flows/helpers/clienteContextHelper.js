@@ -1,4 +1,5 @@
 const dbQuery = require('../../utils/dbHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 const moment = require('moment');
 
 /**
@@ -6,10 +7,12 @@ const moment = require('moment');
  * @param {Object} cliente - Dados básicos do cliente
  * @returns {String} Resumo do cliente formatado
  */
-async function getClienteResumoParaIA(cliente) {
+async function getClienteResumoParaIA(cliente, empresa_id = null) {
     if (!cliente || !cliente.cli_Id) {
         return 'Nenhuma informação prévia do cliente disponível.';
     }
+
+    const ew = empresaWhere(empresa_id);
 
     let resumo = [];
 
@@ -27,15 +30,15 @@ async function getClienteResumoParaIA(cliente) {
     // ===== HISTÓRICO DE AGENDAMENTOS =====
     try {
         const agendamentos = await dbQuery(`
-            SELECT 
+            SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN age_status = 'Concluído' THEN 1 ELSE 0 END) as concluidos,
                 SUM(CASE WHEN age_status = 'Cancelado' THEN 1 ELSE 0 END) as cancelados,
                 MAX(CASE WHEN age_status = 'Concluído' THEN age_data END) as ultima_visita,
                 COUNT(CASE WHEN age_data >= DATE_SUB(NOW(), INTERVAL 6 MONTH) THEN 1 END) as ultimos_6_meses
             FROM AGENDAMENTO
-            WHERE cli_id = ?
-        `, [cliente.cli_Id]);
+            WHERE cli_id = ? AND ${ew.sql}
+        `, [cliente.cli_Id, ...ew.params]);
 
         if (agendamentos && agendamentos[0]) {
             const hist = agendamentos[0];
@@ -63,11 +66,11 @@ async function getClienteResumoParaIA(cliente) {
                     SELECT s.ser_nome, COUNT(*) as vezes
                     FROM AGENDAMENTO a
                     LEFT JOIN SERVICOS_NEW s ON s.ser_id = a.ser_id
-                    WHERE a.cli_id = ? AND a.age_status = 'Concluído'
+                    WHERE a.cli_id = ? AND a.age_status = 'Concluído' AND a.${ew.sql}
                     GROUP BY s.ser_nome
                     ORDER BY vezes DESC
                     LIMIT 3
-                `, [cliente.cli_Id]);
+                `, [cliente.cli_Id, ...ew.params]);
 
                 if (servicosFrequentes && servicosFrequentes.length > 0) {
                     resumo.push(`- Serviços mais contratados: ${servicosFrequentes.map(s => `${s.ser_nome} (${s.vezes}x)`).join(', ')}`);
@@ -83,15 +86,15 @@ async function getClienteResumoParaIA(cliente) {
     // ===== HISTÓRICO FINANCEIRO =====
     try {
         const financeiro = await dbQuery(`
-            SELECT 
+            SELECT
                 COALESCE(SUM(p.pgt_valor), 0) as total_pago,
                 COUNT(DISTINCT p.pgt_id) as total_pagamentos,
                 AVG(p.pgt_valor) as ticket_medio,
                 MAX(p.pgt_data) as ultimo_pagamento
             FROM PAGAMENTO p
             JOIN AGENDAMENTO a ON a.age_id = p.age_id
-            WHERE a.cli_id = ? AND p.pgt_data IS NOT NULL
-        `, [cliente.cli_Id]);
+            WHERE a.cli_id = ? AND p.pgt_data IS NOT NULL AND a.${ew.sql}
+        `, [cliente.cli_Id, ...ew.params]);
 
         if (financeiro && financeiro[0] && financeiro[0].total_pago > 0) {
             const fin = financeiro[0];
@@ -112,9 +115,9 @@ async function getClienteResumoParaIA(cliente) {
         const enderecos = await dbQuery(`
             SELECT end_logradouro, end_numero, end_bairro, end_cidade, end_estado
             FROM ENDERECO
-            WHERE cli_Id = ?
+            WHERE cli_Id = ? AND ${ew.sql}
             LIMIT 2
-        `, [cliente.cli_Id]);
+        `, [cliente.cli_Id, ...ew.params]);
 
         if (enderecos && enderecos.length > 0) {
             resumo.push(`\n**Endereços cadastrados:**`);
@@ -135,12 +138,13 @@ async function getClienteResumoParaIA(cliente) {
             FROM AGENDAMENTO a
             LEFT JOIN SERVICOS_NEW s ON s.ser_id = a.ser_id
             LEFT JOIN STATUS st ON st.sta_id = a.age_status
-            WHERE a.cli_id = ? 
+            WHERE a.cli_id = ?
             AND a.age_data >= CURDATE()
             AND a.age_status NOT IN ('Cancelado', 'Concluído')
+            AND a.${ew.sql}
             ORDER BY a.age_data, a.age_horaInicio
             LIMIT 3
-        `, [cliente.cli_Id]);
+        `, [cliente.cli_Id, ...ew.params]);
 
         if (agendamentosFuturos && agendamentosFuturos.length > 0) {
             resumo.push(`\n**Agendamentos Futuros:**`);
@@ -176,9 +180,10 @@ async function getClienteResumoParaIA(cliente) {
  * Verifica se as configurações de IA do Gemini estão completas
  * @returns {Object} { configured: boolean, missingFields: [] }
  */
-async function verificarConfiguracoesIA() {
+async function verificarConfiguracoesIA(empresa_id = null) {
     console.log('🔍 Verificando configurações de IA (Gemini)...');
-    
+
+    const ew = empresaWhere(empresa_id);
     const camposObrigatorios = [
         'gemini_key',
         'gemini_comportamento',
@@ -187,9 +192,9 @@ async function verificarConfiguracoesIA() {
     ];
 
     const configs = await dbQuery(`
-        SELECT type, value FROM Options 
-        WHERE type IN (${camposObrigatorios.map(() => '?').join(',')})
-    `, camposObrigatorios);
+        SELECT type, value FROM Options
+        WHERE type IN (${camposObrigatorios.map(() => '?').join(',')}) AND ${ew.sql}
+    `, [...camposObrigatorios, ...ew.params]);
 
     const missing = [];
     
@@ -216,13 +221,14 @@ async function verificarConfiguracoesIA() {
  * @param {Number|Object} clienteIdOrObj - ID do cliente ou objeto do cliente
  * @returns {Object} Dados completos do cliente
  */
-async function getClienteCompletoParaIA(clienteIdOrObj) {
+async function getClienteCompletoParaIA(clienteIdOrObj, empresa_id = null) {
+    const ew = empresaWhere(empresa_id);
     let cliente;
 
     if (typeof clienteIdOrObj === 'object') {
         cliente = clienteIdOrObj;
     } else {
-        const rows = await dbQuery('SELECT * FROM CLIENTES WHERE cli_Id = ?', [clienteIdOrObj]);
+        const rows = await dbQuery(`SELECT * FROM CLIENTES WHERE cli_Id = ? AND ${ew.sql}`, [clienteIdOrObj, ...ew.params]);
         if (!rows || rows.length === 0) {
             return null;
         }
@@ -230,7 +236,7 @@ async function getClienteCompletoParaIA(clienteIdOrObj) {
     }
 
     // Enriquecer com resumo
-    const resumo = await getClienteResumoParaIA(cliente);
+    const resumo = await getClienteResumoParaIA(cliente, empresa_id);
 
     return {
         ...cliente,

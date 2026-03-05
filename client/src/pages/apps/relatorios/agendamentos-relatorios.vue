@@ -4,6 +4,7 @@ import moment from "moment";
 import GraficoEvolucaoAgendamentos from "@/views/apps/relatorios/grafico-evolucao-agendamentos.vue";
 import tableagendamentosretrabalho from "@/views/apps/relatorios/tableagendamentosretrabalho.vue";
 import tableagendamentosgarantia from "@/views/apps/relatorios/tableagendamentosgarantia.vue";
+import tableagendamentosclientes from "@/views/apps/relatorios/tableagendamentosclientes.vue";
 import { useFunctions } from "@/composables/useFunctions";
 import { temaAtual } from "@core/stores/config";
 
@@ -450,7 +451,7 @@ const setPeriodo = (tipo) => {
   getRelatorios();
 };
 
-const prodTab = ref(null);
+const prodTab = ref("Geral");
 const tabs = [
   {
     title: "Geral",
@@ -465,13 +466,9 @@ const tabs = [
     icon: "tabler-shield-dollar",
   },
   {
-    title: "Contratos",
-    icon: "tabler-file-text",
-  },
-  {
-    title: "Pendentes",
-    icon: "tabler-clock",
-  },
+    title: "Clientes",
+    icon: "tabler-users-group",
+  }
 ];
 
 const viewAge = (age) => {
@@ -599,7 +596,7 @@ const viewAge = (age) => {
 
   <div class="d-flex justify-center">
     <VTabs v-model="prodTab" class="v-tabs-pill">
-      <VTab v-for="tab in tabs" :key="tab.icon">
+      <VTab v-for="tab in tabs" :key="tab.icon" :value="tab.title">
         <VIcon :size="18" :icon="tab.icon" class="me-1" />
         <span>{{ tab.title }}</span>
       </VTab>
@@ -607,7 +604,7 @@ const viewAge = (age) => {
   </div>
 
   <VWindow v-model="prodTab" class="mt-6 disable-tab-transition" :touch="false">
-    <VWindowItem>
+    <VWindowItem value="Geral">
       <!-- Cards de Resumo -->
       <VRow class="mb-6 match-height" v-if="relatorios">
         <!-- Total de Agendamentos -->
@@ -1251,7 +1248,7 @@ const viewAge = (age) => {
       </VRow>
     </VWindowItem>
 
-    <VWindowItem>
+    <VWindowItem value="Retrabalhos">
       <!-- Tabelas de Retrabalho e Garantia -->
       <VRow class="mb-6" v-if="relatorios">
         <VCol cols="12">
@@ -1272,7 +1269,7 @@ const viewAge = (age) => {
       </VRow>
     </VWindowItem>
 
-    <VWindowItem>
+    <VWindowItem value="Garantias">
       <VRow class="mb-6" v-if="relatorios">
         <VCol cols="12">
           <div class="d-flex justify-space-between align-center mb-4">
@@ -1292,8 +1289,7 @@ const viewAge = (age) => {
       </VRow>
     </VWindowItem>
 
-    <VWindowItem>
-      <!-- Cards de Resumo de Contratos -->
+   <!--  <VWindowItem>
       <VRow class="mb-6" v-if="relatorios && resumoContratos.qtdContratos > 0">
         <VCol cols="12" md="6">
           <VCard>
@@ -1340,7 +1336,6 @@ const viewAge = (age) => {
         </VCol>
       </VRow>
 
-      <!-- Tabela de Contratos -->
       <VRow class="mb-6" v-if="relatorios && contratos.length > 0">
         <VCol cols="12">
           <VCard>
@@ -1358,7 +1353,6 @@ const viewAge = (age) => {
                 </VAvatar>
               </div>
 
-              <!-- Filtros -->
               <VRow class="mb-4">
                 <VCol cols="12" sm="3">
                   <AppTextField
@@ -1421,7 +1415,6 @@ const viewAge = (age) => {
                 </VCol>
               </VRow>
 
-              <!-- Tabela -->
               <div style="max-height: 400px; overflow-y: auto">
                 <VTable
                   v-if="contratosFiltrados.length > 0"
@@ -1602,6 +1595,10 @@ const viewAge = (age) => {
           </VCard>
         </VCol>
       </VRow>
+    </VWindowItem> -->
+
+    <VWindowItem value="Clientes">
+      <tableagendamentosclientes :dataDe="dataDe" :dataAte="dataAte" />
     </VWindowItem>
   </VWindow>
 

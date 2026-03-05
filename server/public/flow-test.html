@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Test - Simulador de Fluxos</title>
+    <style>
+        :root {
+            --primary: #25D366;
+            --primary-dark: #128C7E;
+            --bg-chat: #E5DDD5;
+            --bg-user: #DCF8C6;
+            --bg-bot: #FFFFFF;
+            --text-dark: #303030;
+            --text-light: #667781;
+            --border: #E0E0E0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: var(--primary-dark);
+            color: white;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 500;
+        }
+
+        .header-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-idle { background: #94a3b8; color: white; }
+        .status-running { background: var(--primary); color: white; }
+        .status-waiting { background: #f59e0b; color: white; }
+        .status-completed { background: #3b82f6; color: white; }
+        .status-error { background: #ef4444; color: white; }
+
+        /* Main container */
+        .container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background: white;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-section {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-section h3 {
+            font-size: 14px;
+            color: var(--text-light);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-group {
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-light);
+            margin-bottom: 4px;
+        }
+
+        .input-group input, .input-group select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .input-group input:focus, .input-group select:focus {
+            border-color: var(--primary);
+        }
+
+        .btn {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: #f1f5f9;
+            color: var(--text-dark);
+        }
+
+        .btn-secondary:hover {
+            background: #e2e8f0;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Flow info */
+        .flow-info {
+            padding: 12px;
+            background: #f8fafc;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .flow-info p {
+            margin-bottom: 4px;
+        }
+
+        .flow-info strong {
+            color: var(--text-dark);
+        }
+
+        /* Chat area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-chat);
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .message {
+            max-width: 65%;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.4;
+            position: relative;
+            word-wrap: break-word;
+        }
+
+        .message-user {
+            background: var(--bg-user);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-bot {
+            background: var(--bg-bot);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+        }
+
+        .message-system {
+            background: #fef3c7;
+            align-self: center;
+            font-size: 12px;
+            color: #92400e;
+            padding: 6px 12px;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: var(--text-light);
+            margin-top: 4px;
+            text-align: right;
+        }
+
+        .message-type {
+            font-size: 10px;
+            color: var(--primary-dark);
+            font-weight: 500;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        /* Input area */
+        .chat-input {
+            padding: 12px 20px;
+            background: #f0f2f5;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .chat-input button {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: none;
+            background: var(--primary);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .chat-input button:hover {
+            background: var(--primary-dark);
+        }
+
+        .chat-input button:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        /* Waiting indicator */
+        .waiting-indicator {
+            padding: 12px 16px;
+            background: #fef3c7;
+            border-bottom: 1px solid #fcd34d;
+            font-size: 13px;
+            color: #92400e;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .waiting-indicator.hidden {
+            display: none;
+        }
+
+        .dot-pulse {
+            display: inline-flex;
+            gap: 4px;
+        }
+
+        .dot-pulse span {
+            width: 6px;
+            height: 6px;
+            background: #92400e;
+            border-radius: 50%;
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+
+        .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+        .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes pulse {
+            0%, 60%, 100% { transform: scale(1); opacity: 0.5; }
+            30% { transform: scale(1.2); opacity: 1; }
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Flows list */
+        .flows-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .flow-item {
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .flow-item:hover {
+            border-color: var(--primary);
+            background: #f0fdf4;
+        }
+
+        .flow-item.selected {
+            border-color: var(--primary);
+            background: #dcfce7;
+        }
+
+        .flow-item-name {
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .flow-item-info {
+            font-size: 12px;
+            color: var(--text-light);
+            margin-top: 4px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                max-height: 40vh;
+                overflow-y: auto;
+            }
+
+            .message {
+                max-width: 85%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Flow Test - Simulador de Fluxos</h1>
+        <div class="header-info">
+            <span id="flowName">Nenhum fluxo ativo</span>
+            <span id="statusBadge" class="status-badge status-idle">Idle</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <h3>Configuracao</h3>
+                <div class="input-group">
+                    <label for="phoneInput">Telefone (para simular)</label>
+                    <input type="text" id="phoneInput" placeholder="5511999999999" value="5541871978546">
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="ttsEnabled" style="width: auto;">
+                        <span>Habilitar TTS (Text-to-Speech)</span>
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="fullAudio" style="width: auto;">
+                        <span>Full Audio (todas respostas em audio)</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Fluxos Disponiveis</h3>
+                <div id="flowsList" class="flows-list">
+                    <p style="color: var(--text-light); font-size: 13px;">Carregando fluxos...</p>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Acoes</h3>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="startSelectedFlow()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Iniciar Fluxo
+                    </button>
+                    <button class="btn btn-secondary" onclick="checkStatus()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                        Status
+                    </button>
+                    <button class="btn btn-danger" onclick="cancelFlow()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                        Cancelar
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetSession()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                            <path d="M3 3v5h5"></path>
+                        </svg>
+                        Reset
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Info do Fluxo</h3>
+                <div id="flowInfo" class="flow-info">
+                    <p>Nenhuma informacao disponivel</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-area">
+            <div id="waitingIndicator" class="waiting-indicator hidden">
+                <div class="dot-pulse">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <span id="waitingText">Aguardando resposta...</span>
+            </div>
+
+            <div id="chatMessages" class="chat-messages">
+                <div class="message message-system">
+                    Bem-vindo ao simulador de fluxos! Digite uma mensagem ou selecione um fluxo para comecar.
+                </div>
+            </div>
+
+            <div class="chat-input">
+                <input
+                    type="text"
+                    id="messageInput"
+                    placeholder="Digite sua mensagem..."
+                    onkeypress="handleKeyPress(event)"
+                >
+                <button id="sendButton" onclick="sendMessage()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <script>
+        // Configuracao
+        const API_BASE = window.location.origin;
+        let selectedFlowId = null;
+        let currentStatus = 'idle';
+        let isFirstMessage = true;
+
+        // Elementos
+        const phoneInput = document.getElementById('phoneInput');
+        const messageInput = document.getElementById('messageInput');
+        const chatMessages = document.getElementById('chatMessages');
+        const flowsList = document.getElementById('flowsList');
+        const flowInfo = document.getElementById('flowInfo');
+        const flowName = document.getElementById('flowName');
+        const statusBadge = document.getElementById('statusBadge');
+        const waitingIndicator = document.getElementById('waitingIndicator');
+        const waitingText = document.getElementById('waitingText');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const sendButton = document.getElementById('sendButton');
+        const ttsEnabledCheckbox = document.getElementById('ttsEnabled');
+        const fullAudioCheckbox = document.getElementById('fullAudio');
+
+        // Funcao para obter opcoes de audio
+        function getAudioOptions() {
+            return {
+                ttsEnabled: ttsEnabledCheckbox?.checked || false,
+                fullAudio: fullAudioCheckbox?.checked || false
+            };
+        }
+
+        // Inicializacao
+        document.addEventListener('DOMContentLoaded', () => {
+            loadFlows();
+        });
+
+        // Carregar lista de fluxos
+        async function loadFlows() {
+            try {
+                const response = await fetch(`${API_BASE}/flow-test/flows`);
+                const data = await response.json();
+
+                if (data.success && data.flows.length > 0) {
+                    flowsList.innerHTML = data.flows.map(flow => `
+                        <div class="flow-item ${flow.status === 'ativo' ? '' : 'disabled'}"
+                             data-id="${flow.id}"
+                             onclick="selectFlow(${flow.id}, '${flow.name}')">
+                            <div class="flow-item-name">${flow.name}</div>
+                            <div class="flow-item-info">
+                                Trigger: ${flow.trigger || 'N/A'} | Prioridade: ${flow.priority || 0} | ${flow.status}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    flowsList.innerHTML = '<p style="color: var(--text-light); font-size: 13px;">Nenhum fluxo encontrado</p>';
+                }
+            } catch (error) {
+                console.error('Erro ao carregar fluxos:', error);
+                flowsList.innerHTML = '<p style="color: #ef4444; font-size: 13px;">Erro ao carregar fluxos</p>';
+            }
+        }
+
+        // Selecionar fluxo
+        function selectFlow(id, name) {
+            selectedFlowId = id;
+
+            document.querySelectorAll('.flow-item').forEach(el => {
+                el.classList.remove('selected');
+            });
+
+            const selected = document.querySelector(`.flow-item[data-id="${id}"]`);
+            if (selected) {
+                selected.classList.add('selected');
+            }
+
+            addSystemMessage(`Fluxo "${name}" selecionado. Clique em "Iniciar Fluxo" ou envie uma mensagem.`);
+        }
+
+        // Iniciar fluxo selecionado
+        async function startSelectedFlow() {
+            if (!selectedFlowId) {
+                alert('Selecione um fluxo primeiro!');
+                return;
+            }
+
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                alert('Digite um numero de telefone!');
+                return;
+            }
+
+            showLoading();
+            const audioOpts = getAudioOptions();
+
+            try {
+                const response = await fetch(`${API_BASE}/flow-test/start-flow`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        flowId: selectedFlowId,
+                        phone,
+                        ttsEnabled: audioOpts.ttsEnabled,
+                        fullAudio: audioOpts.fullAudio
+                    })
+                });
+
+                const data = await response.json();
+                hideLoading();
+
+                if (data.success) {
+                    isFirstMessage = false;
+                    updateStatus(data.currentStatus, data.flowName);
+                    updateFlowInfo(data);
+
+                    if (data.botResponses && data.botResponses.length > 0) {
+                        data.botResponses.forEach(msg => {
+                            addBotMessage(msg.content, msg.type, msg.audioUrl);
+                        });
+                    }
+
+                    updateWaitingIndicator(data.waitingFor);
+                } else {
+                    addSystemMessage(`Erro: ${data.error}`);
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Erro:', error);
+                addSystemMessage(`Erro de conexao: ${error.message}`);
+            }
+        }
+
+        // Enviar mensagem
+        async function sendMessage() {
+            const text = messageInput.value.trim();
+            const phone = phoneInput.value.trim();
+
+            if (!text || !phone) return;
+
+            messageInput.value = '';
+            addUserMessage(text);
+
+            showLoading();
+
+            try {
+                const endpoint = isFirstMessage ? '/flow-test/simulate-message' : '/flow-test/respond';
+                const audioOpts = getAudioOptions();
+
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone,
+                        text,
+                        ttsEnabled: audioOpts.ttsEnabled,
+                        fullAudio: audioOpts.fullAudio
+                    })
+                });
+
+                const data = await response.json();
+                hideLoading();
+
+                if (data.success) {
+                    isFirstMessage = false;
+                    updateStatus(data.currentStatus, data.flowName);
+                    updateFlowInfo(data);
+
+                    if (data.botResponses && data.botResponses.length > 0) {
+                        data.botResponses.forEach(msg => {
+                            addBotMessage(msg.content, msg.type, msg.audioUrl);
+                        });
+                    }
+
+                    updateWaitingIndicator(data.waitingFor);
+
+                    if (data.currentStatus === 'completed') {
+                        addSystemMessage('Fluxo concluido!');
+                    }
+                } else {
+                    addSystemMessage(`Erro: ${data.error || data.message}`);
+                    if (data.suggestion) {
+                        addSystemMessage(data.suggestion);
+                    }
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Erro:', error);
+                addSystemMessage(`Erro de conexao: ${error.message}`);
+            }
+        }
+
+        // Verificar status
+        async function checkStatus() {
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                alert('Digite um numero de telefone!');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch(`${API_BASE}/flow-test/status/${phone}`);
+                const data = await response.json();
+                hideLoading();
+
+                if (data.hasActiveRun) {
+                    updateStatus(data.status, data.flowName);
+                    updateFlowInfo(data);
+                    updateWaitingIndicator(data.waitingFor);
+                    addSystemMessage(`Status: ${data.status} | No: ${data.currentNode?.label || 'N/A'}`);
+                } else {
+                    updateStatus('idle', null);
+                    addSystemMessage('Nenhum fluxo ativo para este telefone.');
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Erro:', error);
+                addSystemMessage(`Erro: ${error.message}`);
+            }
+        }
+
+        // Cancelar fluxo
+        async function cancelFlow() {
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                alert('Digite um numero de telefone!');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch(`${API_BASE}/flow-test/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone })
+                });
+
+                const data = await response.json();
+                hideLoading();
+
+                if (data.success) {
+                    updateStatus('cancelled', null);
+                    updateWaitingIndicator(null);
+                    addSystemMessage(data.message);
+                } else {
+                    addSystemMessage(`Erro: ${data.error}`);
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Erro:', error);
+                addSystemMessage(`Erro: ${error.message}`);
+            }
+        }
+
+        // Reset da sessao
+        async function resetSession() {
+            const phone = phoneInput.value.trim();
+            if (!phone) {
+                alert('Digite um numero de telefone!');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch(`${API_BASE}/flow-test/reset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone })
+                });
+
+                const data = await response.json();
+                hideLoading();
+
+                if (data.success) {
+                    // Limpar chat
+                    chatMessages.innerHTML = '<div class="message message-system">Sessao resetada. Pronto para novo teste!</div>';
+                    isFirstMessage = true;
+                    selectedFlowId = null;
+                    updateStatus('idle', null);
+                    updateWaitingIndicator(null);
+                    updateFlowInfo({});
+
+                    document.querySelectorAll('.flow-item').forEach(el => {
+                        el.classList.remove('selected');
+                    });
+                } else {
+                    addSystemMessage(`Erro: ${data.error}`);
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Erro:', error);
+                addSystemMessage(`Erro: ${error.message}`);
+            }
+        }
+
+        // Funcoes auxiliares
+        function addUserMessage(text) {
+            const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const html = `
+                <div class="message message-user">
+                    ${escapeHtml(text)}
+                    <div class="message-time">${time}</div>
+                </div>
+            `;
+            chatMessages.insertAdjacentHTML('beforeend', html);
+            scrollToBottom();
+        }
+
+        function addBotMessage(text, type = 'text', audioUrl = null) {
+            const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const typeLabel = type !== 'text' ? `<div class="message-type">${type}</div>` : '';
+
+            let content = '';
+            if (audioUrl) {
+                // Determinar tipo MIME baseado na extensão
+                const audioType = audioUrl.endsWith('.ogg') ? 'audio/ogg' : 'audio/mpeg';
+                // Mensagem com audio
+                content = `
+                    <audio controls style="max-width: 100%; margin-bottom: 8px;">
+                        <source src="${audioUrl}" type="${audioType}">
+                        Seu navegador nao suporta audio.
+                    </audio>
+                    <div style="font-size: 12px; color: #667781;">${escapeHtml(text).replace(/\n/g, '<br>')}</div>
+                `;
+            } else {
+                content = escapeHtml(text).replace(/\n/g, '<br>');
+            }
+
+            const html = `
+                <div class="message message-bot">
+                    ${typeLabel}
+                    ${content}
+                    <div class="message-time">${time}</div>
+                </div>
+            `;
+            chatMessages.insertAdjacentHTML('beforeend', html);
+            scrollToBottom();
+        }
+
+        function addSystemMessage(text) {
+            const html = `<div class="message message-system">${escapeHtml(text)}</div>`;
+            chatMessages.insertAdjacentHTML('beforeend', html);
+            scrollToBottom();
+        }
+
+        function updateStatus(status, name) {
+            currentStatus = status;
+
+            statusBadge.className = 'status-badge';
+            switch (status) {
+                case 'running':
+                    statusBadge.classList.add('status-running');
+                    statusBadge.textContent = 'Executando';
+                    break;
+                case 'waiting_for_response':
+                    statusBadge.classList.add('status-waiting');
+                    statusBadge.textContent = 'Aguardando';
+                    break;
+                case 'completed':
+                    statusBadge.classList.add('status-completed');
+                    statusBadge.textContent = 'Concluido';
+                    break;
+                case 'error':
+                case 'cancelled':
+                    statusBadge.classList.add('status-error');
+                    statusBadge.textContent = status === 'error' ? 'Erro' : 'Cancelado';
+                    break;
+                default:
+                    statusBadge.classList.add('status-idle');
+                    statusBadge.textContent = 'Idle';
+            }
+
+            flowName.textContent = name || 'Nenhum fluxo ativo';
+        }
+
+        function updateFlowInfo(data) {
+            if (!data.runId) {
+                flowInfo.innerHTML = '<p>Nenhuma informacao disponivel</p>';
+                return;
+            }
+
+            flowInfo.innerHTML = `
+                <p><strong>Run ID:</strong> ${data.runId}</p>
+                <p><strong>Flow ID:</strong> ${data.flowId || 'N/A'}</p>
+                <p><strong>Status:</strong> ${data.currentStatus || 'N/A'}</p>
+                ${data.currentNode ? `<p><strong>No Atual:</strong> ${data.currentNode.label || data.currentNode.type}</p>` : ''}
+            `;
+        }
+
+        function updateWaitingIndicator(waitingFor) {
+            if (waitingFor) {
+                waitingIndicator.classList.remove('hidden');
+
+                let text = 'Aguardando resposta';
+                if (waitingFor.type === 'wait_reply_options') {
+                    text = `Escolha uma opcao: ${waitingFor.options?.join(', ') || ''}`;
+                } else if (waitingFor.variableName) {
+                    text = `Capturando: ${waitingFor.variableName}`;
+                }
+                waitingText.textContent = text;
+            } else {
+                waitingIndicator.classList.add('hidden');
+            }
+        }
+
+        function showLoading() {
+            loadingOverlay.classList.remove('hidden');
+            sendButton.disabled = true;
+        }
+
+        function hideLoading() {
+            loadingOverlay.classList.add('hidden');
+            sendButton.disabled = false;
+        }
+
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+    </script>
+</body>
+</html>

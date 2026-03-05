@@ -184,6 +184,52 @@
 
     <VDivider class="my-4" />
 
+    <!-- Configurações de Timeout -->
+    <div class="mb-4">
+      <h6 class="text-subtitle-1 mb-3">Tempo Limite de Resposta</h6>
+      <p class="text-caption text-medium-emphasis mb-3">
+        Configure quanto tempo aguardar pela resposta do usuário (0 = sem limite)
+      </p>
+
+      <VRow>
+        <VCol cols="12" md="6">
+          <AppTextField
+            v-model.number="localConfig.timeoutValue"
+            label="Valor do Timeout"
+            type="number"
+            min="0"
+            hint="0 = aguardar indefinidamente"
+            persistent-hint
+          >
+            <template #prepend-inner>
+              <VIcon icon="tabler-clock" size="small" />
+            </template>
+          </AppTextField>
+        </VCol>
+
+        <VCol cols="12" md="6">
+          <AppSelect
+            v-model="localConfig.timeoutType"
+            label="Unidade de Tempo"
+            :items="[
+              { title: 'Segundos', value: 'seconds' },
+              { title: 'Minutos', value: 'minutes' },
+              { title: 'Horas', value: 'hours' },
+              { title: 'Dias', value: 'days' },
+            ]"
+            item-title="title"
+            item-value="value"
+          >
+            <template #prepend-inner>
+              <VIcon icon="tabler-clock-hour-4" size="small" />
+            </template>
+          </AppSelect>
+        </VCol>
+      </VRow>
+    </div>
+
+    <VDivider class="my-4" />
+
     <!-- Configurações de Validação -->
     <div class="mb-4">
       <h6 class="text-subtitle-1 mb-3">Configurações de Validação</h6>
@@ -308,6 +354,8 @@ const localConfig = ref({
   invalidOptionMessage:
     props.config.invalidOptionMessage ||
     "<p>Opção inválida. Por favor, escolha uma das opções acima.</p>",
+  timeoutValue: props.config.timeoutValue || 0,
+  timeoutType: props.config.timeoutType || "minutes",
 });
 
 const variaveisItens = ref([]);
@@ -492,6 +540,8 @@ onMounted(async () => {
       invalidOptionMessage:
         props.config.invalidOptionMessage ||
         "<p>Opção inválida. Por favor, escolha uma das opções acima.</p>",
+      timeoutValue: props.config.timeoutValue || 0,
+      timeoutType: props.config.timeoutType || "minutes",
     };
   }
 });

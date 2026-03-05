@@ -1,5 +1,6 @@
 const moment = require('moment');
 const dbQuery = require('../../utils/dbHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 const { generateGeminiText } = require('../../utils/gemini');
 
 /**
@@ -11,10 +12,11 @@ const { generateGeminiText } = require('../../utils/gemini');
  * Obtém a configuração de disponibilidade dos funcionários do banco
  * @returns {Object} Configuração de disponibilidade
  */
-async function getAvailabilityConfig() {
+async function getAvailabilityConfig(empresa_id = null) {
     try {
+        const ew = empresaWhere(empresa_id);
         const config = await dbQuery(
-            'SELECT * FROM Options WHERE type = "gemini_disponibilidade"'
+            `SELECT * FROM Options WHERE type = "gemini_disponibilidade" AND ${ew.sql}`, [...ew.params]
         );
         
         if (config.length > 0 && config[0].value) {
@@ -47,8 +49,8 @@ async function getAvailabilityConfig() {
  * @param {String} data - Data no formato YYYY-MM-DD
  * @returns {Boolean}
  */
-async function isDataBloqueada(data) {
-    const config = await getAvailabilityConfig();
+async function isDataBloqueada(data, empresa_id = null) {
+    const config = await getAvailabilityConfig(empresa_id);
     const dataMoment = moment(data, 'YYYY-MM-DD');
     
     return config.datasBloqueadas.some(bloqueio => {
@@ -63,8 +65,8 @@ async function isDataBloqueada(data) {
  * @param {String} diaSemana - Dia da semana (0-6, domingo = 0)
  * @returns {Array} Array de horários [{inicio, fim}]
  */
-async function getHorariosFuncionario(funId, diaSemana) {
-    const config = await getAvailabilityConfig();
+async function getHorariosFuncionario(funId, diaSemana, empresa_id = null) {
+    const config = await getAvailabilityConfig(empresa_id);
     const funcionarioConfig = config.funcionarios.find(f => f.fun_id == funId);
     
     if (!funcionarioConfig || !funcionarioConfig.horarios) {
@@ -89,20 +91,22 @@ async function getHorariosFuncionario(funId, diaSemana) {
  * @param {String} data - Data no formato YYYY-MM-DD
  * @returns {Array} Array de agendamentos
  */
-async function getAgendamentosFuncionarioData(funId, data) {
+async function getAgendamentosFuncionarioData(funId, data, empresa_id = null) {
     try {
+        const ew = empresaWhere(empresa_id);
         const agendamentos = await dbQuery(
-            `SELECT age_id, age_data, age_horaInicio, age_horaFim, age_dataFim, 
+            `SELECT age_id, age_data, age_horaInicio, age_horaFim, age_dataFim,
              age_horaInicioFim, age_horaFimFim, age_type, ast_id
-             FROM AGENDAMENTO 
-             WHERE fun_id = ? 
+             FROM AGENDAMENTO
+             WHERE fun_id = ?
              AND age_ativo = 1
              AND ast_id NOT IN (6, 7)
+             AND ${ew.sql}
              AND (
-                 (age_data = ? AND age_dataFim IS NULL) 
+                 (age_data = ? AND age_dataFim IS NULL)
                  OR (age_data <= ? AND age_dataFim >= ?)
              )`,
-            [funId, data, data, data]
+            [funId, ...ew.params, data, data, data]
         );
         
         return agendamentos || [];
@@ -119,8 +123,8 @@ async function getAgendamentosFuncionarioData(funId, data) {
  * @param {Number} subservicoId - ID do subserviço (opcional)
  * @returns {Boolean}
  */
-async function funcionarioPodeAtenderServico(funId, servicoId, subservicoId = null) {
-    const config = await getAvailabilityConfig();
+async function funcionarioPodeAtenderServico(funId, servicoId, subservicoId = null, empresa_id = null) {
+    const config = await getAvailabilityConfig(empresa_id);
     const funcionarioConfig = config.funcionarios.find(f => f.fun_id == funId);
     
     if (!funcionarioConfig) {
@@ -182,24 +186,24 @@ function temConflito(periodo1, periodo2) {
  * @param {Number} duracaoMinutos - Duração necessária em minutos
  * @returns {Array} Array de horários livres [{inicio, fim}]
  */
-async function getHorariosLivres(funId, data, duracaoMinutos = 60) {
+async function getHorariosLivres(funId, data, duracaoMinutos = 60, empresa_id = null) {
     // Verificar se a data está bloqueada
-    const dataBloqueada = await isDataBloqueada(data);
+    const dataBloqueada = await isDataBloqueada(data, empresa_id);
     if (dataBloqueada) {
         return [];
     }
-    
+
     const dataMoment = moment(data, 'YYYY-MM-DD');
     const diaSemana = dataMoment.day();
-    
+
     // Obter horários de trabalho do funcionário
-    const horariosTrabalho = await getHorariosFuncionario(funId, diaSemana);
+    const horariosTrabalho = await getHorariosFuncionario(funId, diaSemana, empresa_id);
     if (horariosTrabalho.length === 0) {
         return [];
     }
-    
+
     // Obter agendamentos do funcionário na data
-    const agendamentos = await getAgendamentosFuncionarioData(funId, data);
+    const agendamentos = await getAgendamentosFuncionarioData(funId, data, empresa_id);
     
     // Para cada período de trabalho, remover os agendamentos e encontrar janelas livres
     const horariosLivres = [];
@@ -272,12 +276,13 @@ async function getHorariosLivres(funId, data, duracaoMinutos = 60) {
  * @param {String} periodoPreferido - Período preferido: 'manha', 'tarde', 'noite', null
  * @returns {Array} Array de opções [{funId, data, horario, funcionarioNome}]
  */
-async function findDisponibilidades(servicoId, subservicoId = null, dataInicio, dataFim, duracaoMinutos = 60, periodoPreferido = null) {
+async function findDisponibilidades(servicoId, subservicoId = null, dataInicio, dataFim, duracaoMinutos = 60, periodoPreferido = null, empresa_id = null) {
     const opcoes = [];
-    
+    const ew = empresaWhere(empresa_id);
+
     // Buscar funcionários que podem atender o serviço
     const funcionarios = await dbQuery(
-        'SELECT id, fullName, ordemCalendar FROM User WHERE ativo = 1 AND podeAgendamento = 1'
+        `SELECT id, fullName, ordemCalendar FROM User WHERE ativo = 1 AND podeAgendamento = 1 AND ${ew.sql}`, [...ew.params]
     );
     
     const dataInicioMoment = moment(dataInicio, 'YYYY-MM-DD');
@@ -286,16 +291,16 @@ async function findDisponibilidades(servicoId, subservicoId = null, dataInicio, 
     // Para cada funcionário
     for (const funcionario of funcionarios) {
         // Verificar se pode atender o serviço/subserviço
-        const podeAtender = await funcionarioPodeAtenderServico(funcionario.id, servicoId, subservicoId);
+        const podeAtender = await funcionarioPodeAtenderServico(funcionario.id, servicoId, subservicoId, empresa_id);
         if (!podeAtender) {
             continue;
         }
-        
+
         // Para cada data no intervalo
         let dataAtual = dataInicioMoment.clone();
         while (dataAtual.isSameOrBefore(dataFimMoment)) {
             const dataStr = dataAtual.format('YYYY-MM-DD');
-            const horariosLivres = await getHorariosLivres(funcionario.id, dataStr, duracaoMinutos);
+            const horariosLivres = await getHorariosLivres(funcionario.id, dataStr, duracaoMinutos, empresa_id);
             
             for (const horario of horariosLivres) {
                 const horaInicio = horarioParaMinutos(horario.inicio);
@@ -362,25 +367,26 @@ function formatDisponibilidadesParaIA(disponibilidades, limite = 5) {
  * @param {String} query - Termo de busca (opcional)
  * @returns {Array} Array de serviços com informações
  */
-async function getServicosInfo(query = null) {
+async function getServicosInfo(query = null, empresa_id = null) {
     try {
-        let querySQL = 'SELECT ser_id, ser_nome, ser_descricao, ser_valor FROM SERVICOS_NEW WHERE 1=1';
-        const params = [];
-        
+        const ew = empresaWhere(empresa_id);
+        let querySQL = `SELECT ser_id, ser_nome, ser_descricao, ser_valor FROM SERVICOS_NEW WHERE ${ew.sql}`;
+        const params = [...ew.params];
+
         if (query) {
             querySQL += ' AND (ser_nome LIKE ? OR ser_descricao LIKE ?)';
             params.push(`%${query}%`, `%${query}%`);
         }
-        
+
         querySQL += ' LIMIT 20';
-        
+
         const servicos = await dbQuery(querySQL, params);
-        
+
         // Buscar subserviços
         for (const servico of servicos) {
             const subs = await dbQuery(
-                'SELECT ser_id, ser_nome, ser_descricao, ser_valor FROM SERVICOS_SUBS WHERE ser_pai = ?',
-                [servico.ser_id]
+                `SELECT ser_id, ser_nome, ser_descricao, ser_valor FROM SERVICOS_SUBS WHERE ser_pai = ? AND ${ew.sql}`,
+                [servico.ser_id, ...ew.params]
             );
             servico.subservicos = subs || [];
         }
@@ -442,7 +448,7 @@ function formatServicosParaIA(servicos) {
  * @param {Number} subservicoId - ID do subserviço (opcional)
  * @returns {Object} { disponivel, funcionariosDisponiveis, funcionariosOcupados, total, detalhes }
  */
-async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoId = null, subservicoId = null) {
+async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoId = null, subservicoId = null, empresa_id = null) {
     console.log('\n🔍 ========== VERIFICANDO DISPONIBILIDADE GERAL ==========');
     console.log(`📅 Data: ${data} (${moment(data).format('DD/MM/YYYY - dddd')})`);
     console.log(`⏰ Horário: ${horaInicio} - ${horaFim}`);
@@ -450,13 +456,14 @@ async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoI
     
     try {
         // 1. Buscar todos os funcionários ativos
+        const ew = empresaWhere(empresa_id);
         console.log('\n👥 Buscando funcionários ativos...');
         let funcionarios = await dbQuery(
-            'SELECT id, fullName, ordemCalendar FROM User WHERE ativo = 1 AND podeAgendamento = 1'
+            `SELECT id, fullName, ordemCalendar FROM User WHERE ativo = 1 AND podeAgendamento = 1 AND ${ew.sql}`, [...ew.params]
         );
 
         // Ordenar funcionários pela prioridade configurada ou ordemCalendar
-        const config = await getAvailabilityConfig();
+        const config = await getAvailabilityConfig(empresa_id);
         funcionarios = funcionarios.map(func => {
             const funcConfig = config.funcionarios.find(f => f.fun_id === func.id);
             const prioridadeConfig = funcConfig?.prioridade;
@@ -483,7 +490,7 @@ async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoI
 
         // 2. Verificar se a data está bloqueada
         console.log('\n🚫 Verificando se data está bloqueada...');
-        const dataBloqueada = await isDataBloqueada(data);
+        const dataBloqueada = await isDataBloqueada(data, empresa_id);
         console.log(`   ${dataBloqueada ? '❌ Data BLOQUEADA' : '✅ Data DISPONÍVEL'}`);
         
         if (dataBloqueada) {
@@ -504,18 +511,19 @@ async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoI
         // 3. Buscar todos os agendamentos desta data
         console.log('\n📆 Buscando agendamentos existentes na data...');
         const agendamentos = await dbQuery(`
-            SELECT 
+            SELECT
                 age_id,
                 fun_id,
                 age_horaInicio,
                 age_horaFim,
                 age_type
-            FROM AGENDAMENTO 
+            FROM AGENDAMENTO
             WHERE age_ativo = 1
             AND age_data = ?
             AND ast_id NOT IN (6, 7)
+            AND ${ew.sql}
             ORDER BY age_horaInicio
-        `, [data]);
+        `, [data, ...ew.params]);
         console.log(`   ℹ️ ${agendamentos.length} agendamento(s) encontrado(s)`);
         
         if (agendamentos.length > 0) {
@@ -546,7 +554,8 @@ async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoI
                 const podeAtender = await funcionarioPodeAtenderServico(
                     funcionario.id,
                     servicoId,
-                    subservicoId
+                    subservicoId,
+                    empresa_id
                 );
                 
                 if (!podeAtender) {
@@ -568,8 +577,8 @@ async function verificarDisponibilidadeGeral(data, horaInicio, horaFim, servicoI
             const nomeDia = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'][diaSemana];
             console.log(`      📅 Dia da semana: ${nomeDia} (${diaSemana})`);
             
-            const horariosTrabalho = await getHorariosFuncionario(funcionario.id, diaSemana);
-            console.log(`      ⏰ Horários de trabalho: ${horariosTrabalho.length > 0 ? 
+            const horariosTrabalho = await getHorariosFuncionario(funcionario.id, diaSemana, empresa_id);
+            console.log(`      ⏰ Horários de trabalho: ${horariosTrabalho.length > 0 ?
                 horariosTrabalho.map(h => `${h.inicio}-${h.fim}`).join(', ') : 'NENHUM'}`);
             
             if (horariosTrabalho.length === 0) {
@@ -744,7 +753,7 @@ function formatarDisponibilidadeGeralParaIA(resultado) {
  * @param {Number} subservicoId - ID do subserviço (opcional)
  * @returns {Array} - Lista de opções disponíveis
  */
-async function buscarOpcoesDisponibilidade(dataInicio, dataFim, duracaoMinutos = 60, periodoPreferido = null, servicoId = null, subservicoId = null) {
+async function buscarOpcoesDisponibilidade(dataInicio, dataFim, duracaoMinutos = 60, periodoPreferido = null, servicoId = null, subservicoId = null, empresa_id = null) {
     const opcoes = [];
     
     const dataInicioMoment = moment(dataInicio, 'YYYY-MM-DD');
@@ -780,7 +789,8 @@ async function buscarOpcoesDisponibilidade(dataInicio, dataFim, duracaoMinutos =
                 horaInicio,
                 horaFim,
                 servicoId,
-                subservicoId
+                subservicoId,
+                empresa_id
             );
             
             if (disponibilidade.disponivel) {
@@ -899,10 +909,211 @@ async function geocodificarEnderecoComMaps(enderecoTexto, fallback = null) {
         if (parsed.lat !== undefined && parsed.lng !== undefined) {
             return { latitude: parsed.lat, longitude: parsed.lng };
         }
-    } catch (err) {
-        console.error('Erro ao parsear geocodificação:', err.message);
+    }
+    catch (parseError) {
+        console.error('Erro ao parsear resposta do geocodificador:', parseError.message);
     }
     return fallback;
+}
+
+/**
+ * Busca endereço completo por local/ponto de referência usando Google Maps Grounding
+ * Converte locais como "Shopping Palladium Curitiba" em endereço completo
+ * USA CHAMADA DIRETA AO GEMINI sem passar pelo sistema de instruções padrão
+ * @param {String} local - Local ou ponto de referência (ex: "Shopping Palladium", "Terminal Pinheirinho")
+ * @param {String} cidadeEstado - Cidade/Estado para contexto (ex: "Curitiba, PR")
+ * @returns {Promise<Object>} - Objeto com endereço completo, lat/lng e taxa de deslocamento
+ */
+async function buscarEnderecoPorLocal(local, cidadeEstado = 'Curitiba, PR', empresa_id = null) {
+    console.log(`\n🗺️ ========== BUSCA DE ENDEREÇO POR LOCAL ==========`);
+    console.log(`📍 Local informado: "${local}"`);
+    console.log(`🏙️ Contexto: ${cidadeEstado}`);
+
+    if (!local || local.trim().length < 3) {
+        return { success: false, error: 'Local muito curto para busca' };
+    }
+
+    const prompt = [
+        'Você é um geocodificador. Encontre o endereço completo do local informado.',
+        'Retorne APENAS um JSON válido, sem explicações.',
+        '',
+        'FORMATO DA RESPOSTA (apenas JSON):',
+        '{"encontrado":true,"nomeLocal":"Nome","logradouro":"Rua X","numero":"123","bairro":"Bairro","cidade":"Cidade","estado":"UF","cep":"00000-000","enderecoCompleto":"Rua X, 123 - Bairro, Cidade - UF","lat":-25.0,"lng":-49.0}',
+        '',
+        'Se não encontrar: {"encontrado":false,"motivo":"razão"}',
+        '',
+        `LOCAL: ${local}`,
+        `CIDADE/REGIÃO: ${cidadeEstado}`
+    ].join('\n');
+
+    try {
+        // Usar chamada direta ao SDK do Gemini para evitar sistema de instruções da IA
+        const { GoogleGenAI } = require('@google/genai');
+        const apiKey = process.env.GEMINI_API_KEY;
+
+        // Buscar API key do banco se não estiver no env
+        let geminiKey = apiKey;
+        if (!geminiKey) {
+            const ewLocal = empresaWhere(empresa_id);
+            const keyResult = await dbQuery(`SELECT value FROM Options WHERE type = 'gemini_key' AND ${ewLocal.sql} LIMIT 1`, [...ewLocal.params]);
+            geminiKey = keyResult?.[0]?.value;
+        }
+
+        if (!geminiKey) {
+            console.error('❌ API Key do Gemini não encontrada');
+            return { success: false, error: 'API Key não configurada' };
+        }
+
+        const genAI = new GoogleGenAI({ apiKey: geminiKey });
+
+        // Chamar Gemini diretamente com grounding do Maps
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.5-pro',
+            contents: prompt,
+            config: {
+                tools: [{ googleMaps: {} }]
+            }
+        });
+
+        const resp = response?.text || '';
+        console.log('📥 Resposta do Maps Grounding:', resp?.substring(0, 300));
+
+        const cleaned = (resp || '').trim();
+        const jsonStart = cleaned.indexOf('{');
+        const jsonEnd = cleaned.lastIndexOf('}');
+
+        if (jsonStart === -1 || jsonEnd === -1) {
+            console.error('❌ Resposta não contém JSON válido');
+            console.log('📄 Resposta completa:', cleaned);
+            return { success: false, error: 'Não foi possível interpretar a resposta do Maps' };
+        }
+
+        const jsonStr = cleaned.slice(jsonStart, jsonEnd + 1);
+        const parsed = JSON.parse(jsonStr);
+
+        if (parsed.encontrado === false) {
+            console.log(`❌ Local não encontrado: ${parsed.motivo}`);
+            return { success: false, error: parsed.motivo || 'Local não encontrado' };
+        }
+
+        console.log(`✅ Endereço encontrado: ${parsed.enderecoCompleto}`);
+        console.log(`📍 Coordenadas: ${parsed.lat}, ${parsed.lng}`);
+
+        return {
+            success: true,
+            nomeLocal: parsed.nomeLocal || local,
+            endereco: {
+                logradouro: parsed.logradouro,
+                numero: parsed.numero,
+                bairro: parsed.bairro,
+                cidade: parsed.cidade,
+                estado: parsed.estado,
+                cep: parsed.cep
+            },
+            enderecoCompleto: parsed.enderecoCompleto,
+            lat: parsed.lat,
+            lng: parsed.lng,
+            coordenadas: {
+                latitude: parsed.lat,
+                longitude: parsed.lng
+            }
+        };
+
+    } catch (error) {
+        console.error('❌ Erro ao buscar endereço por local:', error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Calcula taxa de deslocamento baseada na distância
+ * @param {Object} coordsOrigem - Coordenadas de origem {lat, lng}
+ * @param {Object} coordsDestino - Coordenadas de destino {lat, lng}
+ * @param {Object} configTaxa - Configuração de taxa (raioBase, valorPorKmExtra)
+ * @returns {Object} - {distanciaKm, dentroRaioBase, taxaDeslocamento, tempoEstimado}
+ */
+async function calcularTaxaDeslocamento(coordsOrigem, coordsDestino, configTaxa = null) {
+    console.log('\n💰 ========== CÁLCULO DE TAXA DE DESLOCAMENTO ==========');
+
+    // Configuração padrão de taxa (pode vir do banco)
+    const config = configTaxa || {
+        raioBaseKm: 10,      // Primeiros 10km sem taxa
+        valorPorKmExtra: 2,  // R$ 2 por km adicional
+        taxaMinima: 0,       // Taxa mínima
+        taxaMaxima: 100      // Taxa máxima
+    };
+
+    if (!coordsOrigem || !coordsDestino) {
+        console.log('⚠️ Coordenadas incompletas, retornando sem taxa');
+        return {
+            distanciaKm: null,
+            dentroRaioBase: true,
+            taxaDeslocamento: 0,
+            tempoEstimado: null,
+            erro: 'Coordenadas não disponíveis'
+        };
+    }
+
+    // Calcular distância em linha reta (Haversine)
+    const distanciaKm = calcularDistanciaHaversine(
+        coordsOrigem.lat || coordsOrigem.latitude,
+        coordsOrigem.lng || coordsOrigem.longitude,
+        coordsDestino.lat || coordsDestino.latitude,
+        coordsDestino.lng || coordsDestino.longitude
+    );
+
+    // Multiplicar por 1.3 para aproximar distância real (ruas não são linhas retas)
+    const distanciaReal = distanciaKm * 1.3;
+
+    console.log(`📏 Distância em linha reta: ${distanciaKm.toFixed(2)} km`);
+    console.log(`📏 Distância estimada real: ${distanciaReal.toFixed(2)} km`);
+
+    const dentroRaioBase = distanciaReal <= config.raioBaseKm;
+    let taxaDeslocamento = 0;
+
+    if (!dentroRaioBase) {
+        const kmExtras = distanciaReal - config.raioBaseKm;
+        taxaDeslocamento = kmExtras * config.valorPorKmExtra;
+
+        // Aplicar limites
+        taxaDeslocamento = Math.max(config.taxaMinima, taxaDeslocamento);
+        taxaDeslocamento = Math.min(config.taxaMaxima, taxaDeslocamento);
+        taxaDeslocamento = Math.round(taxaDeslocamento * 100) / 100; // 2 casas decimais
+    }
+
+    // Estimar tempo (média 30km/h em cidade)
+    const tempoMinutos = Math.round((distanciaReal / 30) * 60);
+
+    console.log(`🏠 Dentro do raio base (${config.raioBaseKm}km): ${dentroRaioBase ? 'SIM' : 'NÃO'}`);
+    console.log(`💰 Taxa de deslocamento: R$ ${taxaDeslocamento.toFixed(2)}`);
+    console.log(`⏱️ Tempo estimado: ${tempoMinutos} minutos`);
+
+    return {
+        distanciaKm: Math.round(distanciaReal * 10) / 10,
+        dentroRaioBase,
+        taxaDeslocamento,
+        tempoEstimado: tempoMinutos,
+        raioBaseKm: config.raioBaseKm,
+        valorPorKmExtra: config.valorPorKmExtra
+    };
+}
+
+/**
+ * Fórmula Haversine para calcular distância entre duas coordenadas
+ */
+function calcularDistanciaHaversine(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Raio da Terra em km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+function toRad(deg) {
+    return deg * (Math.PI / 180);
 }
 
 /**
@@ -957,6 +1168,10 @@ module.exports = {
     formatarOpcoesParaIA,
     getPeriodoDoHorario,
     resumirOpcoesParaIAComMaps,
-    geocodificarEnderecoComMaps
+    geocodificarEnderecoComMaps,
+    // Novas funções para busca de endereço por local e taxa de deslocamento
+    buscarEnderecoPorLocal,
+    calcularTaxaDeslocamento,
+    calcularDistanciaHaversine
 };
 

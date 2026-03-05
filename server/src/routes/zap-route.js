@@ -71,7 +71,8 @@ function getClientId(req) {
 // Lista todos os clients
 router.get('/clients/list', async (req, res) => {
     try {
-        const clients = await getAllClients();
+        const empresa_id = req.user?.empresa_id || null;
+        const clients = await getAllClients(empresa_id);
         res.status(200).json(clients);
     } catch (error) {
         console.error('Erro ao listar clients:', error);
@@ -83,12 +84,13 @@ router.get('/clients/list', async (req, res) => {
 router.post('/clients/create', async (req, res) => {
     try {
         const { clientId, name } = req.body;
+        const empresa_id = req.user?.empresa_id || null;
 
         if (!clientId || !name) {
             return res.status(400).json({ error: 'clientId e name são obrigatórios' });
         }
 
-        const result = await createClient(clientId, name);
+        const result = await createClient(clientId, name, empresa_id);
 
         if (result.success) {
             res.status(200).json({ message: result.message });
@@ -169,7 +171,14 @@ router.get('/check-conn', async (req, res) => {
     try {
         const clientId = getClientId(req);
 
-        const clientData = await dbQuery('SELECT * FROM Clients WHERE id = ?', [clientId]);
+        const empresa_id = req.user?.empresa_id || null;
+        let checkQuery = 'SELECT * FROM Clients WHERE id = ?';
+        let checkParams = [clientId];
+        if (empresa_id) {
+            checkQuery += ' AND empresa_id = ?';
+            checkParams.push(empresa_id);
+        }
+        const clientData = await dbQuery(checkQuery, checkParams);
 
         if (clientData.length === 0) {
             return res.status(200).json({ status: 'Desconectado', clientId });
@@ -368,7 +377,8 @@ router.get('/getChat/:id', async (req, res) => {
             return res.status(200).json({ status: 'Desconectado' });
         }
 
-        const chat = await getChatById(clientId, id, mapeado, limit);
+        const empresa_id = req.user?.empresa_id || null;
+        const chat = await getChatById(clientId, id, mapeado, limit, empresa_id);
 
         if (!chat) {
             return res.status(404).json({ error: 'Chat não encontrado' });

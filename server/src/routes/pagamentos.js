@@ -16,6 +16,7 @@ const { sanitizeInput, isDiff, can } = require('../utils/functions');
 const { getAgendamentos, checkPagamentos,
     setHistoricoAgendamento, createPagamento } = require('../utils/agendaUtils');
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -47,6 +48,8 @@ router.get('/list/receber', async (req, res) => {
         orderBy = 'asc'
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
+
     page = Number(page) || 1;
     itemsPerPage = Number(itemsPerPage) || 10;
 
@@ -57,19 +60,22 @@ router.get('/list/receber', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    // FROM principal com joins necessários
+    // FROM principal com joins necessarios
+    // Filtra apenas agendamentos atendidos (ast_id correspondente ao status 'Atendido' da empresa)
     const baseFrom = `
       FROM PAGAMENTO p
       JOIN AGENDAMENTO a ON a.age_id = p.age_id
+        AND a.ast_id IN (SELECT ast_id FROM AGENDAMENTO_STATUS WHERE ast_descricao = 'Atendido')
+        AND a.age_ativo = 1
       LEFT JOIN CLIENTES c ON c.cli_id = a.cli_id
       LEFT JOIN User u ON u.id = a.fun_id
-      WHERE 1 = 1
+      WHERE 1 = 1 AND p.empresa_id = ?
     `;
 
     let filters = '';
-    const params = [];
+    const params = [empresa_id];
 
-    // 🔎 Busca geral (q) – cliente, funcionário ou valor
+    // Busca geral (q) - cliente, funcionario ou valor
     if (q) {
         q = sanitizeInput(q);
         const like = `%${q}%`;
@@ -84,21 +90,21 @@ router.get('/list/receber', async (req, res) => {
         params.push(like, like, like);
     }
 
-    // 📅 Filtro por data exata do agendamento (d)
+    // Filtro por data exata do agendamento (d)
     if (d) {
         d = sanitizeInput(d);
         filters += ` AND a.age_data = ?`;
         params.push(d);
     }
 
-    // 💰 Pago / Não pago
+    // Pago / Nao pago
     if (Number(pago) === 1) {
         filters += ` AND p.pgt_data IS NOT NULL`;
     } else if (Number(pago) === 3) {
         filters += ` AND p.pgt_data IS NULL`;
     }
 
-    // 🗓 Intervalo de datas ou mês atual
+    // Intervalo de datas ou mes atual
     if (dataDe && dataAte) {
         filters += ` AND a.age_data BETWEEN ? AND ?`;
         params.push(dataDe, dataAte);
@@ -110,7 +116,7 @@ router.get('/list/receber', async (req, res) => {
         params.push(inicioMes, fimMes);
     }
 
-    // 🔽 Ordenação (whitelist pra evitar injection)
+    // Ordenacao (whitelist pra evitar injection)
     const allowedSort = ['pgt_data', 'created_at', 'pgt_valor', 'age_data'];
     let orderClause = ' ORDER BY p.created_at DESC';
 
@@ -145,31 +151,17 @@ router.get('/list/receber', async (req, res) => {
         //Checar agendamentos de acordo com a data
         let agendamentosQuery = '';
         if (dataDe && dataAte) {
-            agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN '${dataDe}' AND '${dataAte}' AND ast_id = 3`;
+            agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN '${dataDe}' AND '${dataAte}' AND ast_id = 3 AND empresa_id = ${empresa_id}`;
         } else {
             const inicioMes = moment().startOf('month').format('YYYY-MM-DD');
             const fimMes = moment().endOf('month').format('YYYY-MM-DD');
 
-            agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN '${inicioMes}' AND '${fimMes}' AND ast_id = 3`;
+            agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN '${inicioMes}' AND '${fimMes}' AND ast_id = 3 AND empresa_id = ${empresa_id}`;
         }
 
         console.log("agendamentosQuery", agendamentosQuery);
-        const agendamentosCheck = await getAgendamentos(agendamentosQuery);
+        const agendamentosCheck = await getAgendamentos(agendamentosQuery, [], empresa_id);
         console.log("agendamentosCheck", agendamentosCheck.length);
-
-        //let again = false;
-        /* if (agendamentosCheck.length > 0 && agendamentosCheck.length < 100) {
-            for (let agendamento of agendamentosCheck) {
-                const check = await checkPagamentos(agendamento.age_id);
-                if (check) {
-                    again = true;
-                }
-            }
-        }
-
-        if (again) {
-            return res.status(200).json({ again: true });
-        } */
 
         let totalRecebimento = 0;
         let totalNaoPago = 0;
@@ -192,8 +184,8 @@ router.get('/list/receber', async (req, res) => {
                 valorPagoBk += parseFloat(pag.pgt_valor);
 
                 const forma = await dbQuery(
-                    `SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ?`,
-                    [pag.fpg_id]
+                    `SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`,
+                    [pag.fpg_id, empresa_id]
                 );
                 fpg_names.push(forma.length > 0 ? forma[0].fpg_descricao : 'Dinheiro');
             }
@@ -207,8 +199,9 @@ router.get('/list/receber', async (req, res) => {
 
             // se quiser, ainda pode reaproveitar seu getAgendamentos
             pagamento.agendamento = await getAgendamentos(
-                `SELECT * FROM AGENDAMENTO WHERE age_id = ?`,
-                [pagamento.age_id]
+                `SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?`,
+                [pagamento.age_id, empresa_id],
+                empresa_id
             );
         }
 
@@ -216,9 +209,11 @@ router.get('/list/receber', async (req, res) => {
             return res.status(200).json({ again: true });
         }
 
-        totalRecebimento = agendamentosCheck.reduce((acc, curr) => acc + curr.age_valor - (curr.age_desconto ?? 0), 0);
-        totalNaoPago = agendamentosCheck.reduce((acc, curr) => acc + curr.age_valorNaoPago, 0);
-        let totalPago = totalRecebimento - totalNaoPago;
+        totalRecebimento = agendamentosCheck.reduce((acc, curr) => acc + parseFloat(curr.age_valor || 0) - parseFloat(curr.age_desconto ?? 0), 0);
+        totalRecebimento = parseFloat(totalRecebimento.toFixed(2));
+        totalNaoPago = agendamentosCheck.reduce((acc, curr) => acc + parseFloat(curr.age_valorNaoPago || 0), 0);
+        totalNaoPago = parseFloat(totalNaoPago.toFixed(2));
+        let totalPago = parseFloat((totalRecebimento - totalNaoPago).toFixed(2));
 
         const data = {
             pagamentos,
@@ -253,6 +248,8 @@ router.get('/list/pagar', async (req, res) => {
         status = null
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
+
     let offset = (page - 1) * itemsPerPage;
 
     if (itemsPerPage == '-1') {
@@ -260,17 +257,17 @@ router.get('/list/pagar', async (req, res) => {
         itemsPerPage = 1000000;
     }
 
-    let baseQueryDespesas = `FROM DESPESAS WHERE 1 = 1`;
-    let baseQueryComissoes = `FROM COMISSOES WHERE 1 = 1`;
+    let baseQueryDespesas = `FROM DESPESAS WHERE 1 = 1 AND empresa_id = ${empresa_id}`;
+    let baseQueryComissoes = `FROM COMISSOES WHERE 1 = 1 AND empresa_id = ${empresa_id}`;
 
     if (q) {
         q = sanitizeInput(q);
 
-        //QUERY COMISSÕES
-        let funcionarios = await dbQuery(`SELECT * FROM User WHERE fullName LIKE '%${q}%'`);
+        //QUERY COMISSOES
+        let funcionarios = await dbQuery(`SELECT * FROM User WHERE fullName LIKE '%${q}%' AND empresa_id = ?`, [empresa_id]);
         let funcionariosIds = funcionarios.map(f => f.id);
 
-        let agendamentos = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE fun_id IN (${funcionariosIds.length > 0 ? funcionariosIds.join(',') : '0'}) OR cli_id IN (SELECT cli_Id FROM CLIENTES WHERE cli_nome LIKE '%${q}%')`);
+        let agendamentos = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE empresa_id = ? AND (fun_id IN (${funcionariosIds.length > 0 ? funcionariosIds.join(',') : '0'}) OR cli_id IN (SELECT cli_Id FROM CLIENTES WHERE cli_nome LIKE '%${q}%' AND empresa_id = ?))`, [empresa_id, empresa_id]);
         let agendamentosIds = agendamentos.map(a => a.age_id);
 
         let qQuery = '';
@@ -292,7 +289,7 @@ router.get('/list/pagar', async (req, res) => {
     }
 
     if (d) {
-        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data = ?`, [d]);
+        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data = ? AND empresa_id = ?`, [d, empresa_id]);
         let agendamentosDataIds = agendamentosData.map(a => a.age_id);
 
         if (agendamentosDataIds.length > 0) {
@@ -305,7 +302,7 @@ router.get('/list/pagar', async (req, res) => {
     }
 
     if (dataDe && dataAte) {
-        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN ? AND ?`, [dataDe, dataAte]);
+        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN ? AND ? AND empresa_id = ?`, [dataDe, dataAte, empresa_id]);
         let agendamentosDataIds = agendamentosData.map(a => a.age_id);
 
         if (agendamentosDataIds.length > 0) {
@@ -318,7 +315,7 @@ router.get('/list/pagar', async (req, res) => {
     } else {
         let inicioMes = moment().startOf('month').format('YYYY-MM-DD');
         let fimMes = moment().endOf('month').format('YYYY-MM-DD');
-        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN ? AND ?`, [inicioMes, fimMes]);
+        let agendamentosData = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_data BETWEEN ? AND ? AND empresa_id = ?`, [inicioMes, fimMes, empresa_id]);
 
         let agendamentosDataIds = agendamentosData.map(a => a.age_id);
         baseQueryComissoes += ` AND age_id IN (${agendamentosDataIds.length > 0 ? agendamentosDataIds.join(',') : '0'})`;
@@ -329,26 +326,17 @@ router.get('/list/pagar', async (req, res) => {
         let despesas = await dbQuery(`SELECT * ${baseQueryDespesas}`);
         let comissoes = await dbQuery(`SELECT * ${baseQueryComissoes}`);
 
-        //Paginação com JS
-        /*  let totalPagar = despesas.length + comissoes.length;
-         let totalPages = Math.ceil((despesas.length + comissoes.length) / itemsPerPage);
-         despesas = despesas.slice(offset, offset + parseInt(itemsPerPage));
-         comissoes = comissoes.slice(offset, offset + parseInt(itemsPerPage));
-  */
-
-        // console.log('Comissões', comissoes);
-
         let pagarDataMapeado = await Promise.all([...despesas, ...comissoes].map(async (pagar) => {
             let isDespesa = pagar.des_id ? true : false;
             let isPaid = isDespesa ? pagar.des_pago : pagar.com_paga;
 
             let descricao = '';
-            let data;// = isDespesa ? pagar.des_data : pagar.age_data;
+            let data;
             let funcionarioName;
             let fun_id;
 
             if (!isDespesa) {
-                const agendamentoQuery = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [pagar.age_id]);
+                const agendamentoQuery = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?', [pagar.age_id, empresa_id], empresa_id);
 
                 if (agendamentoQuery.length > 0) {
                     const agendamento = agendamentoQuery[0];
@@ -358,14 +346,14 @@ router.get('/list/pagar', async (req, res) => {
                     let iconEmployee = `<i class="v-icon notranslate mr-1 tabler-user-cog v-icon notranslate" aria-hidden="true" style="font-size: 14px; height: 14px; width: 14px;"></i>`;
                     descricao = `${iconCalendar} ${moment(agendamento.age_data).format('DD/MM/YYYY')}<br />
                     ${iconClient} ${agendamento.cliente?.[0]?.cli_nome}<br />
-                    ${iconEmployee} ${agendamento.funcionario?.[0]?.fullName || 'Não encontrado'}`;
+                    ${iconEmployee} ${agendamento.funcionario?.[0]?.fullName || 'Nao encontrado'}`;
 
-                    funcionarioName = agendamento.funcionario?.[0]?.fullName || 'Não encontrado';
+                    funcionarioName = agendamento.funcionario?.[0]?.fullName || 'Nao encontrado';
                     fun_id = agendamento.fun_id;
                     data = agendamento.age_data;
                 } else {
-                    descricao = 'Agendamento não encontrado';
-                    funcionarioName = 'Não encontrado';
+                    descricao = 'Agendamento nao encontrado';
+                    funcionarioName = 'Nao encontrado';
                 }
             } else {
                 descricao = `
@@ -388,7 +376,7 @@ router.get('/list/pagar', async (req, res) => {
                 valor: isDespesa ? pagar.des_valor : pagar.com_valor,
                 data,
                 pago: isPaid,
-                tipo: isDespesa ? 'Despesa' : 'Comissão',
+                tipo: isDespesa ? 'Despesa' : 'Comissao',
                 status: checkDateStatus(data, isPaid).status,
                 selectable: isPaid == 1 ? false : true,
             }
@@ -436,7 +424,7 @@ router.get('/list/pagar', async (req, res) => {
             }
         }
 
-        // Paginação correta: depois de juntar, ordenar e filtrar
+        // Paginacao correta: depois de juntar, ordenar e filtrar
         let totalPagar = pagarDataMapeado.length;
         let totalPages = Math.ceil(totalPagar / itemsPerPage);
 
@@ -491,7 +479,7 @@ router.get('/list/pagar', async (req, res) => {
 
         res.status(200).json(data);
     } catch (error) {
-        console.error('Erro ao buscar despesas e comissões', error);
+        console.error('Erro ao buscar despesas e comissoes', error);
         res.status(500).json({ error });
     }
 });
@@ -509,13 +497,15 @@ router.get('/list/despesas', async (req, res) => {
         orderBy = 'asc'
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
+
     let offset = (page - 1) * itemsPerPage;
 
     if (itemsPerPage == '-1') {
         itemsPerPage = 1000000;
     }
 
-    let baseQuery = `FROM DESPESAS WHERE 1 = 1`;
+    let baseQuery = `FROM DESPESAS WHERE 1 = 1 AND empresa_id = ${empresa_id}`;
 
     if (q) {
         q = sanitizeInput(q);
@@ -544,10 +534,8 @@ router.get('/list/despesas', async (req, res) => {
     if (status == 1) {
         baseQuery += ` AND des_pago = 1`;
     } else if (status == 2) {
-        //des_pago = 0 e des_data é maior que a data atual
         baseQuery += ` AND des_pago = 0 AND des_data > CURDATE()`;
     } else if (status == 3) {
-        //des_pago = 0 e des_data é menor que a data atual
         baseQuery += ` AND des_pago = 0 AND des_data < CURDATE()`;
     }
 
@@ -590,12 +578,13 @@ router.get('/list/despesas', async (req, res) => {
 
 router.get('/get/receber/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        const pagamentoQuery = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ${id}`);
+        const pagamentoQuery = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
         if (!pagamentoQuery || pagamentoQuery.length === 0) {
-            return res.status(404).json({ message: 'Pagamento não encontrado1' });
+            return res.status(404).json({ message: 'Pagamento nao encontrado1' });
         }
 
         const pagamento = pagamentoQuery[0];
@@ -610,18 +599,18 @@ router.get('/get/receber/:id', async (req, res) => {
             valorPago += pagamento.pgt_data ? parseFloat(pag.pgt_valor) : 0;
             valorPagoBk += parseFloat(pag.pgt_valor);
 
-            let forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ${pag.fpg_id}`);
+            let forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`, [pag.fpg_id, empresa_id]);
             fpg_names.push(forma.length > 0 ? forma[0].fpg_descricao : 'Dinheiro');
         }
 
         pagamento.pgt_valor = valorPago;
-        pagamento.pgt_valor_bk = pagamento.pgt_valor;
+        pagamento.pgt_valor_bk = valorPagoBk;
         pagamento.fpg_name = fpg_names.join(', ');
 
-        pagamento.agendamento = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [pagamento.age_id]);
+        pagamento.agendamento = await getAgendamentos('SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?', [pagamento.age_id, empresa_id], empresa_id);
 
         pagamento.agendamento[0].outrosPagamentos = await
-            dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ${pagamento.age_id} AND pgt_id != ${pagamento.pgt_id}`);
+            dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND pgt_id != ? AND empresa_id = ?`, [pagamento.age_id, pagamento.pgt_id, empresa_id]);
         pagamento.agendamento[0].age_valor = pagamento.agendamento[0].age_valor - pagamento.agendamento[0].age_desconto;
         pagamento.pago = pagamento.pgt_data ? true : false;
         pagamento.pgt_data = pagamento.pgt_data ? pagamento.pgt_data : new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -645,7 +634,7 @@ router.get('/get/receber/:id', async (req, res) => {
         if (pagamento?.pgt_id) {
             res.status(200).json(pagamento);
         } else {
-            res.status(404).json({ message: 'Pagamento não encontrado' });
+            res.status(404).json({ message: 'Pagamento nao encontrado' });
         }
     } catch (error) {
         console.error('Erro ao buscar pagamento', error);
@@ -655,14 +644,15 @@ router.get('/get/receber/:id', async (req, res) => {
 
 router.get('/get/despesas/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        const despesa = await dbQuery(`SELECT * FROM DESPESAS WHERE des_id = ${id}`);
+        const despesa = await dbQuery(`SELECT * FROM DESPESAS WHERE des_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
         if (despesa.length) {
             res.status(200).json(despesa[0]);
         } else {
-            res.status(404).json({ message: 'Despesa não encontrada' });
+            res.status(404).json({ message: 'Despesa nao encontrada' });
         }
     } catch (error) {
         console.error('Erro ao buscar despesa', error);
@@ -672,6 +662,7 @@ router.get('/get/despesas/:id', async (req, res) => {
 
 router.post('/despesas/repeat', async (req, res) => {
     const { despesa, repeatData, tipo } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
         console.log('Tipo', tipo)
@@ -680,9 +671,11 @@ router.post('/despesas/repeat', async (req, res) => {
         let { tipo_repeat, quantidade_repeat, add_lembretes = 0 } = repeatData;
 
         if (tipo == 'update') {
-            await dbQuery(`UPDATE DESPESAS SET des_descricao = '${des_descricao}', des_valor = ${des_valor}, des_data = '${des_data}', des_pago = ${des_pago}, des_obs = '${des_obs}', des_tipo = '${des_tipo}' WHERE des_id = ${des_id}`);
+            await dbQuery(`UPDATE DESPESAS SET des_descricao = ?, des_valor = ?, des_data = ?, des_pago = ?, des_obs = ?, des_tipo = ? WHERE des_id = ? AND empresa_id = ?`,
+                [des_descricao, des_valor, des_data, des_pago, des_obs, des_tipo, des_id, empresa_id]);
         } else if (tipo == 'create') {
-            let despesaAdd = await dbQuery(`INSERT INTO DESPESAS (des_descricao, des_valor, des_data, des_pago, des_obs, des_tipo) VALUES ('${des_descricao}', ${des_valor}, '${des_data}', ${des_pago}, '${des_obs}', '${des_tipo}')`);
+            let despesaAdd = await dbQuery(`INSERT INTO DESPESAS (des_descricao, des_valor, des_data, des_pago, des_obs, des_tipo, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [des_descricao, des_valor, des_data, des_pago, des_obs, des_tipo, empresa_id]);
             des_id = despesaAdd.insertId;
         }
 
@@ -698,7 +691,7 @@ router.post('/despesas/repeat', async (req, res) => {
 
                 let des_data_repeat = moment(des_data);
 
-                if (tipo_repeat === 'Diário') {
+                if (tipo_repeat === 'Diario') {
                     des_data_repeat.add(1 * index, 'days');
                 } else if (tipo_repeat === 'Semanal') {
                     des_data_repeat.add(1 * index, 'weeks');
@@ -710,10 +703,11 @@ router.post('/despesas/repeat', async (req, res) => {
 
                 let des_descricao_repeat = `${des_descricao} - ${no_parcela}/${quantidade_repeat + 1}`;
 
-                let despesaAdd = await dbQuery(`INSERT INTO DESPESAS (des_descricao, des_valor, des_data, des_pago, des_parent, des_obs, des_tipo) VALUES ('${des_descricao_repeat}', ${des_valor}, '${des_data_repeat}', 0, ${des_id}, '${des_obs}', '${des_tipo}')`);
+                let despesaAdd = await dbQuery(`INSERT INTO DESPESAS (des_descricao, des_valor, des_data, des_pago, des_parent, des_obs, des_tipo, empresa_id) VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+                    [des_descricao_repeat, des_valor, des_data_repeat, des_id, des_obs, des_tipo, empresa_id]);
 
                 if (add_lembretes) {
-                    // Adicionar 08:00 como horário padrão
+                    // Adicionar 08:00 como horario padrao
                     let dateLembrete = moment(`${des_data_repeat}T08:00:00`).toISOString().split('T')[0];
 
                     let data = {
@@ -739,7 +733,8 @@ router.post('/despesas/repeat', async (req, res) => {
             }
 
             //Atualizar a despesa atual para 1/(quantidade_repeat + 1)
-            await dbQuery(`UPDATE DESPESAS SET des_descricao = '${des_descricao} - 1/${quantidade_repeat + 1}' WHERE des_id = ${des_id}`);
+            await dbQuery(`UPDATE DESPESAS SET des_descricao = ? WHERE des_id = ? AND empresa_id = ?`,
+                [`${des_descricao} - 1/${quantidade_repeat + 1}`, des_id, empresa_id]);
         }
 
         res.status(200).json('Despesa repetida com sucesso!');
@@ -752,6 +747,7 @@ router.post('/despesas/repeat', async (req, res) => {
 router.post('/update/receber/:id', async (req, res) => {
     const { id } = req.params;
     const { pagamentoData, marcarComoPago = false } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
         const {
@@ -764,35 +760,50 @@ router.post('/update/receber/:id', async (req, res) => {
             pgt_obs = null
         } = pagamentoData;
 
-        let query = `UPDATE PAGAMENTO SET pgt_valor = ${pgt_valor}, fpg_id = ${fpg_id}, pgt_json = '${JSON.stringify(pgt_json)}'`;
+        // Usar prepared statements para evitar SQL injection
+        const updateFields = ['pgt_valor = ?', 'fpg_id = ?', 'pgt_json = ?'];
+        const updateParams = [parseFloat(pgt_valor), fpg_id, JSON.stringify(pgt_json)];
 
         if (marcarComoPago) {
-            query += `, pgt_data = '${pgt_data}'`;
+            updateFields.push('pgt_data = ?');
+            updateParams.push(pgt_data);
         }
 
         if (pgt_numero_nota_fiscal) {
-            query += `, pgt_numero_nota_fiscal = '${pgt_numero_nota_fiscal}'`;
+            updateFields.push('pgt_numero_nota_fiscal = ?');
+            updateParams.push(pgt_numero_nota_fiscal);
         }
 
         if (pgt_obs) {
-            query += `, pgt_obs = '${pgt_obs}'`;
+            updateFields.push('pgt_obs = ?');
+            updateParams.push(pgt_obs);
         }
 
-        query += ` WHERE pgt_id = ${id}`;
+        const query = `UPDATE PAGAMENTO SET ${updateFields.join(', ')} WHERE pgt_id = ? AND empresa_id = ?`;
+        updateParams.push(id, empresa_id);
 
-        let agendamentoQuery = await getAgendamentos(`SELECT * FROM AGENDAMENTO WHERE age_id = ?`, [age_id]);
+        let agendamentoQuery = await getAgendamentos(`SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?`, [age_id, empresa_id], empresa_id);
 
         if (!agendamentoQuery || agendamentoQuery.length === 0) {
-            console.error('[ERRO PAGAMENTOS] Agendamento não encontrado', age_id);
-            return res.status(404).json({ message: 'Agendamento não encontrado' });
+            console.error('[ERRO PAGAMENTOS] Agendamento nao encontrado', age_id);
+            return res.status(404).json({ message: 'Agendamento nao encontrado' });
         }
 
         let agendamento = agendamentoQuery[0];
+
+        // Validar que o agendamento está atendido antes de permitir pagamento
+        const statusAtendido = await dbQuery(`SELECT ast_id FROM AGENDAMENTO_STATUS WHERE ast_descricao = 'Atendido' AND empresa_id = ?`, [empresa_id]);
+        const idsAtendido = statusAtendido.map(s => s.ast_id);
+        if (!idsAtendido.includes(agendamento.ast_id)) {
+            console.error('[ERRO PAGAMENTOS] Agendamento nao atendido. Status:', agendamento.ast_id);
+            return res.status(400).json({ message: 'Somente agendamentos atendidos podem receber pagamento.' });
+        }
+
         const tolerancia = 0.0001;
         let valorAgendamento = parseFloat(agendamento.age_valor) - parseFloat(agendamento.age_desconto ?? 0);
 
         if (marcarComoPago) {
-            const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ${age_id} AND pgt_id != ${id}`);
+            const pagamentos = await dbQuery(`SELECT * FROM PAGAMENTO WHERE age_id = ? AND pgt_id != ? AND empresa_id = ?`, [age_id, id, empresa_id]);
 
             const totalPagoOutros = pagamentos.reduce((acc, curr) => {
                 if (!curr.pgt_data) return acc;
@@ -803,23 +814,23 @@ router.post('/update/receber/:id', async (req, res) => {
 
             const valorRestanteParaQuitar = valorAgendamento - totalPagoOutros;
             if (valorRestanteParaQuitar < -tolerancia) {
-                console.error('[ERRO PAGAMENTOS] Valor já pago excede o agendamento.', totalPagoOutros, valorAgendamento);
-                return res.status(400).json({ message: 'O valor já pago excede o valor do agendamento.' });
+                console.error('[ERRO PAGAMENTOS] Valor ja pago excede o agendamento.', totalPagoOutros, valorAgendamento);
+                return res.status(400).json({ message: 'O valor ja pago excede o valor do agendamento.' });
             }
 
             // Se o pagamento atual for maior que o restante, bloquear
             if (parseFloat(pgt_valor) - valorRestanteParaQuitar > tolerancia) {
                 console.error('[ERRO PAGAMENTOS] Pagamento maior que o restante.', pgt_valor, valorRestanteParaQuitar);
-                return res.status(400).json({ message: 'O valor do pagamento não pode ser maior que o restante do agendamento.' });
+                return res.status(400).json({ message: 'O valor do pagamento nao pode ser maior que o restante do agendamento.' });
             }
 
             // Se quita o agendamento (igual ao restante), remove todos os pendentes e segue
             const quitaAgendamento = Math.abs(parseFloat(pgt_valor) - valorRestanteParaQuitar) <= tolerancia;
             if (quitaAgendamento) {
-                await dbQuery(`DELETE FROM PAGAMENTO WHERE age_id = ? AND pgt_id != ? AND pgt_data IS NULL`, [age_id, id]);
+                await dbQuery(`DELETE FROM PAGAMENTO WHERE age_id = ? AND pgt_id != ? AND pgt_data IS NULL AND empresa_id = ?`, [age_id, id, empresa_id]);
             } else {
                 // Caso ainda falte valor, cria um novo pagamento pendente com o restante
-                const formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO');
+                const formasPagamento = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO WHERE empresa_id = ?', [empresa_id]);
                 const fpg_id_padrao = formasPagamento.find(f => f.fpg_descricao.toLowerCase() === 'dinheiro')?.fpg_id ?? formasPagamento[0]?.fpg_id ?? 1;
 
                 const restante = valorRestanteParaQuitar - parseFloat(pgt_valor);
@@ -830,12 +841,12 @@ router.post('/update/receber/:id', async (req, res) => {
                     }
                 ];
 
-                await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json) VALUES (?, ?, ?)',
-                    [agendamento.age_id, restante, JSON.stringify(objF)]);
+                await dbQuery('INSERT INTO PAGAMENTO (age_id, pgt_valor, pgt_json, empresa_id) VALUES (?, ?, ?, ?)',
+                    [agendamento.age_id, restante, JSON.stringify(objF), empresa_id]);
             }
         }
 
-        await dbQuery(query);
+        await dbQuery(query, updateParams);
 
         const userData = req.user;
         if (marcarComoPago && userData && userData.fullName) {
@@ -849,7 +860,7 @@ router.post('/update/receber/:id', async (req, res) => {
         } else if (userData && userData.fullName) {
             setHistoricoAgendamento(age_id, {
                 title: 'Pagamento atualizado',
-                description: `Informações do pagamento foram atualizadas`,
+                description: `Informacoes do pagamento foram atualizadas`,
                 feitoPor: userData.fullName,
                 color: 'info',
                 icon: 'tabler-edit'
@@ -866,6 +877,7 @@ router.post('/update/receber/:id', async (req, res) => {
 router.post('/update/despesas/:id', async (req, res) => {
     const { id } = req.params;
     const { despesaData, marcarComoPago } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
         const { des_descricao, des_valor, des_data, des_pago, sai_fpt = null, sai_data = null, des_tipo = null, des_obs = null } = despesaData;
@@ -888,8 +900,8 @@ router.post('/update/despesas/:id', async (req, res) => {
             values.push(des_tipo);
         }
 
-        query += ` WHERE des_id = ?`;
-        values.push(id);
+        query += ` WHERE des_id = ? AND empresa_id = ?`;
+        values.push(id, empresa_id);
 
         await dbQuery(query, values);
 
@@ -902,6 +914,7 @@ router.post('/update/despesas/:id', async (req, res) => {
 
 router.post('/create/despesas', async (req, res) => {
     const { despesaData, marcarComoPago } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
         const { des_descricao, des_valor, des_data, des_pago, des_tipo = null, sai_fpt = null, sai_data = null, des_obs = null } = despesaData;
@@ -912,7 +925,6 @@ router.post('/create/despesas', async (req, res) => {
         let placeholders = ['?', '?', '?'];
 
         if (marcarComoPago) {
-            //query += `, des_paga_data, des_pago) VALUES (?, ?, ?, ?, 1)`;
             fields.push('des_paga_data', 'des_pago', 'des_forma_pagamento', 'des_pagoPor');
             placeholders.push('?', '?', '?', '?');
             values.push(sai_data ? moment(sai_data).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD'), 1, sai_fpt, req.user.fullName);
@@ -930,6 +942,11 @@ router.post('/create/despesas', async (req, res) => {
             values.push(des_tipo);
         }
 
+        // Adicionar empresa_id
+        fields.push('empresa_id');
+        placeholders.push('?');
+        values.push(empresa_id);
+
         query += `${fields.join(', ')}) VALUES (${placeholders.join(', ')})`;
 
         let inseridaDespesa = await dbQuery(query, values);
@@ -944,13 +961,14 @@ router.post('/create/despesas', async (req, res) => {
 router.post('/create/receber', async (req, res) => {
     try {
         const userData = req.user;
+        const empresa_id = req.user.empresa_id;
 
         if (!userData || !userData.fullName) {
-            return res.status(400).json({ message: 'Usuário não autenticado' });
+            return res.status(400).json({ message: 'Usuario nao autenticado' });
         }
 
         if (!can('create', 'financeiro_recebimento', userData.abilitys)) {
-            return res.status(400).json({ message: 'Sem permissão!' });
+            return res.status(400).json({ message: 'Sem permissao!' });
         }
 
         const { age_id } = req.body;
@@ -979,16 +997,17 @@ router.post('/create/receber', async (req, res) => {
 
 router.delete('/delete/receber/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        const pagamentoQuery = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ${id}`);
+        const pagamentoQuery = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ? AND empresa_id = ?`, [id, empresa_id]);
         const age_id = pagamentoQuery.length > 0 ? pagamentoQuery[0].age_id : null;
         const pgt_valor = pagamentoQuery.length > 0 ? pagamentoQuery[0].pgt_valor : 0;
 
-        await dbQuery(`DELETE FROM PAGAMENTO WHERE pgt_id = ${id}`);
+        await dbQuery(`DELETE FROM PAGAMENTO WHERE pgt_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
         //Verificar se o pagamento tem lembretes associados
-        await dbQuery(`DELETE FROM Lembretes WHERE params LIKE '%viewPagamento=${id}%'`);
+        await dbQuery(`DELETE FROM Lembretes WHERE params LIKE '%viewPagamento=${id}%' AND empresa_id = ?`, [empresa_id]);
 
         const userData = req.user;
         if (age_id && userData && userData.fullName) {
@@ -1010,12 +1029,13 @@ router.delete('/delete/receber/:id', async (req, res) => {
 
 router.delete('/delete/despesas/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery(`DELETE FROM DESPESAS WHERE des_id = ${id}`);
+        await dbQuery(`DELETE FROM DESPESAS WHERE des_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
-        //Verificar se a despesa tem lembrtes associados
-        let lembretes = await dbQuery(`SELECT * FROM Lembretes WHERE params LIKE '%viewDespesa=${id}%'`);
+        //Verificar se a despesa tem lembretes associados
+        let lembretes = await dbQuery(`SELECT * FROM Lembretes WHERE params LIKE '%viewDespesa=${id}%' AND empresa_id = ?`, [empresa_id]);
 
         if (lembretes.length) {
             for (let lembrete of lembretes) {
@@ -1032,9 +1052,10 @@ router.delete('/delete/despesas/:id', async (req, res) => {
 
 router.post('/anexar-nota/:id', upload.single('nota'), async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        const pagamento = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ${id}`);
+        const pagamento = await dbQuery(`SELECT * FROM PAGAMENTO WHERE pgt_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
         if (pagamento.length) {
             const file = req.file;
@@ -1042,11 +1063,11 @@ router.post('/anexar-nota/:id', upload.single('nota'), async (req, res) => {
 
             let url = '/download/docs/notas/' + id + '/' + notaNome;
 
-            await dbQuery(`UPDATE PAGAMENTO SET pgt_nota_fiscal	= '${url}' WHERE pgt_id = ${id}`);
+            await dbQuery(`UPDATE PAGAMENTO SET pgt_nota_fiscal = ? WHERE pgt_id = ? AND empresa_id = ?`, [url, id, empresa_id]);
 
             res.status(200).json(url);
         } else {
-            res.status(404).json({ message: 'Pagamento não encontrado' });
+            res.status(404).json({ message: 'Pagamento nao encontrado' });
         }
     } catch (error) {
         console.error('Erro ao anexar nota', error);
@@ -1058,15 +1079,16 @@ router.post('/lancarSaida', async (req, res) => {
 
     try {
         const user = req.user;
+        const empresa_id = req.user.empresa_id;
 
         if (!user || !user.fullName) {
-            return res.status(401).json({ message: 'Usuário não autenticado' });
+            return res.status(401).json({ message: 'Usuario nao autenticado' });
         }
 
         let { sai_data, sai_fpt, sai_contas } = req.body;
 
         if (!sai_contas || sai_contas.length === 0) {
-            return res.status(400).json({ message: 'Nenhuma conta selecionada para lançar a saída.' });
+            return res.status(400).json({ message: 'Nenhuma conta selecionada para lancar a saida.' });
         }
 
         sai_data = sai_data ? moment(sai_data).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
@@ -1074,22 +1096,22 @@ router.post('/lancarSaida', async (req, res) => {
         for (let conta of sai_contas) {
             if (conta.tipo === 'Despesa') {
                 let idDespesa = conta.id.replace('D', '');
-                await dbQuery(`UPDATE DESPESAS SET des_pago = 1, des_paga_data = ?, des_forma_pagamento = ?, des_pagoPor = ? WHERE des_id = ?`,
-                    [sai_data, sai_fpt, user.fullName, idDespesa]);
-            } else if (conta.tipo === 'Comissão') {
+                await dbQuery(`UPDATE DESPESAS SET des_pago = 1, des_paga_data = ?, des_forma_pagamento = ?, des_pagoPor = ? WHERE des_id = ? AND empresa_id = ?`,
+                    [sai_data, sai_fpt, user.fullName, idDespesa, empresa_id]);
+            } else if (conta.tipo === 'Comissao') {
                 let idComissao = conta.id.replace('C', '');
 
-                const comissaoQuery = await dbQuery(`SELECT * FROM COMISSOES WHERE com_id = ?`, [idComissao]);
+                const comissaoQuery = await dbQuery(`SELECT * FROM COMISSOES WHERE com_id = ? AND empresa_id = ?`, [idComissao, empresa_id]);
                 const age_id = comissaoQuery.length > 0 ? comissaoQuery[0].age_id : null;
                 const com_valor = comissaoQuery.length > 0 ? comissaoQuery[0].com_valor : 0;
 
-                await dbQuery(`UPDATE COMISSOES SET com_paga = 1, com_paga_data = ?, com_forma_pagamento = ?, com_pagoPor = ? WHERE com_id = ?`,
-                    [sai_data, sai_fpt, user.fullName, idComissao]);
+                await dbQuery(`UPDATE COMISSOES SET com_paga = 1, com_paga_data = ?, com_forma_pagamento = ?, com_pagoPor = ? WHERE com_id = ? AND empresa_id = ?`,
+                    [sai_data, sai_fpt, user.fullName, idComissao, empresa_id]);
 
                 if (age_id) {
                     setHistoricoAgendamento(age_id, {
-                        title: 'Comissão paga',
-                        description: `Comissão de R$ ${parseFloat(com_valor).toFixed(2)} foi marcada como paga`,
+                        title: 'Comissao paga',
+                        description: `Comissao de R$ ${parseFloat(com_valor).toFixed(2)} foi marcada como paga`,
                         feitoPor: user.fullName,
                         color: 'success',
                         icon: 'tabler-coins'
@@ -1098,16 +1120,18 @@ router.post('/lancarSaida', async (req, res) => {
             }
         }
 
-        res.status(200).json('Pagamento lançado com sucesso!');
+        res.status(200).json('Pagamento lancado com sucesso!');
     } catch (error) {
-        console.error('Erro ao lançar saída', error);
+        console.error('Erro ao lancar saida', error);
         res.status(500).json({ error });
     }
 });
 
 router.get('/forma_entrada', async (req, res) => {
+    const empresa_id = req.user.empresa_id;
+
     try {
-        const formas = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO');
+        const formas = await dbQuery('SELECT * FROM FORMAS_PAGAMENTO WHERE empresa_id = ?', [empresa_id]);
 
         res.status(200).json(formas);
     } catch (error) {
@@ -1118,9 +1142,10 @@ router.get('/forma_entrada', async (req, res) => {
 
 router.post('/forma_entrada', async (req, res) => {
     const { fpg_descricao } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery('INSERT INTO FORMAS_PAGAMENTO (fpg_descricao) VALUES (?)', [fpg_descricao]);
+        await dbQuery('INSERT INTO FORMAS_PAGAMENTO (fpg_descricao, empresa_id) VALUES (?, ?)', [fpg_descricao, empresa_id]);
 
         res.status(200).json('Forma de pagamento adicionada');
     } catch (error) {
@@ -1131,9 +1156,10 @@ router.post('/forma_entrada', async (req, res) => {
 
 router.delete('/forma_entrada/:id', async (req, res) => {
     const { id } = req.params;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery(`DELETE FROM FORMAS_PAGAMENTO WHERE fpg_id = ${id}`);
+        await dbQuery(`DELETE FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`, [id, empresa_id]);
 
         res.status(200).json('Forma de pagamento deletada');
     } catch (error) {
@@ -1145,9 +1171,10 @@ router.delete('/forma_entrada/:id', async (req, res) => {
 router.post('/save-nota/:id', async (req, res) => {
     const { id } = req.params;
     const { pgt_numero_nota_fiscal } = req.body;
+    const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery(`UPDATE PAGAMENTO SET pgt_numero_nota_fiscal = '${pgt_numero_nota_fiscal}' WHERE pgt_id = ${id}`);
+        await dbQuery(`UPDATE PAGAMENTO SET pgt_numero_nota_fiscal = ? WHERE pgt_id = ? AND empresa_id = ?`, [pgt_numero_nota_fiscal, id, empresa_id]);
 
         res.status(200).json('Nota salva');
     } catch (error) {
@@ -1158,21 +1185,6 @@ router.post('/save-nota/:id', async (req, res) => {
 
 const checkDateStatus = (date, isPaid) => {
     if (isPaid) return { status: 'Pago', color: 'success' };
-
-    /* const today = new Date();
-    const dateToCheck = new Date(date);
-
-    // Normalize the dates to only compare year, month, and day
-    const todayNormalized = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const dateToCheckNormalized = new Date(dateToCheck.getFullYear(), dateToCheck.getMonth(), dateToCheck.getDate());
-
-    if (dateToCheckNormalized < todayNormalized) {
-        return { status: 'Em atraso', color: 'error' };
-    } else if (dateToCheckNormalized > todayNormalized) {
-        return { status: 'Em aberto', color: 'warning' };
-    } else {
-        return { status: 'Pagar hoje', color: 'info' };
-    } */
 
     const today = moment();
     const dateToCheck = moment(date);

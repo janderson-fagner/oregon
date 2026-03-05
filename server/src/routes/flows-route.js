@@ -1,18 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 const { getFlowById, startFlow, advance } = require('../flows/core/flowEngine');
 
 // CRUD básico
 router.get('/', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let { q, page = 1, itemsPerPage = 10, sortBy, orderBy } = req.query;
-        
-        let whereClause = '';
-        let params = [];
-        
+
+        let whereClause = 'WHERE empresa_id = ?';
+        let params = [empresa_id];
+
         if (q) {
-            whereClause = 'WHERE name LIKE ?';
+            whereClause += ' AND name LIKE ?';
             params.push(`%${q}%`);
         }
         
@@ -55,6 +57,11 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
+        // Verificar se o fluxo pertence a esta empresa
+        const flowCheck = await dbQuery('SELECT id FROM Flows WHERE id = ? AND empresa_id = ?', [parseInt(req.params.id, 10), empresa_id]);
+        if (!flowCheck || flowCheck.length === 0) return res.status(404).json({ message: 'Não encontrado' });
+
         const data = await getFlowById(parseInt(req.params.id, 10));
         if (!data) return res.status(404).json({ message: 'Não encontrado' });
         res.json(data);
@@ -63,31 +70,32 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
     try {
-        const { 
-            name, 
-            description, 
-            status = 'ativo', 
-            trigger_type = null, 
-            webhook_key = null, 
+        const empresa_id = req.user.empresa_id;
+        const {
+            name,
+            description,
+            status = 'ativo',
+            trigger_type = null,
+            webhook_key = null,
             trigger_conditions = null,
             priority = 50,
             interruptible = true,
             global_keywords = null,
-            nodes = [], 
-            edges = [] 
+            nodes = [],
+            edges = []
         } = req.body;
-        
-        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0 
-            ? JSON.stringify(trigger_conditions) 
+
+        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0
+            ? JSON.stringify(trigger_conditions)
             : null;
-        
+
         const globalKeywordsJson = global_keywords && Array.isArray(global_keywords) && global_keywords.length > 0
             ? JSON.stringify(global_keywords)
             : null;
-        
+
         const inserted = await dbQuery(
-            'INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords) VALUES (?,?,?,?,?,?,?,?,?)',
-            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson]
+            'INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords, empresa_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, empresa_id]
         );
         const flowId = inserted.insertId || inserted;
         for (const n of nodes) {
@@ -113,36 +121,37 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
-        const { 
-            name, 
-            description, 
-            status = 'ativo', 
-            trigger_type = null, 
-            webhook_key = null, 
+        const {
+            name,
+            description,
+            status = 'ativo',
+            trigger_type = null,
+            webhook_key = null,
             trigger_conditions = null,
             priority = 50,
             interruptible = true,
             global_keywords = null,
-            nodes = [], 
-            edges = [] 
+            nodes = [],
+            edges = []
         } = req.body;
-        
+
         // Atualizar informações do fluxo
-        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0 
-            ? JSON.stringify(trigger_conditions) 
+        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0
+            ? JSON.stringify(trigger_conditions)
             : null;
-        
+
         const globalKeywordsJson = global_keywords && Array.isArray(global_keywords) && global_keywords.length > 0
             ? JSON.stringify(global_keywords)
             : null;
-        
+
         await dbQuery(
-            'UPDATE Flows SET name=?, description=?, status=?, trigger_type=?, webhook_key=?, trigger_conditions=?, priority=?, interruptible=?, global_keywords=?, updated_at=NOW() WHERE id=?',
-            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, id]
+            'UPDATE Flows SET name=?, description=?, status=?, trigger_type=?, webhook_key=?, trigger_conditions=?, priority=?, interruptible=?, global_keywords=?, updated_at=NOW() WHERE id=? AND empresa_id=?',
+            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, id, empresa_id]
         );
-        
-        // Deletar nós e conexões antigas
+
+        // Deletar nós e conexões antigas (filtrar por flow_id que já pertence a empresa)
         await dbQuery('DELETE FROM FlowEdges WHERE flow_id=?', [id]);
         await dbQuery('DELETE FROM FlowNodes WHERE flow_id=?', [id]);
         
@@ -231,10 +240,11 @@ router.put('/:id', async (req, res) => {
 // Duplicar fluxo
 router.post('/:id/duplicate', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const flowId = parseInt(req.params.id, 10);
-        
+
         // Buscar fluxo original
-        const originalFlow = await dbQuery('SELECT * FROM Flows WHERE id = ?', [flowId]);
+        const originalFlow = await dbQuery('SELECT * FROM Flows WHERE id = ? AND empresa_id = ?', [flowId, empresa_id]);
         
         if (!originalFlow || originalFlow.length === 0) {
             return res.status(404).json({ error: 'Fluxo não encontrado' });
@@ -244,15 +254,16 @@ router.post('/:id/duplicate', async (req, res) => {
         
         // Criar novo fluxo (cópia)
         const newFlowResult = await dbQuery(
-            `INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, created_at, updated_at) 
-             VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+            `INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, empresa_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
             [
                 `${flow.name} (Cópia)`,
                 flow.description,
                 'inativo', // Criar como inativo por segurança
                 flow.trigger_type,
                 flow.webhook_key ? `${flow.webhook_key}_copy_${Date.now()}` : null,
-                flow.trigger_conditions
+                flow.trigger_conditions,
+                empresa_id
             ]
         );
         
@@ -306,7 +317,8 @@ router.post('/:id/duplicate', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
     try {
-        await dbQuery('DELETE FROM Flows WHERE id=?', [parseInt(req.params.id, 10)]);
+        const empresa_id = req.user.empresa_id;
+        await dbQuery('DELETE FROM Flows WHERE id=? AND empresa_id=?', [parseInt(req.params.id, 10), empresa_id]);
         res.json({ ok: true });
     } catch (err) { res.status(500).json({ message: 'Erro', err: err.message }); }
 });
@@ -314,14 +326,15 @@ router.delete('/:id', async (req, res) => {
 // Toggle status do fluxo
 router.put('/toggle-status/:id', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
         const { status } = req.body;
-        
+
         if (!status || !['ativo', 'inativo'].includes(status)) {
             return res.status(400).json({ message: 'Status inválido' });
         }
-        
-        await dbQuery('UPDATE Flows SET status=?, updated_at=NOW() WHERE id=?', [status, id]);
+
+        await dbQuery('UPDATE Flows SET status=?, updated_at=NOW() WHERE id=? AND empresa_id=?', [status, id, empresa_id]);
         res.json({ ok: true, status });
     } catch (err) { res.status(500).json({ message: 'Erro', err: err.message }); }
 });
@@ -329,7 +342,12 @@ router.put('/toggle-status/:id', async (req, res) => {
 // Execução manual
 router.post('/:id/run', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
+        // Verificar se o fluxo pertence a esta empresa
+        const flowCheck = await dbQuery('SELECT id FROM Flows WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
+        if (!flowCheck || flowCheck.length === 0) return res.status(404).json({ message: 'Fluxo não encontrado' });
+
         const { startNodeId, phone, cliente = null, agendamento = null, chatId = null, context = {} } = req.body;
         const runId = await startFlow({ flowId: id, startNodeId, phone, cliente, agendamento, chatId, context });
         res.json({ runId });
@@ -347,12 +365,13 @@ router.post('/run/:runId/advance', async (req, res) => {
 // Liberar bloqueio de atendimento
 router.post('/run/:runId/release-agent-block', async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const runId = parseInt(req.params.runId, 10);
-        
-        console.log(`🔓 Liberando bloqueio de atendimento para run ${runId}`);
-        
+
+        console.log(`Liberando bloqueio de atendimento para run ${runId}`);
+
         // Buscar a execução
-        const runs = await dbQuery('SELECT * FROM FlowRuns WHERE id = ?', [runId]);
+        const runs = await dbQuery('SELECT * FROM FlowRuns WHERE id = ? AND empresa_id = ?', [runId, empresa_id]);
         if (!runs || runs.length === 0) {
             return res.status(404).json({ message: 'Execução não encontrada' });
         }
@@ -376,8 +395,8 @@ router.post('/run/:runId/release-agent-block', async (req, res) => {
         
         // Finalizar a execução
         await dbQuery(
-            'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, context_json = ? WHERE id = ?',
-            ['completed', JSON.stringify(context), runId]
+            'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, context_json = ? WHERE id = ? AND empresa_id = ?',
+            ['completed', JSON.stringify(context), runId, empresa_id]
         );
         
         console.log(`✅ Bloqueio liberado para run ${runId}`);

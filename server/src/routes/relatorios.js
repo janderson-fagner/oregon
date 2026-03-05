@@ -17,6 +17,7 @@ const { createRelatorioSaida, createRelatorioReceber, createRelatorioComissoes, 
 require('dotenv').config();
 const paginateArray = (array, perPage, page) => array.slice((page - 1) * perPage, page * perPage)
 const dbQuery = require('../utils/dbHelper');
+const { empresaWhere } = require('../utils/dbHelper');
 
 const statusNomes = [
     { ast_id: 3, ast_descricao: 'Atendido' },
@@ -34,6 +35,7 @@ router.get('/get/financeiro', async (req, res) => {
             dataAte = null,
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
 
         // ==========================
         // 1. BUSCAR DADOS BASE
@@ -42,7 +44,7 @@ router.get('/get/financeiro', async (req, res) => {
         // Buscar pagamentos (receitas) - filtrando pela data do agendamento
         // IMPORTANTE: Apenas agendamentos ATENDIDOS (ast_id = 3)
         let queryPagamentos = `
-            SELECT 
+            SELECT
                 PAGAMENTO.*,
                 AGENDAMENTO.age_data,
                 AGENDAMENTO.age_valor,
@@ -55,11 +57,12 @@ router.get('/get/financeiro', async (req, res) => {
             JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
             WHERE AGENDAMENTO.ast_id = 3
             AND AGENDAMENTO.age_ativo = 1
+            AND PAGAMENTO.empresa_id = ${empresa_id}
         `;
 
-        // Buscar agendamentos atendidos (para incluir os que ainda não têm pagamento)
+        // Buscar agendamentos atendidos (para incluir os que ainda nao tem pagamento)
         let queryAgendamentosAtendidos = `
-            SELECT 
+            SELECT
                 AGENDAMENTO.age_id,
                 AGENDAMENTO.age_data,
                 AGENDAMENTO.age_valor,
@@ -70,11 +73,12 @@ router.get('/get/financeiro', async (req, res) => {
             JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
             WHERE AGENDAMENTO.ast_id = 3
             AND AGENDAMENTO.age_ativo = 1
+            AND AGENDAMENTO.empresa_id = ${empresa_id}
         `;
 
         // Buscar agendamentos futuros (Agendado ou Confirmado)
         let queryAgendamentosFuturos = `
-            SELECT 
+            SELECT
                 AGENDAMENTO.age_id,
                 AGENDAMENTO.age_data,
                 AGENDAMENTO.age_valor,
@@ -85,19 +89,21 @@ router.get('/get/financeiro', async (req, res) => {
             JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
             WHERE AGENDAMENTO.ast_id IN (1, 2)
             AND AGENDAMENTO.age_ativo = 1
+            AND AGENDAMENTO.empresa_id = ${empresa_id}
         `;
 
         // Buscar despesas - usando des_data
-        let queryDespesas = `SELECT * FROM DESPESAS WHERE 1 = 1`;
+        let queryDespesas = `SELECT * FROM DESPESAS WHERE 1 = 1 AND empresa_id = ${empresa_id}`;
 
-        // Buscar comissões - usando created_at do COMISSOES
+        // Buscar comissoes - usando created_at do COMISSOES
         let queryComissoes = `
-            SELECT 
+            SELECT
                 COMISSOES.*,
                 AGENDAMENTO.age_data
             FROM COMISSOES
             JOIN AGENDAMENTO ON COMISSOES.age_id = AGENDAMENTO.age_id
             WHERE 1 = 1
+            AND COMISSOES.empresa_id = ${empresa_id}
         `;
 
         if (dataDe) {
@@ -169,7 +175,7 @@ router.get('/get/financeiro', async (req, res) => {
                     valorPagoPagamento += parseFloat(pag.pgt_valor || 0);
                 }
 
-                const forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ${pag.fpg_id}`);
+                const forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`, [pag.fpg_id, empresa_id]);
                 const formaDesc = forma.length > 0 ? forma[0].fpg_descricao : 'Dinheiro';
                 fpg_names.push(formaDesc);
 
@@ -193,7 +199,7 @@ router.get('/get/financeiro', async (req, res) => {
             }
         }
 
-        // Garantir que agendamentos atendidos sem nenhum pagamento também sejam considerados (pendentes)
+        // Garantir que agendamentos atendidos sem nenhum pagamento tambem sejam considerados (pendentes)
         for (const agendamento of agendamentosAtendidos) {
             if (!agendamentoMap[agendamento.age_id]) {
                 agendamentoMap[agendamento.age_id] = {
@@ -206,13 +212,13 @@ router.get('/get/financeiro', async (req, res) => {
             }
         }
 
-        // Consolidação por agendamento (evita duplicidade)
+        // Consolidacao por agendamento (evita duplicidade)
         for (const agendamento of Object.values(agendamentoMap)) {
             totalReceitaBruta += agendamento.valorAgendamento;
             totalReceitaRecebida += agendamento.valorPago;
 
             const pendente = Math.max(agendamento.valorAgendamento - agendamento.valorPago, 0);
-            const pagoCompleto = pendente <= 0.0001; // tolerância pequena
+            const pagoCompleto = pendente <= 0.0001; // tolerancia pequena
 
             totalReceitaPendente += pendente;
 
@@ -270,7 +276,7 @@ router.get('/get/financeiro', async (req, res) => {
                 despesasPorDia[dia] = (despesasPorDia[dia] || 0) + valor;
 
                 // Agrupar por forma de pagamento
-                const forma = despesa.des_forma_pagamento || 'Não especificado';
+                const forma = despesa.des_forma_pagamento || 'Nao especificado';
                 formasPagamentoDespesas[forma] = (formasPagamentoDespesas[forma] || 0) + valor;
             } else {
                 totalDespesasPendentes += valor;
@@ -290,7 +296,7 @@ router.get('/get/financeiro', async (req, res) => {
         }
 
         // ==========================
-        // 4. PROCESSAR COMISSÕES
+        // 4. PROCESSAR COMISSOES
         // ==========================
 
         let totalComissoes = 0;
@@ -321,13 +327,22 @@ router.get('/get/financeiro', async (req, res) => {
         // 5. CALCULAR TOTAIS E LUCRO
         // ==========================
 
-        const totalGastos = totalDespesasPagas + totalComissoesPagas;
-        const totalGastosPendentes = totalDespesasPendentes + totalComissoesPendentes;
-        const lucroLiquido = totalReceitaRecebida - totalGastos;
+        // Arredondar para 2 casas decimais para evitar imprecisão de float
+        totalReceitaBruta = parseFloat(totalReceitaBruta.toFixed(2));
+        totalReceitaRecebida = parseFloat(totalReceitaRecebida.toFixed(2));
+        totalReceitaPendente = parseFloat(totalReceitaPendente.toFixed(2));
+        totalDespesasPagas = parseFloat(totalDespesasPagas.toFixed(2));
+        totalDespesasPendentes = parseFloat(totalDespesasPendentes.toFixed(2));
+        totalComissoesPagas = parseFloat(totalComissoesPagas.toFixed(2));
+        totalComissoesPendentes = parseFloat(totalComissoesPendentes.toFixed(2));
+
+        const totalGastos = parseFloat((totalDespesasPagas + totalComissoesPagas).toFixed(2));
+        const totalGastosPendentes = parseFloat((totalDespesasPendentes + totalComissoesPendentes).toFixed(2));
+        const lucroLiquido = parseFloat((totalReceitaRecebida - totalGastos).toFixed(2));
         const margemLucro = totalReceitaRecebida > 0 ? (lucroLiquido / totalReceitaRecebida) * 100 : 0;
 
         // ==========================
-        // 6. EVOLUÇÃO TEMPORAL
+        // 6. EVOLUCAO TEMPORAL
         // ==========================
 
         const diasPeriodo = [];
@@ -400,7 +415,7 @@ router.get('/get/financeiro', async (req, res) => {
             .sort((a, b) => b.valor - a.valor);
 
         // ==========================
-        // 10. ÚLTIMOS REGISTROS
+        // 10. ULTIMOS REGISTROS
         // ==========================
 
         const ultimosRecebimentos = pagamentos
@@ -466,7 +481,7 @@ router.get('/get/financeiro', async (req, res) => {
                 comissoesPendentes: quantidadeComissoesPendentes
             },
 
-            // Evolução Temporal
+            // Evolucao Temporal
             evolucao: {
                 dias: diasPeriodo,
                 receitas: evolucaoReceitas,
@@ -487,11 +502,11 @@ router.get('/get/financeiro', async (req, res) => {
             // Tipos de Despesas
             tiposDespesas: tiposDespesasArray,
 
-            // Últimos Registros
+            // Ultimos Registros
             ultimosRecebimentos,
             ultimasDespesas,
 
-            // Dados Completos (para referência)
+            // Dados Completos (para referencia)
             dadosCompletos: {
                 totalPagamentos: pagamentos.length,
                 totalDespesasCount: despesas.length,
@@ -513,16 +528,18 @@ router.get('/get/comissoes', async (req, res) => {
             dataAte = null,
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
+
         const moment = require('moment');
         moment.locale('pt-br');
         const { getAgendamentos } = require('../utils/agendaUtils');
 
         // ==========================
-        // 1. BUSCAR COMISSÕES
+        // 1. BUSCAR COMISSOES
         // ==========================
 
-        let query = `SELECT 
-                        COMISSOES.*, 
+        let query = `SELECT
+                        COMISSOES.*,
                         User.fullName,
                         User.color,
                         AGENDAMENTO.age_data,
@@ -532,7 +549,7 @@ router.get('/get/comissoes', async (req, res) => {
                     JOIN User ON COMISSOES.fun_id = User.id
                     JOIN AGENDAMENTO ON COMISSOES.age_id = AGENDAMENTO.age_id
                     JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_id
-                    WHERE 1 = 1`;
+                    WHERE 1 = 1 AND COMISSOES.empresa_id = ${empresa_id}`;
 
         if (dataDe) {
             const formattedDataDe = new Date(dataDe).toISOString().split('T')[0];
@@ -547,15 +564,15 @@ router.get('/get/comissoes', async (req, res) => {
         query += ` ORDER BY COMISSOES.created_at DESC`;
 
         const comissoes = await dbQuery(query);
-        const funcionarios = await dbQuery('SELECT * FROM User WHERE role = "tecnico" OR role = "tecnico-senior"');
+        const funcionarios = await dbQuery('SELECT * FROM User WHERE (role = "tecnico" OR role = "tecnico-senior") AND empresa_id = ?', [empresa_id]);
 
-        // Buscar detalhes dos agendamentos com serviços
+        // Buscar detalhes dos agendamentos com servicos
         const ageIds = [...new Set(comissoes.map(c => c.age_id))];
         let agendamentosMap = {};
 
         if (ageIds.length > 0) {
-            const agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')})`;
-            const agendamentosCompletos = await getAgendamentos(agendamentosQuery, []);
+            const agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')}) AND empresa_id = ${empresa_id}`;
+            const agendamentosCompletos = await getAgendamentos(agendamentosQuery, [], empresa_id);
 
             agendamentosCompletos.forEach(age => {
                 agendamentosMap[age.age_id] = age;
@@ -563,7 +580,7 @@ router.get('/get/comissoes', async (req, res) => {
         }
 
         // ==========================
-        // 2. PROCESSAR COMISSÕES
+        // 2. PROCESSAR COMISSOES
         // ==========================
 
         let totalComissoes = 0;
@@ -582,7 +599,7 @@ router.get('/get/comissoes', async (req, res) => {
             totalComissoes++;
             valorTotalComissoes += valor;
 
-            // Comissões por funcionário
+            // Comissoes por funcionario
             if (!comissoesPorFuncionario[comissao.fullName]) {
                 comissoesPorFuncionario[comissao.fullName] = {
                     fullName: comissao.fullName,
@@ -624,7 +641,7 @@ router.get('/get/comissoes', async (req, res) => {
         }
 
         // ==========================
-        // 3. EVOLUÇÃO TEMPORAL
+        // 3. EVOLUCAO TEMPORAL
         // ==========================
 
         const diasPeriodo = [];
@@ -647,7 +664,7 @@ router.get('/get/comissoes', async (req, res) => {
         }
 
         // ==========================
-        // 4. COMISSÕES POR FUNCIONÁRIO
+        // 4. COMISSOES POR FUNCIONARIO
         // ==========================
 
         const totalComissoesFun = Object.values(comissoesPorFuncionario)
@@ -663,7 +680,7 @@ router.get('/get/comissoes', async (req, res) => {
             .sort((a, b) => b.valor - a.valor);
 
         // ==========================
-        // 6. TICKET MÉDIO E MÉTRICAS
+        // 6. TICKET MEDIO E METRICAS
         // ==========================
 
         const ticketMedioPago = totalComissoesPagas > 0
@@ -679,7 +696,7 @@ router.get('/get/comissoes', async (req, res) => {
             : 0;
 
         // ==========================
-        // 7. LISTA COMPLETA DE COMISSÕES
+        // 7. LISTA COMPLETA DE COMISSOES
         // ==========================
 
         const comissoesDetalhadas = comissoes.map(c => {
@@ -727,13 +744,13 @@ router.get('/get/comissoes', async (req, res) => {
                 taxaPagamento: taxaPagamento.toFixed(2)
             },
 
-            // Evolução Temporal
+            // Evolucao Temporal
             evolucao: {
                 dias: diasPeriodo,
                 comissoesPagas: evolucaoComissoesPagas
             },
 
-            // Comissões por Funcionário
+            // Comissoes por Funcionario
             comissoesPorFuncionario: totalComissoesFun,
 
             // Formas de Pagamento
@@ -742,13 +759,13 @@ router.get('/get/comissoes', async (req, res) => {
             // Lista completa
             comissoes: comissoesDetalhadas,
 
-            // Dados dos funcionários
+            // Dados dos funcionarios
             funcionarios
         };
 
         res.status(200).json(data);
     } catch (error) {
-        console.error('Erro ao buscar comissões', error);
+        console.error('Erro ao buscar comissoes', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -760,23 +777,23 @@ router.get('/get/servicos', async (req, res) => {
             dataAte = null,
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
+
         const moment = require('moment');
         moment.locale('pt-br');
         const { getAgendamentosSimple } = require('../utils/agendaUtils');
 
         // ==========================
-        // 1. BUSCAR AGENDAMENTOS COM PAGAMENTOS ATENDIDOS NO PERÍODO
+        // 1. BUSCAR AGENDAMENTOS COM PAGAMENTOS ATENDIDOS NO PERIODO
         // ==========================
 
-        // Buscar agendamentos que têm pagamentos no período especificado
-        // Usando created_at do PAGAMENTO como filtro (igual ao relatório financeiro)
-        // IMPORTANTE: Deve ter serviços cadastrados (AXS ou AGENDAMENTO_X_SERVICOS)
         let queryAgendamentosComPagamento = `
             SELECT DISTINCT AGENDAMENTO.age_id
             FROM AGENDAMENTO
             JOIN PAGAMENTO ON AGENDAMENTO.age_id = PAGAMENTO.age_id
             WHERE AGENDAMENTO.ast_id = 3
             AND PAGAMENTO.pgt_data IS NOT NULL
+            AND AGENDAMENTO.empresa_id = ${empresa_id}
             AND (
                 EXISTS (SELECT 1 FROM AXS WHERE AXS.age_id = AGENDAMENTO.age_id)
                 OR EXISTS (SELECT 1 FROM AGENDAMENTO_X_SERVICOS WHERE AGENDAMENTO_X_SERVICOS.age_id = AGENDAMENTO.age_id)
@@ -811,12 +828,12 @@ router.get('/get/servicos', async (req, res) => {
             });
         }
 
-        // Buscar agendamentos completos com serviços
+        // Buscar agendamentos completos com servicos
         const ageIds = ageIdsComPagamento.map(item => item.age_id);
-        let queryAgendamentos = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')}) ORDER BY age_data DESC`;
+        let queryAgendamentos = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')}) AND empresa_id = ${empresa_id} ORDER BY age_data DESC`;
 
         const agendamentos = await getAgendamentosSimple(queryAgendamentos, []);
-        const funcionarios = await dbQuery('SELECT * FROM User WHERE podeAgendamento = 1');
+        const funcionarios = await dbQuery('SELECT * FROM User WHERE podeAgendamento = 1 AND empresa_id = ?', [empresa_id]);
         const statusAgendamentos = await dbQuery('SELECT * FROM AGENDAMENTO_STATUS');
 
         // ==========================
@@ -827,15 +844,16 @@ router.get('/get/servicos', async (req, res) => {
         const pagamentosPorAgendamento = {};
 
         for (const agendamento of agendamentos) {
-            // Buscar pagamentos deste agendamento que estejam no período
+            // Buscar pagamentos deste agendamento que estejam no periodo
             let queryPagamentos = `
-                SELECT pgt_id, pgt_data, pgt_json, created_at 
-                FROM PAGAMENTO 
-                WHERE age_id = ? 
+                SELECT pgt_id, pgt_data, pgt_json, created_at
+                FROM PAGAMENTO
+                WHERE age_id = ?
                 AND pgt_data IS NOT NULL
+                AND empresa_id = ?
             `;
 
-            const params = [agendamento.age_id];
+            const params = [agendamento.age_id, empresa_id];
 
             if (dataDe) {
                 queryPagamentos += ` AND DATE(created_at) >= ?`;
@@ -861,13 +879,13 @@ router.get('/get/servicos', async (req, res) => {
         }
 
         // ==========================
-        // 2. AGREGAR DADOS POR SERVIÇO (PAI + SUBS + LEGACY)
+        // 2. AGREGAR DADOS POR SERVICO (PAI + SUBS + LEGACY)
         // ==========================
 
-        let servicosPaiMap = {}; // Serviços PAI (com subs somados)
-        let subsDetalhados = {}; // Subserviços detalhados
-        let servicosPorData = {}; // Para evolução temporal
-        let servicosPorFuncionario = {}; // Para tabela de técnicos
+        let servicosPaiMap = {}; // Servicos PAI (com subs somados)
+        let subsDetalhados = {}; // Subservicos detalhados
+        let servicosPorData = {}; // Para evolucao temporal
+        let servicosPorFuncionario = {}; // Para tabela de tecnicos
 
         let totalServicosRealizados = 0; // Quantidade: todos os status
         let totalValorGerado = 0; // Valor: apenas atendidos com pagamentos efetivos
@@ -878,10 +896,10 @@ router.get('/get/servicos', async (req, res) => {
             const funId = agendamento.fun_id;
             const statusDescricao = statusAgendamentos.find(s => s.ast_id === astId)?.ast_descricao || 'Desconhecido';
 
-            // Pegar valor PAGO do agendamento (não o valor teórico)
+            // Pegar valor PAGO do agendamento (nao o valor teorico)
             const valorPagoAgendamento = pagamentosPorAgendamento[agendamento.age_id] || 0;
 
-            // Calcular valor total dos serviços para distribuir proporcionalmente
+            // Calcular valor total dos servicos para distribuir proporcionalmente
             let valorTotalServicos = 0;
             for (const s of agendamento.servicos) {
                 const sValor = parseFloat(s.ser_valor || 0);
@@ -889,35 +907,31 @@ router.get('/get/servicos', async (req, res) => {
                 valorTotalServicos += sValor * sQtd;
             }
 
-            // Processar cada serviço do agendamento
+            // Processar cada servico do agendamento
             for (const servico of agendamento.servicos) {
                 const serNome = servico.ser_nome || 'Sem nome';
                 const serValor = parseFloat(servico.ser_valor || 0);
                 const serQuantity = servico.ser_quantity || 1;
                 const serValorTeoricoTotal = serValor * serQuantity;
 
-                // Calcular valor proporcional PAGO deste serviço
-                // Todos os agendamentos aqui já são atendidos com pagamentos efetivados
+                // Calcular valor proporcional PAGO deste servico
                 let serValorTotal = 0;
                 if (valorTotalServicos > 0) {
-                    // Distribuir o valor pago proporcionalmente
                     serValorTotal = (serValorTeoricoTotal / valorTotalServicos) * valorPagoAgendamento;
                 } else if (valorPagoAgendamento > 0 && agendamento.servicos.length > 0) {
-                    // Se o valor total dos serviços é 0 mas há pagamento,
-                    // distribuir igualmente entre todos os serviços
                     serValorTotal = valorPagoAgendamento / agendamento.servicos.length;
                 }
 
                 const isOld = servico.isOld || false;
                 const isSub = servico.isSub || false;
-                const serPaiId = servico.ser_pai_id || servico.ser_id; // Se é sub, usa o pai_id, senão usa o próprio id
+                const serPaiId = servico.ser_pai_id || servico.ser_id;
 
-                // Determinar a chave do serviço PAI
+                // Determinar a chave do servico PAI
                 let ser_pai_key;
                 if (isOld) {
                     ser_pai_key = `old_${servico.ser_id}`;
                 } else {
-                    ser_pai_key = `new_${serPaiId}`; // Sempre usa o ID do PAI
+                    ser_pai_key = `new_${serPaiId}`;
                 }
 
                 // Quantidade: sempre soma
@@ -927,7 +941,7 @@ router.get('/get/servicos', async (req, res) => {
                 totalValorGerado += serValorTotal;
 
                 // ==========================
-                // 2.1 Agregar por SERVIÇO PAI (inclui subs)
+                // 2.1 Agregar por SERVICO PAI (inclui subs)
                 // ==========================
                 if (!servicosPaiMap[ser_pai_key]) {
                     // Buscar nome do PAI se for sub
@@ -942,7 +956,7 @@ router.get('/get/servicos', async (req, res) => {
                     servicosPaiMap[ser_pai_key] = {
                         ser_id: serPaiId,
                         ser_nome: nomePai,
-                        ser_descricao: isOld ? 'Serviço Antigo' : '',
+                        ser_descricao: isOld ? 'Servico Antigo' : '',
                         isOld: isOld,
                         quantidade: 0,
                         valorTotal: 0,
@@ -963,7 +977,7 @@ router.get('/get/servicos', async (req, res) => {
                     (servicosPaiMap[ser_pai_key].statusCount[statusDescricao] || 0) + serQuantity;
 
                 // ==========================
-                // 2.2 Agregar SUBSERVIÇOS detalhados (apenas subs)
+                // 2.2 Agregar SUBSERVICOS detalhados (apenas subs)
                 // ==========================
                 if (isSub && servico.ser_sub_id) {
                     const sub_key = `sub_${servico.ser_sub_id}`;
@@ -992,7 +1006,7 @@ router.get('/get/servicos', async (req, res) => {
                 }
 
                 // ==========================
-                // 2.3 Agregar por data (evolução)
+                // 2.3 Agregar por data (evolucao)
                 // ==========================
                 if (!servicosPorData[ageData]) {
                     servicosPorData[ageData] = {
@@ -1009,7 +1023,7 @@ router.get('/get/servicos', async (req, res) => {
                 servicosPorData[ageData].valorTotal += serValorTotal;
 
                 // ==========================
-                // 2.4 Agregar por funcionário
+                // 2.4 Agregar por funcionario
                 // ==========================
                 if (!servicosPorFuncionario[funId]) {
                     const funcionario = funcionarios.find(f => f.id === funId);
@@ -1028,7 +1042,7 @@ router.get('/get/servicos', async (req, res) => {
                     }
                 }
 
-                // Usar a chave do PAI para funcionários também
+                // Usar a chave do PAI para funcionarios tambem
                 if (!servicosPorFuncionario[funId].servicosRealizados[ser_pai_key]) {
                     // Buscar nome do PAI
                     let nomePai = serNome;
@@ -1046,7 +1060,7 @@ router.get('/get/servicos', async (req, res) => {
                         statusCount: {}
                     };
 
-                    // Inicializar contadores de status para este serviço
+                    // Inicializar contadores de status para este servico
                     for (const status of statusAgendamentos) {
                         servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[status.ast_descricao] = 0;
                     }
@@ -1073,26 +1087,25 @@ router.get('/get/servicos', async (req, res) => {
         }
 
         // ==========================
-        // 3. CONSOLIDAR SERVIÇOS LEGACY POR NOME
+        // 3. CONSOLIDAR SERVICOS LEGACY POR NOME
         // ==========================
 
         const servicosConsolidados = {};
 
         for (const [key, servico] of Object.entries(servicosPaiMap)) {
             if (servico.isOld) {
-                // Normalizar nome (lowercase, remover espaços extras, singular/plural)
                 const nomeNormalizado = servico.ser_nome
                     .toLowerCase()
                     .trim()
-                    .replace(/s$/, ''); // Remove 's' do final para unificar singular/plural
+                    .replace(/s$/, '');
 
                 const keyLegacy = `legacy_${nomeNormalizado}`;
 
                 if (!servicosConsolidados[keyLegacy]) {
                     servicosConsolidados[keyLegacy] = {
                         ser_id: 'legacy_' + nomeNormalizado,
-                        ser_nome: servico.ser_nome.replace(/s$/, ''), // Nome no singular
-                        ser_descricao: 'Serviço Antigo Consolidado',
+                        ser_nome: servico.ser_nome.replace(/s$/, ''),
+                        ser_descricao: 'Servico Antigo Consolidado',
                         isOld: true,
                         quantidade: 0,
                         valorTotal: 0,
@@ -1114,7 +1127,6 @@ router.get('/get/servicos', async (req, res) => {
                 servicosConsolidados[keyLegacy].quantidade += servico.quantidade;
                 servicosConsolidados[keyLegacy].valorTotal += servico.valorTotal;
             } else {
-                // Serviços novos (pai + subs já somados) mantêm separados
                 servicosConsolidados[key] = servico;
             }
         }
@@ -1132,13 +1144,13 @@ router.get('/get/servicos', async (req, res) => {
             }))
             .sort((a, b) => b.quantidadeTotal - a.quantidadeTotal);
 
-        // Subserviços detalhados em array
+        // Subservicos detalhados em array
         const subsDetalhadosArray = Object.values(subsDetalhados).sort((a, b) => b.quantidade - a.quantidade);
 
-        // 4.2 Preparar evolução temporal
+        // 4.2 Preparar evolucao temporal
         const evolucaoServicos = Object.values(servicosPorData).sort((a, b) => new Date(a.data) - new Date(b.data));
 
-        // 4.3 Calcular métricas gerais
+        // 4.3 Calcular metricas gerais
         const ticketMedio = totalServicosRealizados > 0 ? totalValorGerado / totalServicosRealizados : 0;
         const servicoMaisRealizado = servicosArray.length > 0 ? servicosArray[0] : null;
         const servicoMaisLucrativo = servicosArray.sort((a, b) => b.valorTotal - a.valorTotal)[0] || null;
@@ -1149,19 +1161,19 @@ router.get('/get/servicos', async (req, res) => {
         // ==========================
 
         res.status(200).json({
-            // Métricas gerais
+            // Metricas gerais
             totalServicosRealizados,
             totalValorGerado,
             ticketMedio,
             servicoMaisRealizado,
             servicoMaisLucrativo,
 
-            // Evolução temporal
+            // Evolucao temporal
             evolucaoServicos,
 
             // Tabelas
-            servicosDetalhados: servicosArray, // PAI com subs somados + legacy consolidado
-            subservicosDetalhados: subsDetalhadosArray, // Subserviços individuais
+            servicosDetalhados: servicosArray,
+            subservicosDetalhados: subsDetalhadosArray,
             servicosPorFuncionario: servicosPorFuncionarioArray,
 
             // Dados auxiliares
@@ -1169,7 +1181,7 @@ router.get('/get/servicos', async (req, res) => {
             statusAgendamentos
         });
     } catch (error) {
-        console.error('Erro ao buscar relatório de serviços', error);
+        console.error('Erro ao buscar relatorio de servicos', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -1182,42 +1194,45 @@ router.get('/get/agendamentos', async (req, res) => {
             dataAte = null
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
+
         if (!dataDe || !dataAte) {
-            return res.status(400).json({ message: 'Parâmetros de data obrigatórios' });
+            return res.status(400).json({ message: 'Parametros de data obrigatorios' });
         }
 
         // Formatar datas
         const formattedDataDe = moment(dataDe).format('YYYY-MM-DD');
         const formattedDataAte = moment(dataAte).format('YYYY-MM-DD');
 
-        // Buscar agendamentos no período (EXCLUINDO BLOQUEIOS)
+        // Buscar agendamentos no periodo (EXCLUINDO BLOQUEIOS)
         let queryAgendamentos = `
-            SELECT 
+            SELECT
                 AGENDAMENTO.*,
                 AGENDAMENTO_STATUS.ast_descricao as status_nome
             FROM AGENDAMENTO
             JOIN AGENDAMENTO_STATUS ON AGENDAMENTO.ast_id = AGENDAMENTO_STATUS.ast_id
-            WHERE AGENDAMENTO.age_data >= ? 
+            WHERE AGENDAMENTO.age_data >= ?
             AND AGENDAMENTO.age_data <= ?
             AND AGENDAMENTO.age_ativo = 1
+            AND AGENDAMENTO.empresa_id = ?
             AND (AGENDAMENTO.age_type IS NULL OR AGENDAMENTO.age_type != 'bloqueio')
             ORDER BY AGENDAMENTO.age_data ASC
         `;
 
-        const agendamentos = await dbQuery(queryAgendamentos, [formattedDataDe, formattedDataAte]);
+        const agendamentos = await dbQuery(queryAgendamentos, [formattedDataDe, formattedDataAte, empresa_id]);
 
-        // Buscar clientes únicos
+        // Buscar clientes unicos
         const clienteIds = [...new Set(agendamentos.filter(a => a.cli_id).map(a => a.cli_id))];
         let clientesMap = {};
 
         if (clienteIds.length > 0) {
-            const clientes = await dbQuery(`SELECT * FROM CLIENTES WHERE cli_Id IN (${clienteIds.join(',')})`);
+            const clientes = await dbQuery(`SELECT * FROM CLIENTES WHERE cli_Id IN (${clienteIds.join(',')}) AND empresa_id = ?`, [empresa_id]);
             clientes.forEach(cli => {
                 clientesMap[cli.cli_Id] = cli;
             });
         }
 
-        // Buscar endereços únicos
+        // Buscar enderecos unicos
         const enderecoIds = [...new Set(agendamentos.filter(a => a.age_endereco).map(a => a.age_endereco))];
         let enderecosMap = {};
 
@@ -1232,7 +1247,7 @@ router.get('/get/agendamentos', async (req, res) => {
         let funcionariosMap = {};
 
         if (funcionarioIds.length > 0) {
-            const funcionarios = await dbQuery(`SELECT * FROM User WHERE id IN (${funcionarioIds.join(',')})`);
+            const funcionarios = await dbQuery(`SELECT * FROM User WHERE id IN (${funcionarioIds.join(',')}) AND empresa_id = ?`, [empresa_id]);
             funcionarios.forEach(fun => {
                 funcionariosMap[fun.id] = fun;
             });
@@ -1244,10 +1259,11 @@ router.get('/get/agendamentos', async (req, res) => {
 
         if (ageIds.length > 0) {
             const pagamentos = await dbQuery(`
-                SELECT * FROM PAGAMENTO 
+                SELECT * FROM PAGAMENTO
                 WHERE age_id IN (${ageIds.join(',')})
                 AND pgt_data IS NOT NULL
-            `);
+                AND empresa_id = ?
+            `, [empresa_id]);
 
             pagamentos.forEach(pgt => {
                 const pgtJson = pgt.pgt_json ? JSON.parse(pgt.pgt_json) : [];
@@ -1262,7 +1278,7 @@ router.get('/get/agendamentos', async (req, res) => {
         let totalValorPendente = 0;
         let totalValorFuturo = 0;
 
-        // === EVOLUÇÃO POR DATA ===
+        // === EVOLUCAO POR DATA ===
         const evolucaoPorData = {};
 
         // === DADOS POR CIDADE ===
@@ -1280,19 +1296,20 @@ router.get('/get/agendamentos', async (req, res) => {
         // === DADOS POR CONTRATO ===
         const contratosMap = {};
 
-        // Buscar informações completas dos contratos únicos (dos clientes)
+        // Buscar informacoes completas dos contratos unicos (dos clientes)
         const contratoIds = [...new Set(agendamentos.filter(a => a.age_contrato).map(a => a.age_contrato))];
         let contratosInfoMap = {};
 
-        if (contratoIds.length > 0) {
+        if (contratoIds.length > 0 && clienteIds.length > 0) {
             // Buscar clientes que possuem contratos
             const clientesComContratos = await dbQuery(`
-                SELECT cli_Id, cli_nome, cli_contratos 
-                FROM CLIENTES 
-                WHERE cli_contratos IS NOT NULL 
+                SELECT cli_Id, cli_nome, cli_contratos
+                FROM CLIENTES
+                WHERE cli_contratos IS NOT NULL
                 AND cli_contratos != '[]'
                 AND cli_Id IN (${clienteIds.join(',')})
-            `);
+                AND empresa_id = ?
+            `, [empresa_id]);
 
             // Processar contratos de cada cliente
             clientesComContratos.forEach(cliente => {
@@ -1332,8 +1349,8 @@ router.get('/get/agendamentos', async (req, res) => {
             const funcionarioNome = funcionario ? funcionario?.fullName : null;
 
             agendamento.funcionario = funcionario;
-            
-            // Evolução por data
+
+            // Evolucao por data
             if (!evolucaoPorData[ageData]) {
                 evolucaoPorData[ageData] = {
                     data: ageData,
@@ -1412,7 +1429,7 @@ router.get('/get/agendamentos', async (req, res) => {
 
             // Por tipo de agendamento
             const tipoKey = agendamento.age_type || 'servico';
-            const statusNome = statusNomes.find(status => status.ast_id === agendamento.ast_id)?.ast_descricao || 'Indefinido';
+            const statusNome2 = statusNomes.find(status => status.ast_id === agendamento.ast_id)?.ast_descricao || 'Indefinido';
 
             if (!tiposMap[tipoKey]) {
                 tiposMap[tipoKey] = {
@@ -1425,10 +1442,10 @@ router.get('/get/agendamentos', async (req, res) => {
             tiposMap[tipoKey].quantidade += 1;
 
             // Contagem por status
-            if (!tiposMap[tipoKey].statusCount[statusNome]) {
-                tiposMap[tipoKey].statusCount[statusNome] = 0;
+            if (!tiposMap[tipoKey].statusCount[statusNome2]) {
+                tiposMap[tipoKey].statusCount[statusNome2] = 0;
             }
-            tiposMap[tipoKey].statusCount[statusNome] += 1;
+            tiposMap[tipoKey].statusCount[statusNome2] += 1;
 
             if (isAtendido && isPago) {
                 tiposMap[tipoKey].valorRecebido += valorPago;
@@ -1446,7 +1463,6 @@ router.get('/get/agendamentos', async (req, res) => {
                         contrato: contratoKey,
                         quantidade: 0,
                         valorRecebido: 0,
-                        // Informações do contrato (do registro do contrato, não dos agendamentos)
                         contratoInfo: contratoInfo ? contratoInfo : null
                     };
                 }
@@ -1461,7 +1477,7 @@ router.get('/get/agendamentos', async (req, res) => {
             }
 
             // Por status
-            const statusKey = agendamento.status_nome || 'Não informado';
+            const statusKey = agendamento.status_nome || 'Nao informado';
             if (!statusMap[statusKey]) {
                 statusMap[statusKey] = {
                     status: statusKey,
@@ -1471,7 +1487,7 @@ router.get('/get/agendamentos', async (req, res) => {
                 };
             }
             statusMap[statusKey].quantidade += 1;
-            
+
             // Adicionar valor baseado no status
             if (isAtendido && isPago) {
                 statusMap[statusKey].valorRecebido += valorPago;
@@ -1512,31 +1528,33 @@ router.get('/get/agendamentos', async (req, res) => {
         const statusArray = Object.values(statusMap).sort((a, b) => b.quantidade - a.quantidade);
         const fontesArray = Object.values(fontesMap).sort((a, b) => b.quantidade - a.quantidade);
 
-        // Estatísticas por status específicos
+        // Estatisticas por status especificos
         const qtdAtendidos = agendamentos.filter(a => a.ast_id === 3).length;
         const qtdConfirmados = agendamentos.filter(a => a.ast_id === 2).length;
         const qtdCancelados = agendamentos.filter(a => a.ast_id === 6).length;
         const qtdRetrabalhos = agendamentos.filter(a => a.age_retrabalho === 1).length;
 
-        // Estatísticas de contratos (DOS CONTRATOS, não dos agendamentos)
-        // Buscar TODOS os contratos dos clientes no período
-        const todosClientesComContratos = await dbQuery(`
-            SELECT DISTINCT cli_Id, cli_contratos 
-            FROM CLIENTES 
-            WHERE cli_contratos IS NOT NULL 
-            AND cli_contratos != '[]'
-            AND cli_Id IN (${clienteIds.join(',')})
-        `);
-
+        // Estatisticas de contratos (DOS CONTRATOS, nao dos agendamentos)
         let todosContratos = [];
-        todosClientesComContratos.forEach(cliente => {
-            try {
-                const contratos = JSON.parse(cliente.cli_contratos || '[]');
-                todosContratos = [...todosContratos, ...contratos];
-            } catch (e) {
-                console.error('Erro ao fazer parse de cli_contratos:', e);
-            }
-        });
+        if (clienteIds.length > 0) {
+            const todosClientesComContratos = await dbQuery(`
+                SELECT DISTINCT cli_Id, cli_contratos
+                FROM CLIENTES
+                WHERE cli_contratos IS NOT NULL
+                AND cli_contratos != '[]'
+                AND cli_Id IN (${clienteIds.join(',')})
+                AND empresa_id = ?
+            `, [empresa_id]);
+
+            todosClientesComContratos.forEach(cliente => {
+                try {
+                    const contratos = JSON.parse(cliente.cli_contratos || '[]');
+                    todosContratos = [...todosContratos, ...contratos];
+                } catch (e) {
+                    console.error('Erro ao fazer parse de cli_contratos:', e);
+                }
+            });
+        }
 
         const qtdContratosTotal = todosContratos.length;
         const valorTotalContratos = todosContratos.reduce((sum, contrato) =>
@@ -1564,7 +1582,7 @@ router.get('/get/agendamentos', async (req, res) => {
                 valorTotalContratos: valorTotalContratos
             },
 
-            // Evolução
+            // Evolucao
             evolucao: evolucaoArray,
 
             // Detalhamentos
@@ -1579,7 +1597,7 @@ router.get('/get/agendamentos', async (req, res) => {
 
         res.status(200).json(response);
     } catch (error) {
-        console.error('Erro ao buscar relatório de agendamentos:', error);
+        console.error('Erro ao buscar relatorio de agendamentos:', error);
         res.status(500).json({ message: error.message });
     }
 });
@@ -1595,14 +1613,15 @@ router.get('/list-servicos', async (req, res) => {
         orderBy = 'asc'
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
     const offset = (page - 1) * itemsPerPage;
 
-    let query = `SELECT * FROM SERVICOS WHERE 1 = 1 AND ser_ativo = 1`;
+    let query = `SELECT * FROM SERVICOS WHERE 1 = 1 AND ser_ativo = 1 AND empresa_id = ${empresa_id}`;
 
     if (q) {
         query += ` AND (
-            ser_nome LIKE '%${q}%' OR 
-            ser_descricao LIKE '%${q}%' OR 
+            ser_nome LIKE '%${q}%' OR
+            ser_descricao LIKE '%${q}%' OR
             ser_valor LIKE '%${q}%'
         )`;
     }
@@ -1616,22 +1635,24 @@ router.get('/list-servicos', async (req, res) => {
     query += ` LIMIT ${offset}, ${itemsPerPage}`;
 
     try {
-        let totalServicos = await dbQuery(`SELECT COUNT(*) AS total FROM SERVICOS WHERE ser_ativo = 1`);
+        let totalServicos = await dbQuery(`SELECT COUNT(*) AS total FROM SERVICOS WHERE ser_ativo = 1 AND empresa_id = ?`, [empresa_id]);
 
         const servicos = await dbQuery(query);
 
         for (let servico of servicos) {
             let qtdAtendidos = 0;
-            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE ser_id = ${servico.ser_id}`);
+            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE ser_id = ?`, [servico.ser_id]);
 
             for (let ax of axs) {
-                let agesQuery = `SELECT * FROM AGENDAMENTO WHERE age_id = ${ax.age_id}`;
+                let agesQuery = `SELECT * FROM AGENDAMENTO WHERE age_id = ? AND empresa_id = ?`;
+                let agesParams = [ax.age_id, empresa_id];
                 if (dataDe && dataAte) {
                     dataDe = new Date(dataDe).toISOString().split('T')[0];
                     dataAte = new Date(dataAte).toISOString().split('T')[0];
-                    agesQuery += ` AND age_data >= '${dataDe}' AND age_data <= '${dataAte}'`;
+                    agesQuery += ` AND age_data >= ? AND age_data <= ?`;
+                    agesParams.push(dataDe, dataAte);
                 }
-                let ages = await dbQuery(agesQuery);
+                let ages = await dbQuery(agesQuery, agesParams);
                 if (ages.length > 0) {
                     qtdAtendidos += ax.ser_quantity;
                 }
@@ -1642,7 +1663,7 @@ router.get('/list-servicos', async (req, res) => {
 
         let juntarServicos = [];
 
-        // Juntar serviços que tenham o mesmo nome
+        // Juntar servicos que tenham o mesmo nome
         for (let servico of servicos) {
             let index = juntarServicos.findIndex(juntarServico => juntarServico.ser_nome == servico.ser_nome);
             if (index == -1) {
@@ -1660,7 +1681,7 @@ router.get('/list-servicos', async (req, res) => {
 
         res.status(200).json(data);
     } catch (error) {
-        console.error('Erro ao buscar serviços', error);
+        console.error('Erro ao buscar servicos', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -1674,10 +1695,12 @@ router.get('/list-servicos-f', async (req, res) => {
         orderBy = 'asc'
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
+
     const formattedDataDe = dataDe ? new Date(dataDe).toISOString().split('T')[0] : null;
     const formattedDataAte = dataAte ? new Date(dataAte).toISOString().split('T')[0] : null;
 
-    let agesQuery = `SELECT * FROM AGENDAMENTO WHERE 1 = 1`;
+    let agesQuery = `SELECT * FROM AGENDAMENTO WHERE 1 = 1 AND empresa_id = ${empresa_id}`;
 
     if (formattedDataDe && formattedDataAte) {
         agesQuery += ` AND age_data >= '${formattedDataDe}' AND age_data <= '${formattedDataAte}'`;
@@ -1697,11 +1720,11 @@ router.get('/list-servicos-f', async (req, res) => {
         const agendamentos = await dbQuery(agesQuery);
 
         for (let agendamento of agendamentos) {
-            agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_id = ?', [agendamento.cli_id]);
+            agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_id = ? AND empresa_id = ?', [agendamento.cli_id, empresa_id]);
             agendamento.endereco = agendamento.age_endereco ? await dbQuery('SELECT * FROM ENDERECO WHERE end_id = ?', [agendamento.age_endereco])
                 : await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [agendamento.cli_id]);
 
-            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ${agendamento.age_id}`);
+            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ?`, [agendamento.age_id]);
 
             let servicos = [];
 
@@ -1724,12 +1747,12 @@ router.get('/list-servicos-f', async (req, res) => {
 
         res.status(200).json(data);
     } catch (error) {
-        console.error('Erro ao buscar serviços', error);
+        console.error('Erro ao buscar servicos', error);
         res.status(500).json(error);
     }
 });
 
-// Rota de impressão de saídas removida - funcionalidade descontinuada
+// Rota de impressao de saidas removida - funcionalidade descontinuada
 
 router.post('/print/receber', async (req, res) => {
     const {
@@ -1737,8 +1760,10 @@ router.post('/print/receber', async (req, res) => {
         dataAte = null,
     } = req.query;
 
+    const empresa_id = req.user.empresa_id;
+
     if (!dataDe || !dataAte) {
-        return res.status(400).json({ message: 'Parâmetros inválidos' });
+        return res.status(400).json({ message: 'Parametros invalidos' });
     }
 
     const formattedDataDe = dataDe ? new Date(dataDe).toISOString().split('T')[0] : null;
@@ -1767,7 +1792,8 @@ router.post('/print/receber', async (req, res) => {
                     JOIN AGENDAMENTO ON PAGAMENTO.age_id = AGENDAMENTO.age_id
                     JOIN User ON AGENDAMENTO.fun_id = User.id
                     JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_id
-                    WHERE 1 = 1 AND AGENDAMENTO.age_data >= '${formattedDataDe}' AND AGENDAMENTO.age_data <= '${formattedDataAte}'
+                    WHERE 1 = 1 AND PAGAMENTO.empresa_id = ${empresa_id}
+                    AND AGENDAMENTO.age_data >= '${formattedDataDe}' AND AGENDAMENTO.age_data <= '${formattedDataAte}'
                     ORDER BY AGENDAMENTO.age_data DESC`;
 
         const pagamentos = await dbQuery(query);
@@ -1778,7 +1804,7 @@ router.post('/print/receber', async (req, res) => {
             let fpg_names = [];
             for (let pag of pags) {
 
-                let forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ${pag.fpg_id}`);
+                let forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`, [pag.fpg_id, empresa_id]);
                 fpg_names.push(forma.length > 0 ? forma[0].fpg_descricao : 'Dinheiro');
             }
 
@@ -1793,13 +1819,14 @@ router.post('/print/receber', async (req, res) => {
         let dataAteText = dataAte ? new Date(dataAte).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
 
         let data = {
-            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} até ${dataAteText}`,
+            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} ate ${dataAteText}`,
             recebimentos: pagamentos,
             dataRelatorio: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
             totalRecebimentos: pagamentos.length,
             valorTotalRecebimentos: totalRecebimento,
             valorTotalNaoPago: totalNaoPago,
-            valorTotalPago: totalPago
+            valorTotalPago: totalPago,
+            empresa_id,
         }
 
         const pdf = await createRelatorioReceber(data);
@@ -1820,8 +1847,10 @@ router.post('/print/comissoes', async (req, res) => {
         fun_id = null,
     } = req.body;
 
+    const empresa_id = req.user.empresa_id;
+
     if (!dataDe || !dataAte || !fun_id) {
-        return res.status(400).json({ message: 'Parâmetros inválidos' });
+        return res.status(400).json({ message: 'Parametros invalidos' });
     }
 
     const formattedDataDe = dataDe ? new Date(dataDe).toISOString().split('T')[0] : null;
@@ -1830,43 +1859,44 @@ router.post('/print/comissoes', async (req, res) => {
     try {
         const { getAgendamentos } = require('../utils/agendaUtils');
 
-        // Buscar funcionário
-        const funcionarioQuery = await dbQuery('SELECT * FROM User WHERE id = ?', [fun_id]);
+        // Buscar funcionario
+        const funcionarioQuery = await dbQuery('SELECT * FROM User WHERE id = ? AND empresa_id = ?', [fun_id, empresa_id]);
         if (!funcionarioQuery.length) {
-            return res.status(404).json({ message: 'Funcionário não encontrado' });
+            return res.status(404).json({ message: 'Funcionario nao encontrado' });
         }
         const funcionario = funcionarioQuery[0];
 
-        // Buscar comissões do funcionário
-        let query = `SELECT 
-                        COMISSOES.*, 
+        // Buscar comissoes do funcionario
+        let query = `SELECT
+                        COMISSOES.*,
                         AGENDAMENTO.age_data,
                         AGENDAMENTO.age_valor,
                         CLIENTES.cli_nome
                     FROM COMISSOES
                     JOIN AGENDAMENTO ON COMISSOES.age_id = AGENDAMENTO.age_id
                     JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_id
-                    WHERE COMISSOES.fun_id = ${fun_id}
-                    AND DATE(COMISSOES.created_at) >= '${formattedDataDe}' 
+                    WHERE COMISSOES.fun_id = ?
+                    AND COMISSOES.empresa_id = ?
+                    AND DATE(COMISSOES.created_at) >= '${formattedDataDe}'
                     AND DATE(COMISSOES.created_at) <= '${formattedDataAte}'
                     ORDER BY COMISSOES.created_at DESC`;
 
-        const comissoes = await dbQuery(query);
+        const comissoes = await dbQuery(query, [fun_id, empresa_id]);
 
-        // Buscar agendamentos com serviços
+        // Buscar agendamentos com servicos
         const ageIds = [...new Set(comissoes.map(c => c.age_id))];
         let agendamentosMap = {};
 
         if (ageIds.length > 0) {
-            const agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')})`;
-            const agendamentosCompletos = await getAgendamentos(agendamentosQuery, []);
+            const agendamentosQuery = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')}) AND empresa_id = ${empresa_id}`;
+            const agendamentosCompletos = await getAgendamentos(agendamentosQuery, [], empresa_id);
 
             agendamentosCompletos.forEach(age => {
                 agendamentosMap[age.age_id] = age;
             });
         }
 
-        // Mapear comissões com detalhes completos
+        // Mapear comissoes com detalhes completos
         const comissoesDetalhadas = comissoes.map(c => {
             const agendamento = agendamentosMap[c.age_id];
             const servicos = agendamento?.servicos?.map(s => ({
@@ -1895,7 +1925,7 @@ router.post('/print/comissoes', async (req, res) => {
         let dataAteText = dataAte ? new Date(dataAte).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
 
         let data = {
-            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} até ${dataAteText}`,
+            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} ate ${dataAteText}`,
             funcionario: funcionario.fullName,
             comissoes: comissoesDetalhadas,
             dataRelatorio: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
@@ -1903,13 +1933,14 @@ router.post('/print/comissoes', async (req, res) => {
             valorTotalComissoes: comissoes.reduce((acc, curr) => acc + curr.com_valor, 0),
             valorTotalPago: comissoes.filter(comissao => comissao.com_paga).reduce((acc, curr) => acc + curr.com_valor, 0),
             valorTotalNaoPago: comissoes.filter(comissao => !comissao.com_paga).reduce((acc, curr) => acc + curr.com_valor, 0),
+            empresa_id,
         }
 
         const pdf = await createRelatorioComissoes(data);
 
         res.status(200).json({ url: `/download/docs/relatorios/${pdf.fileName}` });
     } catch (error) {
-        console.error('Erro ao gerar relatório de comissões', error);
+        console.error('Erro ao gerar relatorio de comissoes', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -1923,10 +1954,12 @@ router.post('/print/servico-tecnico', async (req, res) => {
         orderBy = 'asc'
     } = req.body;
 
+    const empresa_id = req.user.empresa_id;
+
     const formattedDataDe = dataDe ? new Date(dataDe).toISOString().split('T')[0] : null;
     const formattedDataAte = dataAte ? new Date(dataAte).toISOString().split('T')[0] : null;
 
-    let agesQuery = `SELECT * FROM AGENDAMENTO WHERE ast_id = 3`;
+    let agesQuery = `SELECT * FROM AGENDAMENTO WHERE ast_id = 3 AND empresa_id = ${empresa_id}`;
 
     if (formattedDataDe && formattedDataAte) {
         agesQuery += ` AND age_data >= '${formattedDataDe}' AND age_data <= '${formattedDataAte}'`;
@@ -1946,11 +1979,11 @@ router.post('/print/servico-tecnico', async (req, res) => {
         const agendamentos = await dbQuery(agesQuery);
 
         for (let agendamento of agendamentos) {
-            agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_id = ?', [agendamento.cli_id]);
+            agendamento.cliente = await dbQuery('SELECT * FROM CLIENTES WHERE cli_id = ? AND empresa_id = ?', [agendamento.cli_id, empresa_id]);
             agendamento.endereco = agendamento.age_endereco ? await dbQuery('SELECT * FROM ENDERECO WHERE end_id = ?', [agendamento.age_endereco])
                 : await dbQuery('SELECT * FROM ENDERECO WHERE cli_id = ?', [agendamento.cli_id]);
 
-            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ${agendamento.age_id}`);
+            let axs = await dbQuery(`SELECT * FROM AGENDAMENTO_X_SERVICOS WHERE age_id = ?`, [agendamento.age_id]);
 
             let servicos = [];
 
@@ -1968,20 +2001,21 @@ router.post('/print/servico-tecnico', async (req, res) => {
         let dataDeText = dataDe ? new Date(dataDe).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
         let dataAteText = dataAte ? new Date(dataAte).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
 
-        let tecnico = await dbQuery(`SELECT * FROM User WHERE id = ${f}`);
+        let tecnico = await dbQuery(`SELECT * FROM User WHERE id = ? AND empresa_id = ?`, [f, empresa_id]);
 
         let quantidadeServicosAtendidos = agendamentos.reduce((acc, curr) => acc + curr.servicos.length, 0);
         let valorTotalServicosAtendidos = agendamentos.reduce((acc, curr) => acc + curr.servicos.reduce((acc, curr) => acc + curr.ser_valor, 0), 0);
         let valorTotalAgendamentos = agendamentos.reduce((acc, curr) => acc + curr.age_valor, 0);
 
         let data = {
-            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} até ${dataAteText}`,
+            mesText: dataDeText == dataAteText ? `de ${dataDeText}` : `de ${dataDeText} ate ${dataAteText}`,
             agendamentos,
             tecnico: tecnico[0].fullName,
             dataRelatorio: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
             totalServicosAtendidos: quantidadeServicosAtendidos,
             valorTotalServicosAtendidos,
-            valorTotalAgendamentos
+            valorTotalAgendamentos,
+            empresa_id,
         };
 
         const pdf = await createRelatorioServicosTecnicos(data);
@@ -1990,12 +2024,12 @@ router.post('/print/servico-tecnico', async (req, res) => {
 
         res.status(200).json(url);
     } catch (error) {
-        console.error('Erro ao buscar serviços', error);
+        console.error('Erro ao buscar servicos', error);
         res.status(500).json(error);
     }
 });
 
-// Endpoint para relatório de CRM
+// Endpoint para relatorio de CRM
 router.get('/get/crm', async (req, res) => {
     try {
         const {
@@ -2003,41 +2037,43 @@ router.get('/get/crm', async (req, res) => {
             dataAte = null,
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
+
         // Construir filtros de data
-        let dataFilter = '';
-        let dataParams = [];
-        
+        let dataFilter = ' AND empresa_id = ?';
+        let dataParams = [empresa_id];
+
         if (dataDe && dataAte) {
-            dataFilter = ' AND DATE(created_at) BETWEEN ? AND ?';
-            dataParams = [dataDe, dataAte];
+            dataFilter += ' AND DATE(created_at) BETWEEN ? AND ?';
+            dataParams.push(dataDe, dataAte);
         }
 
-        // 1. Buscar todos os negócios
+        // 1. Buscar todos os negocios
         const negocios = await dbQuery(`SELECT * FROM Negocios WHERE 1=1 ${dataFilter}`, dataParams);
-        
+
         // 2. Buscar todos os funis
-        const funis = await dbQuery('SELECT * FROM Funis ORDER BY ordem ASC');
-        
-        // 3. Estatísticas gerais
+        const funis = await dbQuery('SELECT * FROM Funis WHERE empresa_id = ? ORDER BY ordem ASC', [empresa_id]);
+
+        // 3. Estatisticas gerais
         const totalNegocios = negocios.length;
         const valorTotalNegocios = negocios.reduce((acc, n) => acc + (n.valor || 0), 0);
         const negociosGanhos = negocios.filter(n => n.status === 'Ganho').length;
         const negociosPerdidos = negocios.filter(n => n.status === 'Perdido').length;
         const negociosPendentes = negocios.filter(n => n.status === 'Pendente').length;
-        
+
         const valorGanho = negocios.filter(n => n.status === 'Ganho').reduce((acc, n) => acc + (n.valor || 0), 0);
         const valorPerdido = negocios.filter(n => n.status === 'Perdido').reduce((acc, n) => acc + (n.valor || 0), 0);
         const valorPendente = negocios.filter(n => n.status === 'Pendente').reduce((acc, n) => acc + (n.valor || 0), 0);
-        
+
         const taxaAprovacao = totalNegocios > 0 ? ((negociosGanhos / totalNegocios) * 100).toFixed(2) : 0;
         const taxaPerda = totalNegocios > 0 ? ((negociosPerdidos / totalNegocios) * 100).toFixed(2) : 0;
-        
+
         // 4. Dados por etapa do funil
         const dadosPorEtapa = [];
         for (const funil of funis) {
             const negociosDaEtapa = negocios.filter(n => n.etapaId === funil.id);
             const valorDaEtapa = negociosDaEtapa.reduce((acc, n) => acc + (n.valor || 0), 0);
-            
+
             dadosPorEtapa.push({
                 etapaId: funil.id,
                 etapaNome: funil.nome,
@@ -2047,8 +2083,8 @@ router.get('/get/crm', async (req, res) => {
                 percentual: totalNegocios > 0 ? ((negociosDaEtapa.length / totalNegocios) * 100).toFixed(2) : 0
             });
         }
-        
-        // 5. Negócios criados por data (últimos 30 dias ou período selecionado)
+
+        // 5. Negocios criados por data (ultimos 30 dias ou periodo selecionado)
         const negociosPorDia = {};
         negocios.forEach(n => {
             const data = moment(n.created_at).format('YYYY-MM-DD');
@@ -2058,14 +2094,14 @@ router.get('/get/crm', async (req, res) => {
             negociosPorDia[data].quantidade++;
             negociosPorDia[data].valor += n.valor || 0;
         });
-        
+
         const negociosPorDiaArray = Object.keys(negociosPorDia).map(data => ({
             data,
             quantidade: negociosPorDia[data].quantidade,
             valor: negociosPorDia[data].valor
         })).sort((a, b) => new Date(a.data) - new Date(b.data));
-        
-        // 6. Top 10 negócios por valor
+
+        // 6. Top 10 negocios por valor
         const top10Negocios = negocios
             .sort((a, b) => (b.valor || 0) - (a.valor || 0))
             .slice(0, 10)
@@ -2076,39 +2112,39 @@ router.get('/get/crm', async (req, res) => {
                 status: n.status,
                 created_at: n.created_at
             }));
-        
-        // 7. Tempo médio por etapa
+
+        // 7. Tempo medio por etapa
         const tempoMedioPorEtapa = [];
         for (const funil of funis) {
             const negociosDaEtapa = negocios.filter(n => n.etapaId === funil.id && n.status !== 'Pendente');
             let tempoTotal = 0;
-            
+
             negociosDaEtapa.forEach(n => {
                 const inicio = new Date(n.created_at);
                 const fim = n.data_fechamento ? new Date(n.data_fechamento) : new Date();
                 const diferenca = Math.floor((fim - inicio) / (1000 * 60 * 60 * 24)); // dias
                 tempoTotal += diferenca;
             });
-            
+
             const tempoMedio = negociosDaEtapa.length > 0 ? Math.floor(tempoTotal / negociosDaEtapa.length) : 0;
-            
+
             tempoMedioPorEtapa.push({
                 etapaId: funil.id,
                 etapaNome: funil.nome,
                 tempoMedio // em dias
             });
         }
-        
+
         // 8. Motivos de perda
         const motivosPerda = {};
         negocios.filter(n => n.status === 'Perdido' && n.motivoPerdido).forEach(n => {
-            const motivo = n.motivoPerdido || 'Não informado';
+            const motivo = n.motivoPerdido || 'Nao informado';
             if (!motivosPerda[motivo]) {
                 motivosPerda[motivo] = 0;
             }
             motivosPerda[motivo]++;
         });
-        
+
         const motivosPerdaArray = Object.keys(motivosPerda).map(motivo => ({
             motivo,
             quantidade: motivosPerda[motivo]
@@ -2134,12 +2170,12 @@ router.get('/get/crm', async (req, res) => {
             motivosPerda: motivosPerdaArray
         });
     } catch (error) {
-        console.error('Erro ao buscar relatório CRM:', error);
+        console.error('Erro ao buscar relatorio CRM:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Endpoint para relatório de Atendimento
+// Endpoint para relatorio de Atendimento
 router.get('/get/atendimento', async (req, res) => {
     try {
         const {
@@ -2147,49 +2183,51 @@ router.get('/get/atendimento', async (req, res) => {
             dataAte = null,
         } = req.query;
 
+        const empresa_id = req.user.empresa_id;
+
         // Construir filtros de data
-        let dataFilter = '';
-        let dataParams = [];
-        
+        let dataFilter = ' AND empresa_id = ?';
+        let dataParams = [empresa_id];
+
         if (dataDe && dataAte) {
-            dataFilter = ' AND DATE(inicio_conversa) BETWEEN ? AND ?';
-            dataParams = [dataDe, dataAte];
+            dataFilter += ' AND DATE(inicio_conversa) BETWEEN ? AND ?';
+            dataParams.push(dataDe, dataAte);
         }
 
         // 1. Buscar todas as conversas
         const conversas = await dbQuery(`SELECT * FROM FlowConversations WHERE 1=1 ${dataFilter}`, dataParams);
-        
-        // 2. Buscar estatísticas de fluxos
-        let flowStatsFilter = '';
-        let flowStatsParams = [];
+
+        // 2. Buscar estatisticas de fluxos
+        let flowStatsFilter = ' WHERE empresa_id = ?';
+        let flowStatsParams = [empresa_id];
         if (dataDe && dataAte) {
-            flowStatsFilter = ' WHERE data_execucao BETWEEN ? AND ?';
-            flowStatsParams = [dataDe, dataAte];
+            flowStatsFilter += ' AND data_execucao BETWEEN ? AND ?';
+            flowStatsParams.push(dataDe, dataAte);
         }
         const flowStats = await dbQuery(`SELECT * FROM FlowStats ${flowStatsFilter}`, flowStatsParams);
-        
-        // 3. Buscar ações executadas
-        let actionsFilter = '';
-        let actionsParams = [];
+
+        // 3. Buscar acoes executadas
+        let actionsFilter = ' WHERE empresa_id = ?';
+        let actionsParams = [empresa_id];
         if (dataDe && dataAte) {
-            actionsFilter = ' WHERE DATE(created_at) BETWEEN ? AND ?';
-            actionsParams = [dataDe, dataAte];
+            actionsFilter += ' AND DATE(created_at) BETWEEN ? AND ?';
+            actionsParams.push(dataDe, dataAte);
         }
         const flowActions = await dbQuery(`SELECT * FROM FlowActions ${actionsFilter}`, actionsParams);
-        
-        // 4. Estatísticas gerais
+
+        // 4. Estatisticas gerais
         const totalConversas = conversas.length;
         const conversasFinalizadas = conversas.filter(c => c.status === 'finalizado').length;
         const conversasEmAndamento = conversas.filter(c => c.status === 'em_andamento').length;
         const conversasCanceladas = conversas.filter(c => c.status === 'cancelado').length;
-        
+
         const totalAgendamentosGerados = conversas.filter(c => c.gerou_agendamento === 1).length;
         const totalNegociosGerados = conversas.filter(c => c.gerou_negocio === 1).length;
-        
+
         const taxaConversaoAgendamento = totalConversas > 0 ? ((totalAgendamentosGerados / totalConversas) * 100).toFixed(2) : 0;
         const taxaConversaoNegocio = totalConversas > 0 ? ((totalNegociosGerados / totalConversas) * 100).toFixed(2) : 0;
-        
-        // 5. Tempo médio de atendimento
+
+        // 5. Tempo medio de atendimento
         let tempoTotalAtendimento = 0;
         let conversasComTempo = 0;
         conversas.forEach(c => {
@@ -2202,7 +2240,7 @@ router.get('/get/atendimento', async (req, res) => {
             }
         });
         const tempoMedioAtendimento = conversasComTempo > 0 ? Math.floor(tempoTotalAtendimento / conversasComTempo) : 0;
-        
+
         // 6. Conversas por fluxo
         const conversasPorFluxo = {};
         conversas.forEach(c => {
@@ -2218,28 +2256,28 @@ router.get('/get/atendimento', async (req, res) => {
             if (c.gerou_agendamento) conversasPorFluxo[flowId].agendamentos++;
             if (c.gerou_negocio) conversasPorFluxo[flowId].negocios++;
         });
-        
+
         // Buscar nomes dos fluxos
         const flowIds = Object.keys(conversasPorFluxo).filter(id => id !== 'Sem fluxo');
         let fluxosNomes = {};
         if (flowIds.length > 0) {
-            const flows = await dbQuery(`SELECT id, name FROM Flows WHERE id IN (${flowIds.join(',')})`);
+            const flows = await dbQuery(`SELECT id, name FROM Flows WHERE id IN (${flowIds.join(',')}) AND empresa_id = ?`, [empresa_id]);
             flows.forEach(f => {
                 fluxosNomes[f.id] = f.name;
             });
         }
-        
+
         const conversasPorFluxoArray = Object.keys(conversasPorFluxo).map(flowId => ({
             flowId,
             flowNome: fluxosNomes[flowId] || 'Sem fluxo',
             quantidade: conversasPorFluxo[flowId].quantidade,
             agendamentos: conversasPorFluxo[flowId].agendamentos,
             negocios: conversasPorFluxo[flowId].negocios,
-            taxaConversao: conversasPorFluxo[flowId].quantidade > 0 
-                ? ((conversasPorFluxo[flowId].agendamentos / conversasPorFluxo[flowId].quantidade) * 100).toFixed(2) 
+            taxaConversao: conversasPorFluxo[flowId].quantidade > 0
+                ? ((conversasPorFluxo[flowId].agendamentos / conversasPorFluxo[flowId].quantidade) * 100).toFixed(2)
                 : 0
         })).sort((a, b) => b.quantidade - a.quantidade);
-        
+
         // 7. Conversas por dia
         const conversasPorDia = {};
         conversas.forEach(c => {
@@ -2251,15 +2289,15 @@ router.get('/get/atendimento', async (req, res) => {
             if (c.gerou_agendamento) conversasPorDia[data].agendamentos++;
             if (c.gerou_negocio) conversasPorDia[data].negocios++;
         });
-        
+
         const conversasPorDiaArray = Object.keys(conversasPorDia).map(data => ({
             data,
             quantidade: conversasPorDia[data].quantidade,
             agendamentos: conversasPorDia[data].agendamentos,
             negocios: conversasPorDia[data].negocios
         })).sort((a, b) => new Date(a.data) - new Date(b.data));
-        
-        // 8. Ações mais executadas
+
+        // 8. Acoes mais executadas
         const acoesPorTipo = {};
         flowActions.forEach(a => {
             const tipo = a.tipo_acao || 'Desconhecido';
@@ -2270,30 +2308,30 @@ router.get('/get/atendimento', async (req, res) => {
             if (a.sucesso) acoesPorTipo[tipo].sucesso++;
             else acoesPorTipo[tipo].erro++;
         });
-        
+
         const acoesPorTipoArray = Object.keys(acoesPorTipo).map(tipo => ({
             tipo,
             quantidade: acoesPorTipo[tipo].quantidade,
             sucesso: acoesPorTipo[tipo].sucesso,
             erro: acoesPorTipo[tipo].erro,
-            taxaSucesso: acoesPorTipo[tipo].quantidade > 0 
+            taxaSucesso: acoesPorTipo[tipo].quantidade > 0
                 ? ((acoesPorTipo[tipo].sucesso / acoesPorTipo[tipo].quantidade) * 100).toFixed(2)
                 : 0
         })).sort((a, b) => b.quantidade - a.quantidade);
-        
-        // 9. Estatísticas agregadas de execução de fluxos
+
+        // 9. Estatisticas agregadas de execucao de fluxos
         let totalExecucoes = 0;
         let totalCompletados = 0;
         let totalCancelados = 0;
         let totalTimeout = 0;
-        
+
         flowStats.forEach(fs => {
             totalExecucoes += fs.total_execucoes || 0;
             totalCompletados += fs.total_completados || 0;
             totalCancelados += fs.total_cancelados || 0;
             totalTimeout += fs.total_timeout || 0;
         });
-        
+
         res.status(200).json({
             estatisticas: {
                 totalConversas,
@@ -2315,7 +2353,7 @@ router.get('/get/atendimento', async (req, res) => {
             acoesPorTipo: acoesPorTipoArray
         });
     } catch (error) {
-        console.error('Erro ao buscar relatório de atendimento:', error);
+        console.error('Erro ao buscar relatorio de atendimento:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -2339,5 +2377,211 @@ const checkDateStatus = (date, isPaid) => {
     }
 };
 
+
+/**
+ * GET /relatorios/get/contratos - Relatório detalhado de contratos
+ */
+router.get('/get/contratos', async (req, res) => {
+  try {
+    const empresa_id = req.user.empresa_id;
+    const { dataDe, dataAte } = req.query;
+
+    if (!dataDe || !dataAte) {
+      return res.status(400).json({ message: 'Período é obrigatório' });
+    }
+
+    // Resumo geral de contratos
+    const contratosResumo = await dbQuery(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'ativo' THEN 1 ELSE 0 END) as ativos,
+        SUM(CASE WHEN status = 'cancelado' THEN 1 ELSE 0 END) as cancelados,
+        SUM(CASE WHEN status = 'rascunho' THEN 1 ELSE 0 END) as rascunhos,
+        SUM(CASE WHEN status IN ('assinado_empresa', 'assinado_cliente') THEN 1 ELSE 0 END) as em_assinatura,
+        COALESCE(SUM(valor), 0) as valor_total,
+        COALESCE(SUM(CASE WHEN status = 'ativo' THEN valor ELSE 0 END), 0) as valor_ativos
+      FROM CONTRATOS
+      WHERE empresa_id = ? AND created_at BETWEEN ? AND CONCAT(?, ' 23:59:59')
+    `, [empresa_id, dataDe, dataAte]);
+
+    // Resumo de pagamentos
+    const pagamentosResumo = await dbQuery(`
+      SELECT
+        COALESCE(SUM(cp.valor), 0) as total_cobrado,
+        COALESCE(SUM(CASE WHEN cp.status IN ('RECEIVED', 'CONFIRMED') THEN cp.valor ELSE 0 END), 0) as total_recebido,
+        COALESCE(SUM(CASE WHEN cp.status = 'PENDING' THEN cp.valor ELSE 0 END), 0) as total_pendente,
+        COALESCE(SUM(CASE WHEN cp.status = 'OVERDUE' THEN cp.valor ELSE 0 END), 0) as total_vencido,
+        COUNT(*) as total_cobrancas,
+        SUM(CASE WHEN cp.status IN ('RECEIVED', 'CONFIRMED') THEN 1 ELSE 0 END) as cobrancas_pagas,
+        SUM(CASE WHEN cp.status = 'PENDING' THEN 1 ELSE 0 END) as cobrancas_pendentes,
+        SUM(CASE WHEN cp.status = 'OVERDUE' THEN 1 ELSE 0 END) as cobrancas_vencidas
+      FROM CONTRATO_PAGAMENTOS cp
+      INNER JOIN CONTRATOS c ON cp.contrato_id = c.id
+      WHERE c.empresa_id = ? AND cp.data_vencimento BETWEEN ? AND ?
+    `, [empresa_id, dataDe, dataAte]);
+
+    // Evolução mês a mês
+    const evolucao = await dbQuery(`
+      SELECT
+        DATE_FORMAT(cp.data_vencimento, '%Y-%m') as mes,
+        COALESCE(SUM(CASE WHEN cp.status IN ('RECEIVED', 'CONFIRMED') THEN cp.valor ELSE 0 END), 0) as recebido,
+        COALESCE(SUM(CASE WHEN cp.status = 'PENDING' THEN cp.valor ELSE 0 END), 0) as pendente,
+        COALESCE(SUM(CASE WHEN cp.status = 'OVERDUE' THEN cp.valor ELSE 0 END), 0) as vencido
+      FROM CONTRATO_PAGAMENTOS cp
+      INNER JOIN CONTRATOS c ON cp.contrato_id = c.id
+      WHERE c.empresa_id = ? AND cp.data_vencimento BETWEEN ? AND ?
+      GROUP BY DATE_FORMAT(cp.data_vencimento, '%Y-%m')
+      ORDER BY mes ASC
+    `, [empresa_id, dataDe, dataAte]);
+
+    // Formas de pagamento
+    const formasPagamento = await dbQuery(`
+      SELECT
+        COALESCE(cp.forma_pagamento, 'N/A') as forma,
+        COALESCE(SUM(cp.valor), 0) as valor,
+        COUNT(*) as quantidade
+      FROM CONTRATO_PAGAMENTOS cp
+      INNER JOIN CONTRATOS c ON cp.contrato_id = c.id
+      WHERE c.empresa_id = ? AND cp.data_vencimento BETWEEN ? AND ? AND cp.status IN ('RECEIVED', 'CONFIRMED')
+      GROUP BY cp.forma_pagamento
+    `, [empresa_id, dataDe, dataAte]);
+
+    // Contratos por status
+    const statusContratos = await dbQuery(`
+      SELECT status, COUNT(*) as quantidade
+      FROM CONTRATOS
+      WHERE empresa_id = ? AND created_at BETWEEN ? AND CONCAT(?, ' 23:59:59')
+      GROUP BY status
+    `, [empresa_id, dataDe, dataAte]);
+
+    // Lista detalhada
+    const contratos = await dbQuery(`
+      SELECT c.id, c.numero, c.valor, c.status, c.inicio_data, c.created_at,
+             cl.cli_nome,
+             COALESCE((SELECT SUM(cp2.valor) FROM CONTRATO_PAGAMENTOS cp2 WHERE cp2.contrato_id = c.id AND cp2.status IN ('RECEIVED', 'CONFIRMED') AND cp2.data_vencimento BETWEEN ? AND ?), 0) as total_recebido,
+             COALESCE((SELECT SUM(cp3.valor) FROM CONTRATO_PAGAMENTOS cp3 WHERE cp3.contrato_id = c.id AND cp3.status = 'PENDING' AND cp3.data_vencimento BETWEEN ? AND ?), 0) as total_pendente
+      FROM CONTRATOS c
+      LEFT JOIN CLIENTES cl ON c.cli_id = cl.cli_Id
+      WHERE c.empresa_id = ? AND c.created_at BETWEEN ? AND CONCAT(?, ' 23:59:59')
+      ORDER BY c.created_at DESC
+    `, [dataDe, dataAte, dataDe, dataAte, empresa_id, dataDe, dataAte]);
+
+    return res.json({
+      resumo: contratosResumo[0] || {},
+      pagamentos: pagamentosResumo[0] || {},
+      evolucao,
+      formasPagamento,
+      statusContratos,
+      contratos,
+    });
+  } catch (error) {
+    console.error('[Relatórios] Erro ao buscar relatório de contratos:', error);
+    return res.status(500).json({ message: 'Erro ao buscar relatório de contratos' });
+  }
+});
+
+/**
+ * GET /relatorios/get/orcamentos - Relatório de orçamentos
+ * Query: dataDe, dataAte
+ */
+router.get('/get/orcamentos', async (req, res) => {
+  try {
+    const empresa_id = req.user.empresa_id;
+    const { dataDe, dataAte } = req.query;
+
+    if (!dataDe || !dataAte) {
+      return res.status(400).json({ message: 'Período é obrigatório' });
+    }
+
+    const dateFilter = 'AND o.created_at BETWEEN ? AND CONCAT(?, \' 23:59:59\')';
+    const baseParams = [empresa_id, dataDe, dataAte];
+
+    // 1. Resumo geral
+    const resumoRows = await db(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN o.status = 'gerado' THEN 1 ELSE 0 END) as gerados,
+        SUM(CASE WHEN o.status = 'enviado' THEN 1 ELSE 0 END) as enviados,
+        SUM(CASE WHEN o.status = 'aceito' THEN 1 ELSE 0 END) as aceitos,
+        SUM(CASE WHEN o.status = 'negado' THEN 1 ELSE 0 END) as negados,
+        SUM(CASE WHEN o.status = 'fechado' THEN 1 ELSE 0 END) as fechados,
+        COALESCE(SUM(o.valor_final), 0) as valor_total,
+        COALESCE(SUM(CASE WHEN o.status = 'aceito' THEN o.valor_final ELSE 0 END), 0) as valor_aceitos,
+        COALESCE(SUM(CASE WHEN o.status = 'negado' THEN o.valor_final ELSE 0 END), 0) as valor_negados,
+        COALESCE(SUM(CASE WHEN o.status NOT IN ('aceito', 'negado', 'fechado') THEN o.valor_final ELSE 0 END), 0) as valor_pendentes
+      FROM Calculadora_Orcamentos o
+      WHERE o.empresa_id = ? ${dateFilter}
+    `, baseParams);
+
+    const resumo = resumoRows[0] || {};
+    resumo.taxa_aceitacao = resumo.total > 0 ? ((resumo.aceitos / resumo.total) * 100).toFixed(1) : 0;
+    resumo.valor_medio = resumo.total > 0 ? (resumo.valor_total / resumo.total) : 0;
+    resumo.ticket_medio_aceitos = resumo.aceitos > 0 ? (resumo.valor_aceitos / resumo.aceitos) : 0;
+
+    // 2. Evolução por dia
+    const evolucao = await db(`
+      SELECT
+        DATE_FORMAT(o.created_at, '%Y-%m-%d') as data,
+        COUNT(*) as quantidade,
+        COALESCE(SUM(o.valor_final), 0) as valor,
+        SUM(CASE WHEN o.status = 'aceito' THEN 1 ELSE 0 END) as aceitos,
+        SUM(CASE WHEN o.status = 'negado' THEN 1 ELSE 0 END) as negados
+      FROM Calculadora_Orcamentos o
+      WHERE o.empresa_id = ? ${dateFilter}
+      GROUP BY DATE_FORMAT(o.created_at, '%Y-%m-%d')
+      ORDER BY data ASC
+    `, baseParams);
+
+    // 3. Top clientes
+    const topClientes = await db(`
+      SELECT
+        o.cliente_nome,
+        COUNT(*) as quantidade,
+        COALESCE(SUM(o.valor_final), 0) as valor_total,
+        SUM(CASE WHEN o.status = 'aceito' THEN 1 ELSE 0 END) as aceitos,
+        ROUND(SUM(CASE WHEN o.status = 'aceito' THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as taxa_aceitacao
+      FROM Calculadora_Orcamentos o
+      WHERE o.empresa_id = ? ${dateFilter}
+        AND o.cliente_nome IS NOT NULL AND o.cliente_nome != ''
+      GROUP BY o.cliente_nome
+      ORDER BY valor_total DESC
+      LIMIT 10
+    `, baseParams);
+
+    // 4. Funil de conversão
+    const funil = {
+      gerados: resumo.total || 0,
+      enviados: (resumo.enviados || 0) + (resumo.aceitos || 0) + (resumo.negados || 0) + (resumo.fechados || 0),
+      aceitos: (resumo.aceitos || 0) + (resumo.fechados || 0),
+    };
+    funil.taxa_gerado_enviado = funil.gerados > 0 ? ((funil.enviados / funil.gerados) * 100).toFixed(1) : 0;
+    funil.taxa_enviado_aceito = funil.enviados > 0 ? ((funil.aceitos / funil.enviados) * 100).toFixed(1) : 0;
+
+    // 5. Serviços mais orçados
+    const servicosMaisOrcados = await db(`
+      SELECT
+        o.tipo_servico as servico,
+        COUNT(*) as quantidade,
+        COALESCE(SUM(o.valor_final), 0) as valor_total
+      FROM Calculadora_Orcamentos o
+      WHERE o.empresa_id = ? ${dateFilter}
+        AND o.tipo_servico IS NOT NULL AND o.tipo_servico != ''
+      GROUP BY o.tipo_servico
+      ORDER BY quantidade DESC
+      LIMIT 10
+    `, baseParams);
+
+    return res.json({
+      resumo,
+      evolucao,
+      topClientes,
+      funil,
+      servicosMaisOrcados,
+    });
+  } catch (error) {
+    console.error('[Relatórios] Erro ao buscar relatório de orçamentos:', error);
+    return res.status(500).json({ message: 'Erro ao buscar relatório de orçamentos' });
+  }
+});
 
 module.exports = router;

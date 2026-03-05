@@ -6,6 +6,7 @@
 
 const moment = require('moment');
 const dbQuery = require('../../utils/dbHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 const { replaceVariables } = require('../helpers/contextHelper');
 const { flowLog } = require('../helpers/logHelper');
 const {
@@ -24,8 +25,11 @@ const {
  */
 async function createAgendamento(config, context) {
     flowLog.actionSuccess('create_agendamento', { step: 'start' });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         // 🔥 CRÍTICO: Buscar cliente ID de múltiplas formas
         // 🎯 ATENÇÃO: O banco retorna cli_Id (com I maiúsculo)
         let clienteId = config.clienteId ||
@@ -56,7 +60,7 @@ async function createAgendamento(config, context) {
         if (config.enderecoMode === 'novo' && config.endereco) {
             const endereco = config.endereco;
             const endResult = await dbQuery(
-                'INSERT INTO ENDERECO (cli_id, end_cep, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO ENDERECO (cli_id, end_cep, end_logradouro, end_numero, end_complemento, end_bairro, end_cidade, end_estado, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     clienteId,
                     endereco.cep ? await replaceVariables(endereco.cep, context) : null,
@@ -65,7 +69,8 @@ async function createAgendamento(config, context) {
                     endereco.complemento ? await replaceVariables(endereco.complemento, context) : null,
                     endereco.bairro ? await replaceVariables(endereco.bairro, context) : null,
                     endereco.cidade ? await replaceVariables(endereco.cidade, context) : null,
-                    endereco.estado ? await replaceVariables(endereco.estado, context) : null
+                    endereco.estado ? await replaceVariables(endereco.estado, context) : null,
+                    empresa_id
                 ]
             );
             enderecoId = endResult.insertId;
@@ -77,7 +82,7 @@ async function createAgendamento(config, context) {
             }
         } else {
             // Usar endereço padrão do cliente
-            const enderecosCliente = await dbQuery('SELECT end_id FROM ENDERECO WHERE cli_id = ? ORDER BY end_id DESC LIMIT 1', [clienteId]);
+            const enderecosCliente = await dbQuery(`SELECT end_id FROM ENDERECO WHERE cli_id = ? AND ${ew.sql} ORDER BY end_id DESC LIMIT 1`, [clienteId, ...ew.params]);
             if (enderecosCliente.length > 0) {
                 enderecoId = enderecosCliente[0].end_id;
             }
@@ -102,7 +107,8 @@ async function createAgendamento(config, context) {
             funId: config.funcionarioId ? await replaceVariables(config.funcionarioId, context) : null,
             periodoPreferido: config.periodoPreferido || getPeriodoDoHorario(config.horaInicio || '08:00'),
             duracaoMinutos,
-            latLng
+            latLng,
+            empresa_id
         });
 
         if (!disponibilidade.ok) {
@@ -129,7 +135,8 @@ async function createAgendamento(config, context) {
             age_type: 'servico',
             created_at: moment().format('YYYY-MM-DD HH:mm:ss'),
             created_by: 'Sistema - Fluxo',
-            updated_by: 'Sistema - Fluxo'
+            updated_by: 'Sistema - Fluxo',
+            empresa_id: empresa_id
         };
 
         // Inserir no banco
@@ -151,12 +158,12 @@ async function createAgendamento(config, context) {
                 const descricao = servico.descricao ? await replaceVariables(servico.descricao, context) : null;
 
                 // Buscar informações do serviço
-                let servicoDB = await dbQuery('SELECT * FROM SERVICOS_NEW WHERE ser_id = ?', [servicoId]);
+                let servicoDB = await dbQuery(`SELECT * FROM SERVICOS_NEW WHERE ser_id = ? AND ${ew.sql}`, [servicoId, ...ew.params]);
                 let isSub = false;
                 let serPai = servicoId;
 
                 if (servicoDB.length === 0) {
-                    servicoDB = await dbQuery('SELECT * FROM SERVICOS_SUBS WHERE ser_id = ?', [servicoId]);
+                    servicoDB = await dbQuery(`SELECT * FROM SERVICOS_SUBS WHERE ser_id = ? AND ${ew.sql}`, [servicoId, ...ew.params]);
                     if (servicoDB.length > 0) {
                         isSub = true;
                         serPai = servicoDB[0].ser_pai;
@@ -170,8 +177,8 @@ async function createAgendamento(config, context) {
 
                 // Inserir na tabela AXS
                 await dbQuery(
-                    'INSERT INTO AXS (age_id, ser_id, ser_sub_id, ser_quantity, ser_valor, ser_descricao) VALUES (?, ?, ?, ?, ?, ?)',
-                    [agendamentoId, serPai, isSub ? servicoId : null, quantidade, valor, descricao]
+                    'INSERT INTO AXS (age_id, ser_id, ser_sub_id, ser_quantity, ser_valor, ser_descricao, empresa_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [agendamentoId, serPai, isSub ? servicoId : null, quantidade, valor, descricao, empresa_id]
                 );
 
                 valorTotal += parseFloat(valor) * quantidade;
@@ -179,7 +186,7 @@ async function createAgendamento(config, context) {
 
             // Atualizar valor total do agendamento
             if (valorTotal > 0) {
-                await dbQuery('UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ?', [valorTotal, agendamentoId]);
+                await dbQuery(`UPDATE AGENDAMENTO SET age_valor = ? WHERE age_id = ? AND ${ew.sql}`, [valorTotal, agendamentoId, ...ew.params]);
                 flowLog.actionSuccess('create_agendamento', { step: 'valor_total_atualizado', valorTotal });
             }
         }
@@ -220,8 +227,11 @@ async function createAgendamento(config, context) {
  */
 async function updateAgendamento(config, context) {
     flowLog.actionSuccess('update_agendamento', { step: 'start' });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         // Identificar cliente e agendamento corrente
         const clienteId =
             config.clienteId ||
@@ -238,11 +248,11 @@ async function updateAgendamento(config, context) {
         // Se não veio ID e há cliente, pegar o último agendamento ativo do cliente
         if (!agendamentoId && clienteId) {
             const lastAg = await dbQuery(
-                `SELECT * FROM AGENDAMENTO 
-                 WHERE cli_id = ? AND age_ativo = 1
+                `SELECT * FROM AGENDAMENTO
+                 WHERE cli_id = ? AND age_ativo = 1 AND ${ew.sql}
                  ORDER BY age_data DESC, age_id DESC
                  LIMIT 1`,
-                [clienteId]
+                [clienteId, ...ew.params]
             );
             if (lastAg.length > 0) {
                 agendamentoAtual = lastAg[0];
@@ -258,7 +268,7 @@ async function updateAgendamento(config, context) {
 
         // Garantir que temos os dados completos do agendamento para fallback de campos
         if (!agendamentoAtual) {
-            const agRows = await dbQuery('SELECT * FROM AGENDAMENTO WHERE age_id = ?', [agendamentoId]);
+            const agRows = await dbQuery(`SELECT * FROM AGENDAMENTO WHERE age_id = ? AND ${ew.sql}`, [agendamentoId, ...ew.params]);
             if (agRows.length === 0) {
                 flowLog.actionError('update_agendamento', new Error('Agendamento não encontrado no banco'));
                 return { success: false, error: 'Agendamento não encontrado' };
@@ -299,7 +309,8 @@ async function updateAgendamento(config, context) {
                 funId: funIdNovo || agendamentoAtual.fun_id,
                 periodoPreferido: config.periodoPreferido || getPeriodoDoHorario(horaInicioNova || agendamentoAtual.age_horaInicio || '08:00'),
                 duracaoMinutos,
-                latLng
+                latLng,
+                empresa_id
             });
 
             if (!disponibilidade.ok) {
@@ -350,7 +361,8 @@ async function updateAgendamento(config, context) {
         values.push(agendamentoId);
 
         // Executar update
-        const query = `UPDATE AGENDAMENTO SET ${updates.join(', ')} WHERE age_id = ?`;
+        values.push(...ew.params);
+        const query = `UPDATE AGENDAMENTO SET ${updates.join(', ')} WHERE age_id = ? AND ${ew.sql}`;
         await dbQuery(query, values);
 
         flowLog.actionSuccess('update_agendamento', { 
@@ -378,8 +390,11 @@ async function updateAgendamento(config, context) {
  */
 async function getAgendamento(config, context) {
     flowLog.actionSuccess('get_agendamento', { step: 'start' });
-    
+
     try {
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
+
         let agendamentoId = config.agendamentoId ? await replaceVariables(config.agendamentoId, context) : context.agendamento?.id;
 
         if (!agendamentoId) {
@@ -387,19 +402,19 @@ async function getAgendamento(config, context) {
         }
 
         const agendamentos = await dbQuery(`
-            SELECT 
+            SELECT
                 a.*,
                 c.cli_nome,
                 c.cli_email,
                 c.cli_celular,
-                f.fun_nome as funcionario_nome,
-                s.sta_nome as status_nome
+                f.fullName as funcionario_nome,
+                s.ast_nome as status_nome
             FROM AGENDAMENTO a
             LEFT JOIN CLIENTES c ON a.cli_id = c.cli_Id
-            LEFT JOIN FUNCIONARIO f ON a.fun_id = f.fun_id
-            LEFT JOIN AGENDAMENTO_STATUS s ON a.ast_id = s.sta_id
-            WHERE a.age_id = ?
-        `, [agendamentoId]);
+            LEFT JOIN User f ON a.fun_id = f.id
+            LEFT JOIN AGENDAMENTO_STATUS s ON a.ast_id = s.ast_id
+            WHERE a.age_id = ? AND a.${ew.sql}
+        `, [agendamentoId, ...ew.params]);
 
         if (agendamentos.length === 0) {
             return { success: false, error: 'Agendamento não encontrado' };
@@ -409,15 +424,15 @@ async function getAgendamento(config, context) {
 
         // Buscar serviços
         const servicos = await dbQuery(`
-            SELECT 
+            SELECT
                 axs.*,
                 s.ser_nome,
                 ss.ser_nome as subservico_nome
             FROM AXS axs
             LEFT JOIN SERVICOS_NEW s ON axs.ser_id = s.ser_id
             LEFT JOIN SERVICOS_SUBS ss ON axs.ser_sub_id = ss.ser_id
-            WHERE axs.age_id = ?
-        `, [agendamentoId]);
+            WHERE axs.age_id = ? AND axs.${ew.sql}
+        `, [agendamentoId, ...ew.params]);
 
         agendamento.servicos = servicos;
 
@@ -455,7 +470,7 @@ async function validarDisponibilidadeOuSugerir(params) {
     }
 
     // Verificar disponibilidade geral
-    const dispGeral = await verificarDisponibilidadeGeral(data, horaInicio, horaFim, null, null);
+    const dispGeral = await verificarDisponibilidadeGeral(data, horaInicio, horaFim, null, null, params.empresa_id || null);
     if (dispGeral.disponivel) {
         // Se funId foi informado, checar se ele está disponível
         if (funId) {
@@ -481,7 +496,10 @@ async function validarDisponibilidadeOuSugerir(params) {
         dataInicio,
         dataFim,
         duracaoMinutos,
-        periodoPreferido || getPeriodoDoHorario(horaInicio)
+        periodoPreferido || getPeriodoDoHorario(horaInicio),
+        null,
+        null,
+        params.empresa_id || null
     );
 
       

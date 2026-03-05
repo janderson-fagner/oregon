@@ -3,6 +3,7 @@
   import { useCookieStore, useLayoutConfigStore } from "@layouts/stores/config";
   import { useAlert } from "@/composables/useAlert";
   import NavbarThemeSwitcher from "@/layouts/components/NavbarThemeSwitcher.vue";
+  import { socket, disconnectSocket } from "@/composables/useSocket";
 
   const cookieStore = useCookieStore();
   const { setAlert } = useAlert();
@@ -30,7 +31,6 @@
       3000
     );
 
-    //Redirect to login page
     router.push("/login");
   }
 
@@ -41,7 +41,6 @@
         userData.value = newValueUserData;
       }
 
-      //Se o ID do usuário mudou, limpe todos os cookies
       if (newValueUserData && oldValueUserData) {
         if (
           newValueUserData.id != oldValueUserData.id ||
@@ -67,24 +66,110 @@
   );
 
   const logout = async () => {
-    // Remove "accessToken" from cookie
+    disconnectSocket();
     useCookie("accessToken").value = null;
-
-    // Remove "userData" from cookie
     userData.value = null;
-
-    // ℹ️ We had to remove abilities in then block because if we don't nav menu items mutation is visible while redirecting user to login page
-
-    // Remove "userAbilities" from cookie
     useCookie("userAbilityRules").value = null;
-
-    // Reset ability to initial ability
     ability.update([]);
-
-    //Redirect to login page
     window.location.href = "/login";
   };
 
+  // --- Notificações ---
+  const notifications = ref([]);
+  const showNotiMenu = ref(false);
+
+  const getNotificacoes = async () => {
+    try {
+      const res = await $api("/noti/get-noti", { method: "GET" });
+      notifications.value = res || [];
+    } catch (e) {
+      notifications.value = [];
+    }
+  };
+
+  const unreadCount = computed(() => {
+    return notifications.value.filter(
+      (n) => n.visualizada === 0 || n.visualizada === false
+    ).length;
+  });
+
+  onMounted(() => {
+    getNotificacoes();
+  });
+
+  socket.on("newNotification", () => {
+    getNotificacoes();
+  });
+
+  const removeNotification = (notificationId) => {
+    notifications.value.forEach((item, index) => {
+      if (notificationId === item.id_noti) {
+        $api("/noti/delete-noti", {
+          method: "POST",
+          body: { id_notificacao: notificationId },
+        }).then(() => {
+          notifications.value.splice(index, 1);
+        });
+      }
+    });
+  };
+
+  const markRead = (notificationIds) => {
+    notifications.value.forEach((item) => {
+      notificationIds.forEach((id) => {
+        if (id === item.id_noti) {
+          $api("/noti/marcar-noti", {
+            method: "POST",
+            body: { id_notificacao: id },
+          }).then(() => {
+            item.visualizada = true;
+          });
+        }
+      });
+    });
+  };
+
+  const markUnRead = (notificationIds) => {
+    notifications.value.forEach((item) => {
+      notificationIds.forEach((id) => {
+        if (id === item.id_noti) {
+          $api("/noti/desmarcar-noti", {
+            method: "POST",
+            body: { id_notificacao: id },
+          }).then(() => {
+            item.visualizada = false;
+          });
+        }
+      });
+    });
+  };
+
+  const handleNotificationClick = (notification) => {
+    if (!notification.visualizada) {
+      markRead([notification.id_noti]);
+    } else {
+      markUnRead([notification.id_noti]);
+    }
+
+    if (notification.params !== null && notification.params !== undefined) {
+      window.location.href = notification.params;
+    }
+  };
+
+  const isAllMarkRead = computed(() =>
+    notifications.value.some((item) => item.visualizada === false || item.visualizada === 0)
+  );
+
+  const markAllReadOrUnread = () => {
+    const allIds = notifications.value.map((item) => item.id_noti);
+    if (!isAllMarkRead.value) {
+      markUnRead(allIds);
+    } else {
+      markRead(allIds);
+    }
+  };
+
+  // --- Menu items ---
   let title_item = "Meu Perfil";
   let link_item = "apps-user-view-id";
 
@@ -103,6 +188,8 @@
         params: { id: userData.value.id },
       },
     },
+    { type: "divider" },
+    { type: "noti" },
     { type: "divider" },
     {
       type: "navItem",
@@ -131,11 +218,12 @@
       <template #prepend>
         <VListItemAction start>
           <VBadge
-            dot
+            :model-value="unreadCount > 0"
+            :content="unreadCount"
             location="bottom right"
             offset-x="3"
             offset-y="3"
-            color="success"
+            color="error"
             bordered
           >
             <VAvatar
@@ -168,11 +256,12 @@
           <template #prepend>
             <VListItemAction start>
               <VBadge
-                dot
+                :model-value="unreadCount > 0"
+                :content="unreadCount"
                 location="bottom right"
                 offset-x="3"
                 offset-y="3"
-                color="success"
+                color="error"
                 bordered
               >
                 <VAvatar
@@ -203,7 +292,7 @@
         <PerfectScrollbar :options="{ wheelPropagation: false }">
           <template v-for="item in userProfileList" :key="item.title">
             <VListItem
-              v-if="item.type === 'navItem'"
+              v-if="item.type === 'navItem' && item.type !== 'noti'"
               :to="item.to"
               @click="item.onClick && item.onClick()"
             >
@@ -218,6 +307,21 @@
               </template>
             </VListItem>
 
+            <VListItem @click.stop="showNotiMenu = !showNotiMenu" v-else-if="item.type === 'noti'">
+              <template #prepend>
+                <VIcon class="me-2" icon="tabler-bell" size="22" />
+              </template>
+              <VListItemTitle>Notificações</VListItemTitle>
+              <template #append>
+                <VBadge
+                  v-if="unreadCount > 0"
+                  color="error"
+                  :content="unreadCount"
+                  inline
+                />
+              </template>
+            </VListItem>
+
             <NavbarThemeSwitcher v-else-if="item.type === 'tema'" />
 
             <VDivider v-else class="my-2" />
@@ -227,6 +331,107 @@
     </VMenu>
   </VList>
   <!-- !SECTION -->
+
+  <!-- Dialog de Notificações -->
+  <VDialog v-model="showNotiMenu" width="420" @click:outside="showNotiMenu = false">
+    <VCard>
+      <VCardText class="pa-0">
+        <div class="d-flex align-center justify-space-between pa-4 pb-2">
+          <p class="text-lg font-weight-medium mb-0">Notificações</p>
+          <IconBtn
+            v-show="notifications.length"
+            @click="markAllReadOrUnread"
+          >
+            <VIcon :icon="!isAllMarkRead ? 'tabler-mail' : 'tabler-mail-opened'" />
+            <VTooltip activator="parent" location="start">
+              {{ !isAllMarkRead ? 'Marcar todas como não lidas' : 'Marcar todas como lidas' }}
+            </VTooltip>
+          </IconBtn>
+        </div>
+
+        <VDivider />
+
+        <PerfectScrollbar
+          :options="{ wheelPropagation: false }"
+          style="max-block-size: 23.75rem;"
+        >
+          <VList class="py-0">
+            <template
+              v-for="(notification, index) in notifications"
+              :key="notification.id_noti"
+            >
+              <VDivider v-if="index > 0" />
+              <VListItem
+                link
+                lines="one"
+                min-height="66px"
+                class="list-item-hover-class"
+              >
+                <template #prepend>
+                  <VListItemAction
+                    start
+                    @click="handleNotificationClick(notification)"
+                  >
+                    <VIcon size="30" icon="tabler-alert-circle" />
+                  </VListItemAction>
+                </template>
+
+                <VListItemTitle
+                  :class="notification.visualizada ? 'font-weight-medium' : 'font-weight-black'"
+                  @click="handleNotificationClick(notification)"
+                >
+                  {{ notification.title }}
+                </VListItemTitle>
+                <VListItemSubtitle
+                  :class="notification.visualizada ? 'font-weight-medium' : 'font-weight-black'"
+                  @click="handleNotificationClick(notification)"
+                >
+                  {{ notification.subtitle }}
+                </VListItemSubtitle>
+                <span class="text-xs text-disabled">
+                  {{ notification.time ? new Date(notification.time).toLocaleDateString('pt-BR') : 'Sem Data' }}
+                </span>
+
+                <template #append>
+                  <div class="d-flex flex-column align-center gap-4">
+                    <IconBtn
+                      size="small"
+                      class="visible-in-hover"
+                      @click="notification.visualizada ? markUnRead([notification.id_noti]) : markRead([notification.id_noti])"
+                    >
+                      <VIcon
+                        class="ma-2"
+                        size="20"
+                        :icon="notification.visualizada ? 'tabler-eye' : 'tabler-eye-off'"
+                      />
+                    </IconBtn>
+
+                    <div style="block-size: 28px; inline-size: 28px;">
+                      <IconBtn
+                        size="small"
+                        class="visible-in-hover"
+                        @click="removeNotification(notification.id_noti)"
+                      >
+                        <VIcon size="20" icon="tabler-x" />
+                      </IconBtn>
+                    </div>
+                  </div>
+                </template>
+              </VListItem>
+            </template>
+
+            <VListItem
+              v-show="!notifications.length"
+              class="text-center text-medium-emphasis"
+              style="block-size: 56px;"
+            >
+              <VListItemTitle>Você não tem novas notificações!</VListItemTitle>
+            </VListItem>
+          </VList>
+        </PerfectScrollbar>
+      </VCardText>
+    </VCard>
+  </VDialog>
 </template>
 
 <style>
@@ -236,5 +441,17 @@
 
   .layout-vertical-nav.hovered .icone-trocar {
     display: block !important;
+  }
+
+  .list-item-hover-class {
+    .visible-in-hover {
+      display: none;
+    }
+
+    &:hover {
+      .visible-in-hover {
+        display: block;
+      }
+    }
   }
 </style>

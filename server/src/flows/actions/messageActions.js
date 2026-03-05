@@ -6,6 +6,7 @@
 
 const { replaceVariables } = require('../helpers/contextHelper');
 const { flowLog } = require('../helpers/logHelper');
+const { empresaWhere } = require('../../utils/dbHelper');
 
 // Lazy loading para evitar dependências circulares
 let sendZapMessage, sendZapMessageImage, sendMessageChat, getSMTPTransporter;
@@ -43,12 +44,82 @@ function loadZapFunctions() {
  */
 async function sendWhatsAppMessage(config, context) {
     flowLog.actionSuccess('send_whatsapp_message', { step: 'start' });
-    
+
     try {
-        const { sendZapMessage: szm, sendZapMessageImage: szmi, sendMessageChat: smc } = loadZapFunctions();
-        
         // Substituir variáveis na mensagem
         let message = await replaceVariables(config.message, context);
+
+        // 🧪 MODO SIMULAÇÃO: Coleta mensagens, não envia ao WhatsApp real
+        // Mas PODE gerar áudio se ttsEnabled ou fullAudio estiverem ativos
+        if (context.isSimulation) {
+            flowLog.log('INFO', '🧪 Modo simulação - mensagem coletada (não enviada)');
+
+            context.simulatedResponses = context.simulatedResponses || [];
+
+            // 🎤 Verificar se deve gerar áudio mesmo em simulação
+            let audioPath = null;
+            let sentAsAudio = false;
+
+            if ((context.ttsEnabled || context.fullAudio) && !config.mediaPath) {
+                const { textToSpeech, shouldUseTTS, forceNextAsAudio } = require('../helpers/textToSpeech');
+
+                try {
+                    // fullAudio = sempre áudio, ttsEnabled = usa ciclo de alternância
+                    let shouldGenerate = context.fullAudio;
+
+                    if (!shouldGenerate && context.ttsEnabled) {
+                        shouldGenerate = await shouldUseTTS();
+                    }
+
+                    if (shouldGenerate) {
+                        console.log('🎤 [SIMULAÇÃO] Gerando áudio TTS...');
+                        const ttsResult = await textToSpeech(message, {
+                            filename: `sim-tts-${Date.now()}`,
+                            force: context.fullAudio // Força TTS mesmo se não estiver ativo na config
+                        });
+
+                        if (ttsResult.success) {
+                            audioPath = ttsResult.audioPath;
+                            sentAsAudio = true;
+                            console.log('✅ [SIMULAÇÃO] Áudio gerado:', audioPath);
+                        } else {
+                            console.log('⚠️ [SIMULAÇÃO] Falha TTS:', ttsResult.error);
+                        }
+                    }
+                } catch (error) {
+                    console.error('⚠️ [SIMULAÇÃO] Erro TTS:', error.message);
+                }
+            }
+
+            // Adicionar resposta com info de áudio se gerado
+            // Converter audioPath para URL pública
+            let audioUrl = null;
+            if (audioPath) {
+                // Extrair apenas o nome do arquivo do caminho completo
+                const filename = audioPath.split('/').pop();
+                audioUrl = `/uploads/audio-tts/${filename}`;
+            }
+
+            context.simulatedResponses.push({
+                type: sentAsAudio ? 'audio' : (config.mediaPath ? 'media' : 'text'),
+                content: message,
+                mediaPath: config.mediaPath || null,
+                audioPath: audioPath,
+                audioUrl: audioUrl,
+                sentAsAudio: sentAsAudio,
+                timestamp: new Date().toISOString()
+            });
+
+            return {
+                success: true,
+                message: 'Mensagem coletada (simulação)',
+                simulated: true,
+                sentAsAudio: sentAsAudio,
+                audioPath: audioPath
+            };
+        }
+
+        const { sendZapMessage: szm, sendZapMessageImage: szmi, sendMessageChat: smc } = loadZapFunctions();
         
         // Determinar destinatário
         let phone = context.phone;
@@ -212,9 +283,11 @@ async function sendEmail(config, context) {
  */
 async function forwardContact(node, config, context) {
     flowLog.actionSuccess('forward_contact', { step: 'start' });
-    
+
     try {
         const dbQuery = require('../../utils/dbHelper');
+        const empresa_id = context.empresa_id || null;
+        const ew = empresaWhere(empresa_id);
         const { sendZapMessage: szm } = loadZapFunctions();
         
         const forwardType = config.forwardType || 'next';
@@ -234,12 +307,12 @@ async function forwardContact(node, config, context) {
             case 'next': {
                 // Buscar último encaminhamento
                 const lastForward = await dbQuery(`
-                    SELECT forwarded_to_phone 
-                    FROM FlowForwardLog 
-                    WHERE flow_id = ? 
-                    ORDER BY created_at DESC 
+                    SELECT forwarded_to_phone
+                    FROM FlowForwardLog
+                    WHERE flow_id = ? AND ${ew.sql}
+                    ORDER BY created_at DESC
                     LIMIT 1
-                `, [context.flowId || 0]);
+                `, [context.flowId || 0, ...ew.params]);
                 
                 let currentIndex = 0;
                 if (lastForward.length > 0) {
@@ -316,9 +389,9 @@ async function forwardContact(node, config, context) {
                 
                 // Registrar no log
                 await dbQuery(`
-                    INSERT INTO FlowForwardLog 
-                    (flow_run_id, flow_id, node_id, contact_phone, forwarded_to_phone, forwarded_to_label, forward_type, message_content, status, created_at) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    INSERT INTO FlowForwardLog
+                    (flow_run_id, flow_id, node_id, contact_phone, forwarded_to_phone, forwarded_to_label, forward_type, message_content, status, created_at, empresa_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                 `, [
                     context.runId || 0,
                     context.flowId || 0,
@@ -328,7 +401,8 @@ async function forwardContact(node, config, context) {
                     targetPhone.label || null,
                     forwardType,
                     finalMessage,
-                    'sent'
+                    'sent',
+                    empresa_id
                 ]);
                 
             } catch (error) {

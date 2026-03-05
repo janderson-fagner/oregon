@@ -67,11 +67,140 @@ const protecao = ref({
 const audio = ref({
   ativo: false,
   instrucaoVoz: "",
+  voiceId: "",
+  customVoiceId: "", // ID de voz personalizado (prioridade sobre voiceId)
 });
 
 // ================== DADOS AUXILIARES ==================
 const funcionariosDisponiveis = ref([]);
 const servicosDisponiveis = ref([]);
+
+// ================== VOZES ELEVENLABS ==================
+const elevenlabsVoices = ref([]);
+const voicesByGender = ref({ female: [], male: [], other: [] });
+const loadingVoices = ref(false);
+const previewingVoice = ref(null);
+const previewAudio = ref(null);
+const voiceTab = ref("default"); // 'default' ou 'community'
+const freeVoicesOnly = ref(true); // Filtrar apenas vozes gratuitas (para contas free)
+
+// Computed para garantir arrays validos sempre
+const femaleVoices = computed(() => voicesByGender.value?.female || []);
+const maleVoices = computed(() => voicesByGender.value?.male || []);
+const otherVoices = computed(() => voicesByGender.value?.other || []);
+
+const getElevenLabsVoices = async (type = voiceTab.value) => {
+  if (!elevenlabsKey.value) return;
+
+  loadingVoices.value = true;
+  try {
+    const res = await $api("/config/elevenlabs-voices", {
+      method: "GET",
+      query: {
+        type,
+        freeOnly: freeVoicesOnly.value ? 'true' : 'false'
+      },
+    });
+
+    if (res?.success) {
+      elevenlabsVoices.value = res.voices || [];
+      voicesByGender.value = res.voicesByGender || { female: [], male: [], other: [] };
+      console.log(`Vozes ${type} carregadas:`, elevenlabsVoices.value.length, res.freeOnly ? '(apenas gratuitas)' : '(todas)');
+    }
+  } catch (error) {
+    console.error("Erro ao buscar vozes:", error);
+  }
+  loadingVoices.value = false;
+};
+
+// Atualizar vozes quando mudar a aba ou filtro de gratuitas
+watch(voiceTab, (newTab) => {
+  getElevenLabsVoices(newTab);
+});
+
+watch(freeVoicesOnly, () => {
+  if (elevenlabsVoices.value.length > 0) {
+    getElevenLabsVoices();
+  }
+});
+
+const previewVoice = async (voiceId) => {
+  // Se clicou na mesma voz que está tocando, para o áudio
+  if (previewingVoice.value === voiceId) {
+    if (previewAudio.value) {
+      previewAudio.value.pause();
+      previewAudio.value = null;
+    }
+    previewingVoice.value = null;
+    return;
+  }
+
+  // Parar áudio anterior se existir
+  if (previewAudio.value) {
+    previewAudio.value.pause();
+    previewAudio.value = null;
+  }
+
+  previewingVoice.value = voiceId;
+
+  try {
+    const voice = elevenlabsVoices.value.find(v => v.voice_id === voiceId);
+    if (voice?.preview_url) {
+      previewAudio.value = new Audio(voice.preview_url);
+
+      previewAudio.value.onended = () => {
+        previewingVoice.value = null;
+        previewAudio.value = null;
+      };
+
+      previewAudio.value.onerror = () => {
+        previewingVoice.value = null;
+        previewAudio.value = null;
+        setAlert("Erro ao reproduzir preview", "error", "tabler-alert-circle", 3000);
+      };
+
+      await previewAudio.value.play();
+    } else {
+      // Gerar preview via backend
+      const res = await $api("/flow-test/tts-preview", {
+        method: "POST",
+        body: {
+          voiceId,
+          text: "Olá! Esta é uma prévia da voz selecionada para o atendimento virtual."
+        }
+      });
+
+      if (res?.success && res.audioUrl) {
+        previewAudio.value = new Audio(res.audioUrl);
+
+        previewAudio.value.onended = () => {
+          previewingVoice.value = null;
+          previewAudio.value = null;
+        };
+
+        await previewAudio.value.play();
+      } else {
+        previewingVoice.value = null;
+      }
+    }
+  } catch (error) {
+    console.error("Erro ao fazer preview:", error);
+    setAlert("Erro ao reproduzir preview", "error", "tabler-alert-circle", 3000);
+    previewingVoice.value = null;
+    previewAudio.value = null;
+  }
+};
+
+const selectVoice = (voiceId) => {
+  // Buscar dados completos da voz selecionada
+  const voice = elevenlabsVoices.value.find(v => v.voice_id === voiceId);
+
+  audio.value.voiceId = voiceId;
+  audio.value.voiceName = voice?.name || '';
+  audio.value.publicOwnerId = voice?.public_owner_id || null;
+
+  console.log("Voz selecionada:", voiceId, voice?.name);
+};
 
 const getConfig = async () => {
   loading.value = true;
@@ -175,6 +304,13 @@ const abasConfigGPT = [
 
 const tabGPT = ref("Comportamento");
 
+// Carregar vozes quando a aba de áudio for acessada
+watch(tabGPT, (newTab) => {
+  if (newTab === "Áudio" && elevenlabsVoices.value.length === 0 && elevenlabsKey.value) {
+    getElevenLabsVoices();
+  }
+});
+
 // Estimativas de custo baseadas em uso real de WhatsApp
 const estimativasCusto = [
   {
@@ -207,6 +343,43 @@ const updateConfig = async () => {
   loading.value = true;
 
   try {
+    // Se uma voz da comunidade foi selecionada, adicionar à conta primeiro
+    if (audio.value.voiceId && audio.value.publicOwnerId) {
+      try {
+        const voiceRes = await $api("/config/elevenlabs-select-voice", {
+          method: "POST",
+          body: {
+            voiceId: audio.value.voiceId,
+            voiceName: audio.value.voiceName,
+            publicOwnerId: audio.value.publicOwnerId
+          }
+        });
+
+        if (voiceRes?.success) {
+          if (voiceRes.alreadyInAccount) {
+            console.log("Voz já está na conta");
+          } else {
+            setAlert(
+              `Voz "${audio.value.voiceName}" adicionada à sua conta!`,
+              "info",
+              "tabler-microphone",
+              3000
+            );
+          }
+        }
+      } catch (voiceError) {
+        console.error("Erro ao adicionar voz:", voiceError);
+        setAlert(
+          "Erro ao adicionar voz: " + (voiceError?.data?.error || voiceError.message),
+          "error",
+          "tabler-alert-circle",
+          5000
+        );
+        loading.value = false;
+        return;
+      }
+    }
+
     const data = [
       { type: "gemini_key", value: geminiKey.value },
       { type: "elevenlabs_key", value: elevenlabsKey.value },
@@ -1200,7 +1373,7 @@ const diasSemana = [
               <h3 class="text-h6 mb-2">Comunicação por Áudio</h3>
               <p class="text-caption mb-4">
                 Configure como a IA deve se comportar ao enviar e receber
-                áudios.
+                áudios. O áudio é gerado pelo ElevenLabs.
               </p>
             </VCol>
 
@@ -1224,24 +1397,305 @@ const diasSemana = [
             </VCol>
 
             <VCol cols="12" v-if="audio.ativo">
+              <!-- ========== SELEÇÃO DE VOZ ========== -->
+              <VDivider class="my-4" />
+              <div class="d-flex justify-space-between align-center mb-3">
+                <div>
+                  <h4 class="text-subtitle-1 mb-1">
+                    <VIcon icon="tabler-microphone" class="mr-1" />
+                    Escolha a Voz
+                  </h4>
+                  <p class="text-caption mb-0">
+                    Selecione uma voz do ElevenLabs para o atendente virtual
+                  </p>
+                </div>
+                <VBtn
+                  size="small"
+                  color="primary"
+                  variant="tonal"
+                  @click="getElevenLabsVoices()"
+                  :loading="loadingVoices"
+                >
+                  <VIcon icon="tabler-refresh" class="mr-1" />
+                  Atualizar Vozes
+                </VBtn>
+              </div>
+
+              <!-- Abas de tipo de voz -->
+              <div class="d-flex flex-wrap gap-2 mb-4 align-center">
+                <VBtn
+                  :color="voiceTab === 'default' ? 'primary' : 'default'"
+                  :variant="voiceTab === 'default' ? 'elevated' : 'tonal'"
+                  size="small"
+                  @click="voiceTab = 'default'"
+                >
+                  <VIcon icon="tabler-star" class="mr-1" size="18" />
+                  Vozes Padrão
+                </VBtn>
+                <VBtn
+                  :color="voiceTab === 'community' ? 'primary' : 'default'"
+                  :variant="voiceTab === 'community' ? 'elevated' : 'tonal'"
+                  size="small"
+                  @click="voiceTab = 'community'"
+                >
+                  <VIcon icon="tabler-users" class="mr-1" size="18" />
+                  Vozes da Comunidade
+                </VBtn>
+
+                <VSpacer />
+
+                <!-- Switch para filtrar vozes gratuitas -->
+                <VSwitch
+                  v-model="freeVoicesOnly"
+                  color="success"
+                  density="compact"
+                  hide-details
+                  inset
+                >
+                  <template #label>
+                    <div class="d-flex align-center">
+                      <VIcon icon="tabler-free-rights" size="18" class="mr-1" />
+                      <span class="text-body-2">Apenas gratuitas</span>
+                    </div>
+                  </template>
+                </VSwitch>
+              </div>
+
+              <VAlert
+                v-if="voiceTab === 'community'"
+                color="warning"
+                variant="tonal"
+                class="mb-3"
+                density="compact"
+              >
+                <VIcon icon="tabler-alert-triangle" size="18" class="mr-1" />
+                <span class="text-caption">
+                  <strong>Atenção:</strong> Contas gratuitas do ElevenLabs não podem usar vozes da comunidade via API.
+                  Para usar vozes da comunidade, é necessário fazer upgrade do plano no ElevenLabs.
+                  <strong>Use as Vozes Padrão para contas gratuitas.</strong>
+                </span>
+              </VAlert>
+
+              <VAlert
+                v-if="!elevenlabsKey"
+                key="no-api-key"
+                color="warning"
+                variant="tonal"
+                class="mb-4"
+              >
+                <VIcon icon="tabler-alert-triangle" class="mr-2" />
+                Configure a chave API do ElevenLabs na aba "API" para carregar as vozes disponíveis.
+              </VAlert>
+
+              <div v-else-if="elevenlabsVoices.length > 0" key="voices-list">
+                <!-- Vozes Femininas -->
+                <div v-if="femaleVoices.length > 0" key="female-voices" class="mb-4">
+                  <h5 class="text-body-1 font-weight-medium mb-2">
+                    <VIcon icon="tabler-venus" size="18" class="mr-1" color="pink" />
+                    Vozes Femininas
+                  </h5>
+                  <div class="d-flex flex-wrap gap-2">
+                    <VCard
+                      v-for="(voice, idx) in femaleVoices"
+                      :key="voice.voice_id || `female-${idx}`"
+                      :class="['voice-card', audio.voiceId === voice.voice_id ? 'voice-selected' : '']"
+                      :color="audio.voiceId === voice.voice_id ? 'primary' : undefined"
+                      :variant="audio.voiceId === voice.voice_id ? 'tonal' : 'outlined'"
+                      width="180"
+                      @click="selectVoice(voice.voice_id)"
+                    >
+                      <VCardText class="pa-3">
+                        <div class="d-flex flex-column">
+                          <span class="font-weight-medium text-truncate">{{ voice.name }}</span>
+                          <span class="text-caption text-truncate">{{ voice.accent || 'Accent' }}</span>
+                          <div class="d-flex gap-1 mt-2">
+                            <IconBtn
+                              :color="previewingVoice === voice.voice_id ? 'error' : 'primary'"
+                              variant="tonal"
+                              @click.stop="previewVoice(voice.voice_id)"
+                              :loading="previewingVoice === voice.voice_id"
+                            >
+                              <VIcon :icon="previewingVoice === voice.voice_id ? 'tabler-player-stop' : 'tabler-player-play'" size="14" />
+                            </IconBtn>
+                            <VChip
+                              v-if="audio.voiceId === voice.voice_id"
+                              size="x-small"
+                              color="success"
+                            >
+                              Selecionada
+                            </VChip>
+                          </div>
+                        </div>
+                      </VCardText>
+                    </VCard>
+                  </div>
+                </div>
+
+                <!-- Vozes Masculinas -->
+                <div v-if="maleVoices.length > 0" key="male-voices" class="mb-4">
+                  <h5 class="text-body-1 font-weight-medium mb-2">
+                    <VIcon icon="tabler-mars" size="18" class="mr-1" color="blue" />
+                    Vozes Masculinas
+                  </h5>
+                  <div class="d-flex flex-wrap gap-2">
+                    <VCard
+                      v-for="(voice, idx) in maleVoices"
+                      :key="voice.voice_id || `male-${idx}`"
+                      :class="['voice-card', audio.voiceId === voice.voice_id ? 'voice-selected' : '']"
+                      :color="audio.voiceId === voice.voice_id ? 'primary' : undefined"
+                      :variant="audio.voiceId === voice.voice_id ? 'tonal' : 'outlined'"
+                      width="180"
+                      @click="selectVoice(voice.voice_id)"
+                    >
+                      <VCardText class="pa-3">
+                        <div class="d-flex flex-column">
+                          <span class="font-weight-medium text-truncate">{{ voice.name }}</span>
+                          <span class="text-caption text-truncate">{{ voice.accent || 'Accent' }}</span>
+                          <div class="d-flex gap-1 mt-2">
+                            <IconBtn
+                              :color="previewingVoice === voice.voice_id ? 'error' : 'primary'"
+                              variant="tonal"
+                              @click.stop="previewVoice(voice.voice_id)"
+                              :loading="previewingVoice === voice.voice_id"
+                            >
+                              <VIcon :icon="previewingVoice === voice.voice_id ? 'tabler-player-stop' : 'tabler-player-play'" size="14" />
+                            </IconBtn>
+                            <VChip
+                              v-if="audio.voiceId === voice.voice_id"
+                              size="x-small"
+                              color="success"
+                            >
+                              Selecionada
+                            </VChip>
+                          </div>
+                        </div>
+                      </VCardText>
+                    </VCard>
+                  </div>
+                </div>
+
+                <!-- Outras Vozes -->
+                <div v-if="otherVoices.length > 0" key="other-voices" class="mb-4">
+                  <h5 class="text-body-1 font-weight-medium mb-2">
+                    <VIcon icon="tabler-gender-bigender" size="18" class="mr-1" color="purple" />
+                    Outras Vozes
+                  </h5>
+                  <div class="d-flex flex-wrap gap-2">
+                    <VCard
+                      v-for="(voice, idx) in otherVoices"
+                      :key="voice.voice_id || `other-${idx}`"
+                      :class="['voice-card', audio.voiceId === voice.voice_id ? 'voice-selected' : '']"
+                      :color="audio.voiceId === voice.voice_id ? 'primary' : undefined"
+                      :variant="audio.voiceId === voice.voice_id ? 'tonal' : 'outlined'"
+                      width="180"
+                      @click="selectVoice(voice.voice_id)"
+                    >
+                      <VCardText class="pa-3">
+                        <div class="d-flex flex-column">
+                          <span class="font-weight-medium text-truncate">{{ voice.name }}</span>
+                          <span class="text-caption text-truncate">{{ voice.accent || voice.category }}</span>
+                          <div class="d-flex gap-1 mt-2">
+                            <IconBtn
+                              :color="previewingVoice === voice.voice_id ? 'error' : 'primary'"
+                              variant="tonal"
+                              @click.stop="previewVoice(voice.voice_id)"
+                              :loading="previewingVoice === voice.voice_id"
+                            >
+                              <VIcon :icon="previewingVoice === voice.voice_id ? 'tabler-player-stop' : 'tabler-player-play'" size="14" />
+                            </IconBtn>
+                            <VChip
+                              v-if="audio.voiceId === voice.voice_id"
+                              size="x-small"
+                              color="success"
+                            >
+                              Selecionada
+                            </VChip>
+                          </div>
+                        </div>
+                      </VCardText>
+                    </VCard>
+                  </div>
+                </div>
+
+                <VAlert color="info" variant="tonal" class="mt-2">
+                  <VIcon icon="tabler-info-circle" class="mr-2" />
+                  Clique no botão play para ouvir uma prévia da voz. Clique no card para selecionar.
+                </VAlert>
+              </div>
+
+              <div v-else-if="loadingVoices" key="loading-voices" class="d-flex justify-center py-4">
+                <VProgressCircular indeterminate color="primary" />
+              </div>
+
+              <div v-else key="no-voices">
+                <VAlert color="info" variant="tonal">
+                  <VIcon icon="tabler-info-circle" class="mr-2" />
+                  Clique em "Atualizar Vozes" para carregar as vozes disponíveis do ElevenLabs.
+                </VAlert>
+              </div>
+
+              <!-- ========== ID DE VOZ PERSONALIZADO ========== -->
+              <VDivider class="my-4" />
+              <div class="mb-4">
+                <h4 class="text-subtitle-1 mb-1">
+                  <VIcon icon="tabler-id" class="mr-1" />
+                  ID de Voz Personalizado
+                </h4>
+                <p class="text-caption mb-3">
+                  Se você tem um ID de voz específico do ElevenLabs, insira aqui.
+                  Este ID terá <strong>prioridade</strong> sobre a voz selecionada acima.
+                </p>
+
+                <AppTextField
+                  v-model="audio.customVoiceId"
+                  label="ID da Voz (Voice ID)"
+                  placeholder="Ex: 21m00Tcm4TlvDq8ikWAM"
+                  clearable
+                />
+
+                <VAlert
+                  v-if="audio.customVoiceId"
+                  color="info"
+                  variant="tonal"
+                  class="mt-2"
+                  density="compact"
+                >
+                  <VIcon icon="tabler-info-circle" size="18" class="mr-1" />
+                  <span class="text-caption">
+                    <strong>ID personalizado ativo:</strong> {{ audio.customVoiceId }}
+                    <br />
+                    Este ID será usado em vez da voz selecionada na lista acima.
+                  </span>
+                </VAlert>
+
+                <VAlert
+                  color="warning"
+                  variant="tonal"
+                  class="mt-2"
+                  density="compact"
+                >
+                  <VIcon icon="tabler-alert-triangle" size="18" class="mr-1" />
+                  <span class="text-caption">
+                    <strong>Onde encontrar o Voice ID:</strong> No painel do ElevenLabs, vá em
+                    <a href="https://elevenlabs.io/app/voice-lab" target="_blank" class="text-primary">Voice Lab</a>,
+                    clique na voz desejada e copie o ID exibido.
+                  </span>
+                </VAlert>
+              </div>
+
+              <!-- ========== INSTRUÇÕES DE VOZ ========== -->
+              <VDivider class="my-4" />
               <AppTextarea
                 v-model="audio.instrucaoVoz"
-                label="Instruções de Voz"
+                label="Instruções de Voz (Opcional)"
                 placeholder="Descreva como a voz deve soar: tom, velocidade, pausas, entonação..."
-                rows="4"
+                rows="3"
                 active
               />
 
-              <VAlert color="info" variant="tonal" class="mt-4">
-                <VIcon icon="tabler-info-circle" class="mr-2" />
-                A voz será gerada automaticamente de acordo com o
-                <strong>gênero</strong> selecionado na aba Comportamento. 
-                Você pode personalizar o tom e estilo através das instruções acima.
-              </VAlert>
-              
               <VAlert color="success" variant="tonal" class="mt-3">
                 <VIcon icon="tabler-microphone" class="mr-2" />
-                <strong>Dica:</strong> Mensagens de áudio tornam a comunicação mais natural e aumentam 
+                <strong>Dica:</strong> Mensagens de áudio tornam a comunicação mais natural e aumentam
                 o engajamento dos clientes, especialmente para negócios que valorizam um atendimento mais pessoal.
               </VAlert>
             </VCol>
@@ -1865,3 +2319,19 @@ const diasSemana = [
     </VCard>
   </VDialog>
 </template>
+
+<style scoped>
+.voice-card {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.voice-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.voice-selected {
+  border-width: 2px !important;
+}
+</style>
