@@ -91,10 +91,25 @@ async function initClient(clientId) {
             return { success: false, message: 'Client já está sendo inicializado' };
         }
 
-        // Verifica se já existe
+        // Verifica se já existe e está funcional
         if (clients.has(clientId)) {
-            console.log(`⚠️ Client ${clientId} já está inicializado`);
-            return { success: false, message: 'Client já está inicializado' };
+            const existingClient = clients.get(clientId);
+            try {
+                const state = await existingClient.getState();
+                if (state === 'CONNECTED') {
+                    console.log(`⚠️ Client ${clientId} já está inicializado e conectado`);
+                    return { success: false, message: 'Client já está inicializado e conectado' };
+                }
+                // Client existe mas não está conectado - destruir e reconectar
+                console.log(`🔄 Client ${clientId} existe mas estado=${state}, destruindo para reconectar...`);
+                try { await existingClient.destroy(); } catch (e) { /* ignora erro ao destruir */ }
+                clients.delete(clientId);
+            } catch (stateErr) {
+                // Não conseguiu obter estado - client travado, destruir e reconectar
+                console.log(`🔄 Client ${clientId} não responde (${stateErr.message}), destruindo para reconectar...`);
+                try { await existingClient.destroy(); } catch (e) { /* ignora erro ao destruir */ }
+                clients.delete(clientId);
+            }
         }
 
         clientsInitializing.set(clientId, true);
