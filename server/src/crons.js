@@ -368,16 +368,28 @@ const initCronJobs = () => {
             }
 
             case 'verificar_resposta': {
-              // Verifica se o cliente respondeu desde o agendamento
-              // Se não respondeu, envia a mensagem de follow-up
-              const ultimaMensagem = await dbQuery(`
-                SELECT * FROM whatsapp_messages
-                WHERE phone = ? AND direction = 'in' AND created_at > ? AND empresa_id = ?
-                ORDER BY created_at DESC LIMIT 1
-              `, [acao.phone, acao.created_at, acao.empresa_id]);
+              // Verifica se o cliente respondeu desde o agendamento da ação
+              // Usa wwebjs (getChatMessages) pois não há tabela de mensagens no banco
+              let clienteRespondeu = false;
+              try {
+                const { getChatMessages } = require('./zap/chats');
+                const chatId = `${acao.phone}@c.us`;
+                const mensagens = await getChatMessages(acao.clientId, chatId, 10);
+                const momentoAcao = moment(acao.created_at);
 
-              if (!ultimaMensagem || ultimaMensagem.length === 0) {
-                // Cliente não respondeu, enviar mensagem
+                // Verificar se alguma mensagem do cliente (from_me = 0) é posterior à criação da ação
+                clienteRespondeu = mensagens.some(msg => {
+                  if (msg.from_me) return false;
+                  const msgTime = msg.timestamp ? moment(msg.timestamp, ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss']) : null;
+                  return msgTime && msgTime.isAfter(momentoAcao);
+                });
+              } catch (err) {
+                console.error(`⚠️ verificar_resposta: Erro ao buscar mensagens via wwebjs: ${err.message}`);
+                // Em caso de erro (cliente desconectado etc), não enviar follow-up
+                clienteRespondeu = true;
+              }
+
+              if (!clienteRespondeu) {
                 const { sendWhatsAppMessage: sendMsg } = require('./flows/actions/messageActions');
                 await sendMsg({
                   message: parametros.mensagem || 'Olá! Notamos que você não respondeu. Posso ajudar em algo?'
