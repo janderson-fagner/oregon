@@ -174,27 +174,42 @@
     }
   };
 
-  const onEndColumn = (e) => {
-    const id = e.item.dataset.key;
+  const onEndColumn = async (e) => {
     const oldIndex = parseInt(e.oldIndex);
     const newIndex = parseInt(e.newIndex);
 
+    e.item.style.opacity = "1";
+
     if (oldIndex === newIndex) {
-      e.item.style.opacity = "1";
       return;
     }
 
-    // Atualizar a ordem no backend
-    selectedEtapa.value = funis.value.find((f) => f.id == id);
-    if (!selectedEtapa.value) return;
-    selectedEtapa.value.ordem = newIndex + 1;
-    saveFunil(true, false);
+    // Atualizar a ordem de todas as etapas no backend
+    try {
+      const ordens = funis.value.map((f, index) => ({
+        id: f.id,
+        ordem: index + 1,
+      }));
 
-    funis.value[oldIndex].ordem = oldIndex;
-    selectedEtapa.value = funis.value[oldIndex];
-    saveFunil(true, false);
+      await $api("/crm/update/funis/ordem", {
+        method: "PUT",
+        body: { ordens },
+      });
 
-    e.item.style.opacity = "1";
+      // Atualizar localmente
+      funis.value.forEach((f, index) => {
+        f.ordem = index + 1;
+      });
+    } catch (error) {
+      console.error("Erro ao salvar ordem das etapas:", error);
+      setAlert(
+        "Erro ao salvar a ordem das etapas.",
+        "error",
+        "tabler-alert-triangle",
+        3000
+      );
+      getFunis(); // Recarregar para reverter
+    }
   };
 
   const onStartColumn = (e) => {

@@ -602,6 +602,28 @@ router.post('/upsert/funil', async (req, res) => {
     }
 });
 
+// Atualizar ordem de todas as etapas do funil
+router.put('/update/funis/ordem', async (req, res) => {
+    try {
+        const empresa_id = req.user.empresa_id;
+        const { ordens } = req.body;
+
+        if (!ordens || !Array.isArray(ordens) || ordens.length === 0) {
+            return res.status(400).json({ message: 'Dados de ordem são obrigatórios.' });
+        }
+
+        for (const item of ordens) {
+            await dbQuery('UPDATE Funis SET ordem = ? WHERE id = ? AND empresa_id = ?',
+                [item.ordem, item.id, empresa_id]);
+        }
+
+        res.status(200).json({ message: 'Ordem das etapas atualizada com sucesso.' });
+    } catch (error) {
+        console.error('Erro ao atualizar ordem das etapas:', error);
+        res.status(500).json({ message: 'Erro ao atualizar ordem das etapas.', error });
+    }
+});
+
 router.delete('/delete/funil/:id', async (req, res) => {
     try {
         const empresa_id = req.user.empresa_id;
@@ -751,21 +773,34 @@ router.get('/get/negocio/:id', async (req, res) => {
                     'Agora';
 
         let idadesEtapas = {};
-        if (negocio.historico?.length > 0 &&
-            negocio.historico.filter(h => h.type === 'negocio-etapa').length > 0) {
-            for (let negocioEtapa of negocio.historico.filter(h => h.type === 'negocio-etapa')) {
-                let dataEtapa = negocioEtapa.etapaId !== negocio.etapaId ?
-                    moment(negocioEtapa.dateFim) : moment(negocioEtapa.date);
+        if (negocio.historico?.length > 0) {
+            let etapasHist = negocio.historico.filter(h => h.type === 'negocio-etapa');
 
-                let idadeEtapa = moment().diff(dataEtapa, 'days') > 0 ?
-                    moment().diff(dataEtapa, 'days') + ' dia(s)' :
-                    moment().diff(dataEtapa, 'hours') > 0 ?
-                        moment().diff(dataEtapa, 'hours') + ' hora(s)' :
-                        moment().diff(dataEtapa, 'minutes') > 0 ?
-                            moment().diff(dataEtapa, 'minutes') + ' minuto(s)' :
-                            'Agora';
+            // Agrupar por etapaId e somar durações (pode ter passado pela mesma etapa mais de uma vez)
+            let temposPorEtapa = {};
+            for (let negocioEtapa of etapasHist) {
+                if (!temposPorEtapa[negocioEtapa.etapaId]) {
+                    temposPorEtapa[negocioEtapa.etapaId] = 0;
+                }
 
-                idadesEtapas[negocioEtapa.etapaId] = idadeEtapa;
+                if (negocioEtapa.etapaId == negocio.etapaId && !negocioEtapa.dateFim) {
+                    // Etapa atual (entrada ativa): tempo desde que entrou
+                    temposPorEtapa[negocioEtapa.etapaId] += moment().diff(moment(negocioEtapa.date));
+                } else if (negocioEtapa.dateFim) {
+                    // Etapa fechada: duração que ficou (dateFim - date)
+                    temposPorEtapa[negocioEtapa.etapaId] += moment(negocioEtapa.dateFim).diff(moment(negocioEtapa.date));
+                }
+            }
+
+            for (let [etapaId, diffMs] of Object.entries(temposPorEtapa)) {
+                let diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                let diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                let diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+                idadesEtapas[etapaId] = diffDays > 0 ? diffDays + ' dia(s)' :
+                    diffHours > 0 ? diffHours + ' hora(s)' :
+                    diffMinutes > 0 ? diffMinutes + ' minuto(s)' :
+                    'Agora';
             }
         }
 
@@ -898,28 +933,22 @@ router.put('/update/negocio/etapa', async (req, res) => {
 
         const historico = negocio.historico ? JSON.parse(negocio.historico) : [];
 
-        let lastEtapaHist = historico.find(h => h.type === 'negocio-etapa' && h.etapaId === negocio.etapaId);
+        // Fechar a etapa atual no histórico (marcar dateFim)
+        let lastEtapaHist = historico.find(h => h.type === 'negocio-etapa' && h.etapaId === negocio.etapaId && !h.dateFim);
 
         if (lastEtapaHist) {
             lastEtapaHist.dateFim = moment().format('YYYY-MM-DD HH:mm:ss');
         }
 
-        //Verificar se já existe uma etapa igual no histórico
-        if (historico.find(h => h.type === 'negocio-etapa' && h.etapaId === etapaId)) {
-            let histAtual = historico.find(h => h.type === 'negocio-etapa' && h.etapaId === etapaId);
-
-            histAtual.feitoPor = req.user ? req.user.fullName : 'N/A';
-            histAtual.dateFim = null;
-        } else {
-            historico.unshift({
-                type: 'negocio-etapa',
-                etapa: funil[0].nome,
-                etapaId: funil[0].id,
-                date: moment().format('YYYY-MM-DD HH:mm:ss'),
-                dateFim: null,
-                feitoPor: req.user ? req.user.fullName : 'N/A',
-            });
-        }
+        // Sempre criar nova entrada para a nova etapa (preserva histórico completo)
+        historico.unshift({
+            type: 'negocio-etapa',
+            etapa: funil[0].nome,
+            etapaId: funil[0].id,
+            date: moment().format('YYYY-MM-DD HH:mm:ss'),
+            dateFim: null,
+            feitoPor: req.user ? req.user.fullName : 'N/A',
+        });
 
         historico.unshift({
             title: 'Etapa do negócio atualizada',
