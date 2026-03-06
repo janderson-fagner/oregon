@@ -183,7 +183,7 @@ router.get("/agendamentos", async (req, res) => {
           continue;
         }
 
-        // Gera 1 item por dia (inclusive)
+        // Gera 1 item por dia (inclusive), pulando sábado (6) e domingo (0)
         for (
           let d = startDay.clone();
           d.isSameOrBefore(endDay, "day");
@@ -191,6 +191,12 @@ router.get("/agendamentos", async (req, res) => {
         ) {
           const isFirst = d.isSame(startDay, "day");
           const isLast = d.isSame(endDay, "day");
+          const dayOfWeek = d.day(); // 0 = domingo, 6 = sábado
+
+          // Pula fins de semana em agendamentos com período
+          if ((dayOfWeek === 0 || dayOfWeek === 6) && !isFirst && !isLast) {
+            continue;
+          }
 
           console.log(
             "D: ",
