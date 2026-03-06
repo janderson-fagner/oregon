@@ -162,6 +162,7 @@ const limparComissao = () => {
   editFuncionario.value = false;
   porcentagemCalcView.value = false;
   porcentagemCalc.value = 0;
+  searchFuncionario.value = '';
 };
 
 const closeNavigationDrawer = () => {
