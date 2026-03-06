@@ -38,6 +38,14 @@ const rotaConta = () => {
 
 // Components
 import Footer from '@/layouts/components/Footer.vue'
+import HelpCenterDialog from '@/components/HelpCenterDialog.vue'
+import { useHelpCenter } from '@/composables/useHelpCenter'
+const { openHelp } = useHelpCenter()
+
+const openHelpFromRoute = () => {
+  const topicSlug = route.meta?.helpTopic || null
+  openHelp(topicSlug)
+}
 
 // @layouts plugin
 import { VerticalNavLayout } from '@layouts'
@@ -119,5 +127,19 @@ watch(() => route.name, () => {
       👉 Customizer 
       <TheCustomizer />-
     -->
+    <!-- Centro de Ajuda FAB -->
+    <VBtn
+      icon
+      color="primary"
+      size="large"
+      class="help-fab"
+      elevation="8"
+      style="position: fixed; bottom: 24px; right: 24px; z-index: 1000;"
+      @click="openHelpFromRoute"
+    >
+      <VIcon icon="tabler-help" size="28" />
+      <VTooltip activator="parent" location="start">Ajuda</VTooltip>
+    </VBtn>
+    <HelpCenterDialog />
   </VerticalNavLayout>
 </template>

@@ -228,6 +228,7 @@ export const useFunctions = () => {
     }
 
     const debounce = (fn, delay = 500) => {
+        delay = delay && delay == 500 ? 1200 : delay;
         let timeoutId;
         return (...args) => {
             clearTimeout(timeoutId);

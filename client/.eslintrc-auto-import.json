@@ -380,6 +380,7 @@
     "isDaviot": true,
     "useAssinatura": true,
     "connectSocket": true,
-    "disconnectSocket": true
+    "disconnectSocket": true,
+    "useHelpCenter": true
   }
 }

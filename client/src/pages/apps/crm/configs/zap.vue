@@ -14,59 +14,67 @@
     );
     router.push("/");
   }
-  // Gerenciamento de múltiplos clients
-  const clients = ref([
-    {
-      id: 'atendimento_1',
-      name: 'Atendimento',
-      description: 'WhatsApp usado para conversas e atendimento ao cliente',
-      icon: 'tabler-message-circle',
-      qrCode: null,
-      conectado: false,
-      loading: true
-    },
-    {
-      id: 'disparos_1',
-      name: 'Disparos',
-      description: 'WhatsApp usado para envio de disparos/campanhas',
-      icon: 'tabler-send',
-      qrCode: null,
-      conectado: false,
-      loading: true
-    }
-  ]);
+  // Gerenciamento de múltiplos clients (carregados da API)
+  const clients = ref([]);
+  const tabClient = ref(null);
+  const loadingClients = ref(true);
 
-  const tabClient = ref('atendimento_1');
+  // Ícone e descrição por tipo de client
+  const clientMeta = {
+    atendimento: { icon: 'tabler-message-circle', description: 'WhatsApp usado para conversas e atendimento ao cliente' },
+    disparos: { icon: 'tabler-send', description: 'WhatsApp usado para envio de disparos/campanhas' },
+    default: { icon: 'tabler-brand-whatsapp', description: 'WhatsApp' }
+  };
 
-  // Verifica conexão de todos os clients
-  const checkAllClients = async () => {
-    for (const client of clients.value) {
-      await checkConectado(client.id);
+  const getClientType = (id) => {
+    const parts = id.split('_');
+    return parts.length > 1 ? parts.slice(0, -1).join('_') : id;
+  };
+
+  // Carrega clients da API (filtrados por empresa no backend)
+  const loadClients = async () => {
+    try {
+      const res = await $api("/zap/clients/list", { method: "GET" });
+      if (!res || !Array.isArray(res)) return;
+
+      clients.value = res.filter(c => c.id !== 'default').map(c => {
+        const type = getClientType(c.id);
+        const meta = clientMeta[type] || clientMeta.default;
+        return {
+          id: c.id,
+          name: c.name || type.charAt(0).toUpperCase() + type.slice(1),
+          description: meta.description,
+          icon: meta.icon,
+          type,
+          qrCode: null,
+          conectado: c.status === 'connected',
+          loading: false
+        };
+      });
+
+      if (clients.value.length > 0 && !tabClient.value) {
+        tabClient.value = clients.value[0].id;
+      }
+    } catch (error) {
+      console.error('Erro ao carregar clients:', error);
+    } finally {
+      loadingClients.value = false;
     }
   };
 
   // Verifica conexão de um client específico
-  const checkConectado = async (clientId) => {
-    const client = clients.value.find(c => c.id === clientId);
-    if (!client) return;
-
+  const checkConectado = async (client) => {
     try {
       const res = await $api("/zap/check-conn", {
         method: "GET",
-        query: { clientId }
+        query: { type: client.type }
       });
 
       if (!res) return;
 
-      console.log(`Check ${clientId}:`, res);
-
-      if (res.status === "Conectado") {
-        client.conectado = true;
-      } else {
-        client.conectado = false;
-      }
+      client.conectado = res.status === "Conectado";
     } catch (error) {
-      console.error(`Error check ${clientId}:`, error);
+      console.error(`Error check ${client.id}:`, error);
       client.conectado = false;
     }
 
@@ -74,21 +82,16 @@
   };
 
   // Conecta um client específico
-  const connect = async (clientId) => {
-    const client = clients.value.find(c => c.id === clientId);
-    if (!client) return;
-
+  const connect = async (client) => {
     client.loading = true;
 
     try {
       const res = await $api("/zap/connect", {
         method: "GET",
-        query: { clientId }
+        query: { type: client.type }
       });
 
       if (!res) return;
-
-      console.log(`Connect ${clientId}:`, res);
 
       if (res.message === "Conectado") {
         client.conectado = true;
@@ -96,7 +99,7 @@
         setAlert(`${client.name} conectado!`, "success", "tabler-check", 3000);
       }
     } catch (error) {
-      console.error(`Error connect ${clientId}:`, error);
+      console.error(`Error connect ${client.id}:`, error);
       setAlert(`Erro ao conectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
     }
 
@@ -104,27 +107,22 @@
   };
 
   // Desconecta um client específico
-  const disconnect = async (clientId) => {
-    const client = clients.value.find(c => c.id === clientId);
-    if (!client) return;
-
+  const disconnect = async (client) => {
     client.loading = true;
 
     try {
       const res = await $api("/zap/disconnect", {
         method: "GET",
-        query: { clientId }
+        query: { type: client.type }
       });
 
       if (!res) return;
-
-      console.log(`Disconnect ${clientId}:`, res);
 
       client.conectado = false;
       client.qrCode = null;
       setAlert(`${client.name} desconectado!`, "info", "tabler-unlink", 3000);
     } catch (error) {
-      console.error(`Error disconnect ${clientId}:`, error);
+      console.error(`Error disconnect ${client.id}:`, error);
       setAlert(`Erro ao desconectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
     }
 
@@ -133,9 +131,7 @@
 
   // Setup dos listeners do socket para cada client
   const setupSocketListeners = () => {
-    // Listeners específicos para cada client
     clients.value.forEach(client => {
-      // QR Code específico do client
       socket.on(`qr-${client.id}`, (qr) => {
         QRCode.toDataURL(qr, (err, url) => {
           client.qrCode = url;
@@ -144,28 +140,20 @@
         });
       });
 
-      // Autenticação específica do client
-      socket.on(`autentica-zap-${client.id}`, (data) => {
+      socket.on(`autentica-zap-${client.id}`, () => {
         setAlert(`${client.name} conectado com sucesso!`, "success", "tabler-check", 5000);
         client.qrCode = null;
         client.conectado = true;
         client.loading = false;
       });
 
-      // Erro de autenticação específico do client
       socket.on(`autentica-error-zap-${client.id}`, () => {
-        setAlert(
-          `Erro ao conectar ${client.name}. Tente novamente!`,
-          "error",
-          "tabler-alert-triangle",
-          5000
-        );
+        setAlert(`Erro ao conectar ${client.name}. Tente novamente!`, "error", "tabler-alert-triangle", 5000);
         client.qrCode = null;
         client.conectado = false;
         client.loading = false;
       });
 
-      // Desconexão específica do client
       socket.on(`desconectado-zap-${client.id}`, () => {
         setAlert(`${client.name} foi desconectado!`, "error", "tabler-unlink", 5000);
         client.qrCode = null;
@@ -173,17 +161,15 @@
         client.loading = false;
       });
     });
-
   };
 
-  // Inicialização
-  onMounted(() => {
-    checkAllClients();
+  // Inicialização: carrega clients da API, depois configura socket
+  onMounted(async () => {
+    await loadClients();
     setupSocketListeners();
   });
 
   onUnmounted(() => {
-    // Remove listeners ao desmontar componente
     clients.value.forEach(client => {
       socket.off(`qr-${client.id}`);
       socket.off(`autentica-zap-${client.id}`);
@@ -289,10 +275,10 @@
                   >
                     <VIcon icon="tabler-unlink" size="48" color="error" class="mb-3" />
                     <p class="mb-2 text-caption">
-                      Conecte o WhatsApp para {{ client.id === 'atendimento_1' ? 'atender clientes' : 'enviar campanhas' }}.
+                      Conecte o WhatsApp para {{ client.type === 'atendimento' ? 'atender clientes' : 'enviar campanhas' }}.
                     </p>
                     <VBtn
-                      @click="connect(client.id)"
+                      @click="connect(client)"
                       color="primary"
                       :loading="client.loading"
                     >
@@ -344,7 +330,7 @@
                 </VAlert>
 
                 <VBtn
-                  @click="disconnect(client.id)"
+                  @click="disconnect(client)"
                   color="error"
                   variant="outlined"
                   block
@@ -363,7 +349,7 @@
                   density="compact"
                   icon="tabler-alert-triangle"
                 >
-                  Este WhatsApp está desconectado. Conecte-o para {{ client.id === 'atendimento_1' ? 'atender clientes' : 'enviar campanhas' }}.
+                  Este WhatsApp está desconectado. Conecte-o para {{ client.type === 'atendimento' ? 'atender clientes' : 'enviar campanhas' }}.
                 </VAlert>
               </div>
             </VCardText>

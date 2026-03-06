@@ -1,18 +1,235 @@
 <script setup>
-  import { VDataTableServer } from "vuetify/labs/VDataTable";
-  import { useConfirm } from "@/utils/confirm.js";
-  import { paginationMeta } from "@api-utils/paginationMeta";
-  import { useAlert } from "@/composables/useAlert";
-  import ReceberDialog from "@/views/apps/pagamentos/ReceberDialog.vue";
-  import { can } from "@layouts/plugins/casl";
-  import moment from "moment";
-  import { useFunctions } from "@/composables/useFunctions";
+import { VDataTableServer } from "vuetify/labs/VDataTable";
+import { useConfirm } from "@/utils/confirm.js";
+import { paginationMeta } from "@api-utils/paginationMeta";
+import { useAlert } from "@/composables/useAlert";
+import ReceberDialog from "@/views/apps/pagamentos/ReceberDialog.vue";
+import { can } from "@layouts/plugins/casl";
+import moment from "moment";
+import { useFunctions } from "@/composables/useFunctions";
 
-  const { escreverEndereco, debounce } = useFunctions();
-  const { setAlert } = useAlert();
+const { escreverEndereco, debounce } = useFunctions();
+const { setAlert } = useAlert();
 
-  const router = useRouter();
-  const route = useRoute();
+const router = useRouter();
+const route = useRoute();
+
+if (!can("view", "financeiro_recebimento")) {
+  setAlert(
+    "Você não tem permissão para acessar esta página.",
+    "error",
+    "tabler-alert-triangle",
+    3000
+  );
+  router.push("/");
+}
+
+const recebimentos = ref([]);
+const loading = ref(false);
+const loadingAdd = ref(false);
+
+let mesAtual = new Date().getMonth() + 1;
+
+// 👉 Store
+const searchQuery = ref("");
+const dataDeQuery = ref(moment().startOf("month").format("YYYY-MM-DD"));
+const dataAteQuery = ref(moment().endOf("month").format("YYYY-MM-DD"));
+const pagoQuery = ref(2);
+
+// Data table options
+const itemsPerPage = ref(10);
+const page = ref(1);
+const sortBy = ref();
+const orderBy = ref();
+const totalPagamentos = ref(0);
+
+const updateOptions = (options) => {
+  console.log("Update: ", options);
+  page.value = options.page;
+  sortBy.value = options.sortBy[0]?.key;
+  orderBy.value = options.sortBy[0]?.order;
+
+  getReceber();
+};
+
+// Headers
+const headers = [
+  {
+    title: "Cliente/Agendamento",
+    key: "age_data",
+  },
+  {
+    title: "Formas de Pag.",
+    key: "fpg_name",
+  },
+  {
+    title: "Nota Fiscal",
+    key: "pgt_numero_nota_fiscal",
+  },
+  {
+    title: "Valor",
+    key: "pgt_valor",
+  },
+  {
+    title: "Data do Pagamento",
+    key: "pgt_data",
+  },
+  {
+    title: "Ações",
+    key: "actions",
+    sortable: false,
+  },
+];
+
+const isRecebimentoDrawerVisible = ref(false);
+const loadingReceberData = ref(true);
+const ReceberData = ref({});
+
+const relatorios = ref({
+  totalRecebimento: 0,
+  totalNaoPago: 0,
+  totalPago: 0,
+});
+
+const widgetData = ref([
+  {
+    title: "Total de Recebimentos",
+    value: relatorios.value.totalRecebimento,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-wallet",
+    iconColor: "primary",
+  },
+  {
+    title: "Total Pago",
+    value: relatorios.value.totalPago,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-check",
+    iconColor: "success",
+  },
+  {
+    title: "Total Não Pago",
+    value: relatorios.value.totalNaoPago,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-x",
+    iconColor: "error",
+  },
+]);
+
+const editarRecebimento = async (item) => {
+  if (!can("edit", "financeiro_recebimento")) {
+    return setAlert(
+      "Você não tem permissão para isto.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+
+  try {
+    const res = await $api(`/pagamentos/get/receber/${item}`, {
+      method: "GET",
+    });
+
+    if (!res) return;
+
+    console.log("Produto edit:", res);
+
+    ReceberData.value = res;
+
+    isRecebimentoDrawerVisible.value = true;
+  } catch (error) {
+    console.error("Error getting produto:", error, error.response);
+
+    setAlert(
+      error.response?._data?.message ||
+        "Erro ao carregar dados do recebimento! Tente novamente.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+
+  loadingReceberData.value = false;
+};
+
+if (route.query.viewPagamento) {
+  editarRecebimento(route.query.viewPagamento);
+
+  // Remove query from URL
+  router.replace({ query: { tab: "receber" } });
+}
+
+const deletarPagamento = async (item) => {
+  if (!can("delete", "financeiro_recebimento")) {
+    return setAlert(
+      "Você não tem permissão para isto.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+
+  if (
+    !(await useConfirm({
+      message: `Tem certeza que deseja deletar o pagamento de <strong>${
+        item.cli_nome
+      }</strong> no valor de <strong>${formatValor(item.pgt_valor)}</strong>?`,
+      allowHtml: true,
+    }))
+  )
+    return;
+
+  try {
+    const res = await $api(`/pagamentos/delete/receber/${item.pgt_id}`, {
+      method: "DELETE",
+    });
+
+    if (!res) return;
+
+    setAlert(
+      "Pagamento deletado com sucesso!",
+      "success",
+      "tabler-trash",
+      3000
+    );
+
+    getReceber();
+  } catch (error) {
+    console.error("Error deleting produto:", error, error.response);
+
+    setAlert(
+      error.response?._data?.message ||
+        "Erro ao deletar pagamento! Tente novamente.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+};
+
+watch(isRecebimentoDrawerVisible, (val) => {
+  console.log("isRecebimentoDrawerVisible:", val);
+  if (!val) {
+    ReceberData.value = {};
+  }
+});
+
+const formatValor = (valor) => {
+  if (!valor) return "R$ 0,00";
+  return valor.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+};
+
+const getReceber = async () => {
+  if (loading.value) return;
 
   if (!can("view", "financeiro_recebimento")) {
     setAlert(
@@ -22,446 +239,234 @@
       3000
     );
     router.push("/");
+    return;
   }
 
-  const recebimentos = ref([]);
-  const loading = ref(true);
-  const loadingAdd = ref(false);
+  const dataDeQ = JSON.parse(JSON.stringify(dataDeQuery.value));
+  const dataAteQ = JSON.parse(JSON.stringify(dataAteQuery.value));
 
-  let mesAtual = new Date().getMonth() + 1;
+  loadingReceberData.value = true;
+  loading.value = true;
 
-  // 👉 Store
-  const searchQuery = ref("");
-  const dataDeQuery = ref(moment().startOf("month").format("YYYY-MM-DD"));
-  const dataAteQuery = ref(moment().endOf("month").format("YYYY-MM-DD"));
-  const pagoQuery = ref(2);
-
-  // Data table options
-  const itemsPerPage = ref(10);
-  const page = ref(1);
-  const sortBy = ref();
-  const orderBy = ref();
-  const totalPagamentos = ref(0);
-
-  const updateOptions = (options) => {
-    console.log("Update: ", options);
-    page.value = options.page;
-    sortBy.value = options.sortBy[0]?.key;
-    orderBy.value = options.sortBy[0]?.order;
-
-    getReceber();
+  const query = {
+    page: page.value,
+    itemsPerPage: itemsPerPage.value,
+    q: searchQuery.value,
+    sortBy: sortBy.value,
+    orderBy: orderBy.value,
+    dataDe: dataDeQ,
+    dataAte: dataAteQ,
+    pago: pagoQuery.value,
   };
 
-  // Headers
-  const headers = [
-    {
-      title: "Cliente/Agendamento",
-      key: "age_data",
-    },
-    {
-      title: "Formas de Pag.",
-      key: "fpg_name",
-    },
-    {
-      title: "Nota Fiscal",
-      key: "pgt_numero_nota_fiscal",
-    },
-    {
-      title: "Valor",
-      key: "pgt_valor",
-    },
-    {
-      title: "Data do Pagamento",
-      key: "pgt_data",
-    },
-    {
-      title: "Ações",
-      key: "actions",
-      sortable: false,
-    },
-  ];
-
-  const isRecebimentoDrawerVisible = ref(false);
-  const loadingReceberData = ref(true);
-  const ReceberData = ref({});
-
-  const relatorios = ref({
-    totalRecebimento: 0,
-    totalNaoPago: 0,
-    totalPago: 0,
-  });
-
-  const widgetData = ref([
-    {
-      title: "Total de Recebimentos",
-      value: relatorios.value.totalRecebimento,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-wallet",
-      iconColor: "primary",
-    },
-    {
-      title: "Total Pago",
-      value: relatorios.value.totalPago,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-check",
-      iconColor: "success",
-    },
-    {
-      title: "Total Não Pago",
-      value: relatorios.value.totalNaoPago,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-x",
-      iconColor: "error",
-    },
-  ]);
-
-  const editarRecebimento = async (item) => {
-    if (!can("edit", "financeiro_recebimento")) {
-      return setAlert(
-        "Você não tem permissão para isto.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-
-    try {
-      const res = await $api(`/pagamentos/get/receber/${item}`, {
-        method: "GET",
-      });
-
-      if (!res) return;
-
-      console.log("Produto edit:", res);
-
-      ReceberData.value = res;
-
-      isRecebimentoDrawerVisible.value = true;
-    } catch (error) {
-      console.error("Error getting produto:", error, error.response);
-
-      setAlert(
-        error.response?._data?.message ||
-          "Erro ao carregar dados do recebimento! Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-
-    loadingReceberData.value = false;
-  };
-
-  if (route.query.viewPagamento) {
-    editarRecebimento(route.query.viewPagamento);
-
-    // Remove query from URL
-    router.replace({ query: { tab: "receber" } });
-  }
-
-  const deletarPagamento = async (item) => {
-    if (!can("delete", "financeiro_recebimento")) {
-      return setAlert(
-        "Você não tem permissão para isto.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-
-    if (
-      !(await useConfirm({
-        message: `Tem certeza que deseja deletar o pagamento de <strong>${
-          item.cli_nome
-        }</strong> no valor de <strong>${formatValor(
-          item.pgt_valor
-        )}</strong>?`,
-        allowHtml: true,
-      }))
-    )
-      return;
-
-    try {
-      const res = await $api(`/pagamentos/delete/receber/${item.pgt_id}`, {
-        method: "DELETE",
-      });
-
-      if (!res) return;
-
-      setAlert(
-        "Pagamento deletado com sucesso!",
-        "success",
-        "tabler-trash",
-        3000
-      );
-
-      getReceber();
-    } catch (error) {
-      console.error("Error deleting produto:", error, error.response);
-
-      setAlert(
-        error.response?._data?.message ||
-          "Erro ao deletar pagamento! Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-  };
-
-  watch(isRecebimentoDrawerVisible, (val) => {
-    console.log("isRecebimentoDrawerVisible:", val);
-    if (!val) {
-      ReceberData.value = {};
-    }
-  });
-
-  const formatValor = (valor) => {
-    if (!valor) return "R$ 0,00";
-    return valor.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
+  console.log("query", query);
+  try {
+    const res = await $api("/pagamentos/list/receber", {
+      query,
     });
-  };
 
-  const getReceber = async () => {
-    if (!can("view", "financeiro_recebimento")) {
-      setAlert(
-        "Você não tem permissão para acessar esta página.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-      router.push("/");
-      return;
+    if (!res) return;
+
+    if (res.again) {
+      return await getReceber();
     }
 
-    loadingReceberData.value = true;
-    loading.value = true;
+    console.log("Recebimentos:", res);
 
-    const query = {
-          page: page.value,
-          itemsPerPage: itemsPerPage.value,
-          q: searchQuery.value,
-          sortBy: sortBy.value,
-          orderBy: orderBy.value,
-          dataDe: dataDeQuery.value,
-          dataAte: dataAteQuery.value,
-          pago: pagoQuery.value,
-        };
+    recebimentos.value = res.pagamentos;
+    totalPagamentos.value = res.totalPagamentos;
 
-    console.log("query", query);
-    try {
-      const res = await $api("/pagamentos/list/receber", {
-        query,
-      });
+    console.log(
+      "valor pendente: ",
+      res.pagamentos.reduce((acc, curr) => acc + curr.pgt_valor_bk, 0)
+    );
 
-      if (!res) return;
+    let descW = `${moment(dataDeQ).format("DD/MM/YYYY")} - ${moment(
+      dataAteQ
+    ).format("DD/MM/YYYY")}`;
 
-      if(res.again) {
-        return await getReceber();
-      }
+    //Atualizar widgets
+    widgetData.value = [
+      {
+        title: "Total de Recebimentos",
+        value: res.relatorios.totalRecebimento,
+        desc: descW,
+        icon: "tabler-wallet",
+        iconColor: "primary",
+      },
+      {
+        title: "Total Pago",
+        value: res.relatorios.totalPago,
+        desc: descW,
+        icon: "tabler-check",
+        iconColor: "success",
+      },
+      {
+        title: "Total Não Pago",
+        value: res.relatorios.totalNaoPago,
+        desc: descW,
+        icon: "tabler-x",
+        iconColor: "error",
+      },
+    ];
 
-      console.log("Recebimentos:", res);
+    ReceberData.value = {};
+  } catch (error) {
+    console.error("Error getting produtos:", error, error.response);
 
-      recebimentos.value = res.pagamentos;
-      totalPagamentos.value = res.totalPagamentos;
+    recebimentos.value = [];
+    totalPagamentos.value = 0;
+  }
 
-      console.log("valor pendente: ", res.pagamentos.reduce((acc, curr) => acc + curr.pgt_valor_bk, 0));
+  loading.value = false;
+};
 
-      let descW = `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`;
+const debouncedGetReceber = () => {};
 
-      //Atualizar widgets
-      widgetData.value = [
-        {
-          title: "Total de Recebimentos",
-          value: res.relatorios.totalRecebimento,
-          desc: descW,
-          icon: "tabler-wallet",
-          iconColor: "primary",
-        },
-        {
-          title: "Total Pago",
-          value: res.relatorios.totalPago,
-          desc: descW,
-          icon: "tabler-check",
-          iconColor: "success",
-        },
-        {
-          title: "Total Não Pago",
-          value: res.relatorios.totalNaoPago,
-          desc: descW,
-          icon: "tabler-x",
-          iconColor: "error",
-        },
-      ];
+onMounted(() => {
+  getReceber();
+});
 
-      ReceberData.value = {};
-    } catch (error) {
-      console.error("Error getting produtos:", error, error.response);
+const viewAddPagamentoDialog = ref(false);
 
-      recebimentos.value = [];
-      totalPagamentos.value = 0;
-    }
+const clienteQuery = ref(null);
+const clienteText = ref("");
+const dateQuery = ref(null);
 
-    loading.value = false;
-  };
+const clientes = ref([]);
+const agendamentos = ref([]);
 
-  const debouncedGetReceber = debounce(getReceber, 500);
+const loadingClientes = ref(false);
 
-  onMounted(() => {
+const getClientes = async () => {
+  let textQuery = clienteText.value;
+
+  if (textQuery.length < 3) {
+    clientes.value = [];
+    return;
+  }
+
+  loadingClientes.value = true;
+
+  try {
+    const res = await $api("/clientes/list", {
+      method: "GET",
+      query: {
+        q: textQuery,
+      },
+    });
+
+    if (!res) return;
+
+    console.log("Res Get Clientes:", res);
+
+    clientes.value = res.clientes;
+  } catch (error) {
+    console.error("Error Get Clientes:", error, error.response);
+  } finally {
+    loadingClientes.value = false;
+  }
+};
+
+const getAgendamentos = async () => {
+  loading.value = true;
+
+  try {
+    const res = await $api(`/agenda/getAgendamentosByCliente/`, {
+      method: "GET",
+      query: {
+        cliente: clienteQuery.value,
+        d: dateQuery.value,
+      },
+    });
+
+    console.log("res agendamentos", res);
+
+    agendamentos.value = res.agendamentos;
+  } catch (err) {
+    console.error("Error fetching user data", err, err.response);
+
+    agendamentos.value = [];
+  }
+
+  loading.value = false;
+};
+
+const setCliente = (cliente) => {
+  clienteText.value = cliente.cli_nome;
+  clienteQuery.value = cliente.cli_id;
+  clientes.value = [];
+
+  getAgendamentos();
+};
+
+const clearClientes = () => {
+  clienteText.value = "";
+  clienteQuery.value = "";
+  clientes.value = [];
+  getAgendamentos();
+};
+
+const agendamentoSelected = ref(null);
+
+const createPagamento = async () => {
+  if (!can("create", "financeiro_recebimento")) {
+    return setAlert(
+      "Você não tem permissão para isto.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+
+  if (!agendamentoSelected.value) {
+    setAlert(
+      "Selecione um agendamento para adicionar um pagamento!",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+    return;
+  }
+
+  loadingAdd.value = true;
+
+  console.log("agendamentoSelected:", agendamentoSelected.value);
+
+  try {
+    const res = await $api("/pagamentos/create/receber", {
+      method: "POST",
+      body: {
+        age_id: agendamentoSelected.value,
+      },
+    });
+
+    if (!res) return;
+
+    setAlert(
+      "Pagamento adicionado com sucesso!",
+      "success",
+      "tabler-check",
+      3000
+    );
+
     getReceber();
-  });
+    viewAddPagamentoDialog.value = false;
+    editarRecebimento(res);
+  } catch (error) {
+    console.error("Error creating pagamento:", error, error.response);
 
-  const viewAddPagamentoDialog = ref(false);
-
-  const clienteQuery = ref(null);
-  const clienteText = ref("");
-  const dateQuery = ref(null);
-
-  const clientes = ref([]);
-  const agendamentos = ref([]);
-
-  const loadingClientes = ref(false);
-
-  const getClientes = async () => {
-    let textQuery = clienteText.value;
-
-    if (textQuery.length < 3) {
-      clientes.value = [];
-      return;
-    }
-
-    loadingClientes.value = true;
-
-    try {
-      const res = await $api("/clientes/list", {
-        method: "GET",
-        query: {
-          q: textQuery,
-        },
-      });
-
-      if (!res) return;
-
-      console.log("Res Get Clientes:", res);
-
-      clientes.value = res.clientes;
-    } catch (error) {
-      console.error("Error Get Clientes:", error, error.response);
-    } finally {
-      loadingClientes.value = false;
-    }
-  };
-
-  const getAgendamentos = async () => {
-    loading.value = true;
-
-    try {
-      const res = await $api(`/agenda/getAgendamentosByCliente/`, {
-        method: "GET",
-        query: {
-          cliente: clienteQuery.value,
-          d: dateQuery.value,
-        },
-      });
-
-      console.log("res agendamentos", res);
-
-      agendamentos.value = res.agendamentos;
-    } catch (err) {
-      console.error("Error fetching user data", err, err.response);
-
-      agendamentos.value = [];
-    }
-
-    loading.value = false;
-  };
-
-  const setCliente = (cliente) => {
-    clienteText.value = cliente.cli_nome;
-    clienteQuery.value = cliente.cli_id;
-    clientes.value = [];
-
-    getAgendamentos();
-  };
-
-  const clearClientes = () => {
-    clienteText.value = "";
-    clienteQuery.value = "";
-    clientes.value = [];
-    getAgendamentos();
-  };
-
-  const agendamentoSelected = ref(null);
-
-  const createPagamento = async () => {
-    if(!can("create", "financeiro_recebimento")) {
-      return setAlert(
-        "Você não tem permissão para isto.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-
-    if (!agendamentoSelected.value) {
-      setAlert(
-        "Selecione um agendamento para adicionar um pagamento!",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-      return;
-    }
-
-    loadingAdd.value = true;
-
-    console.log("agendamentoSelected:", agendamentoSelected.value);
-
-    try {
-      const res = await $api("/pagamentos/create/receber", {
-        method: "POST",
-        body: {
-          age_id: agendamentoSelected.value,
-        },
-      });
-
-      if (!res) return;
-
-      setAlert(
-        "Pagamento adicionado com sucesso!",
-        "success",
-        "tabler-check",
-        3000
-      );
-
-      getReceber();
-      viewAddPagamentoDialog.value = false;
-      editarRecebimento(res);
-    } catch (error) {
-      console.error("Error creating pagamento:", error, error.response);
-
-      setAlert(
-        error?.response?._data?.message ||
-          "Erro ao adicionar pagamento! Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        8000
-      );
-    } finally {
-      loadingAdd.value = false;
-    }
-  };
-
+    setAlert(
+      error?.response?._data?.message ||
+        "Erro ao adicionar pagamento! Tente novamente.",
+      "error",
+      "tabler-alert-triangle",
+      8000
+    );
+  } finally {
+    loadingAdd.value = false;
+  }
+};
 </script>
 <template>
   <VCard class="mb-6">
@@ -474,10 +479,9 @@
             label="Pesquise um pagamento"
             placeholder="Pesquise pelo cliente, data do agendamento ou valor"
             density="compact"
-            @input="debouncedGetReceber"
-            @keyup="debouncedGetReceber"
             clearable
             @click:clear="debouncedGetReceber"
+            @update:model-value="debouncedGetReceber"
           />
         </VCol>
 
@@ -503,7 +507,7 @@
           />
         </VCol>
 
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="2">
           <AppSelect
             v-model="pagoQuery"
             :items="[
@@ -518,6 +522,16 @@
             @click:clear="debouncedGetReceber"
             @update:model-value="debouncedGetReceber"
           />
+        </VCol>
+
+        <VCol cols="12" sm="2">
+          <label class="v-label mb-1 text-body-2 text-high-emphasis" style="opacity: 0 !important;">
+            Pesquisar
+          </label>
+          <VBtn color="primary" @click="getReceber">
+            <VIcon icon="tabler-search" class="mr-1" />
+            Pesquisar
+          </VBtn>
         </VCol>
       </VRow>
     </VCardText>

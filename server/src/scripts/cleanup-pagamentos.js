@@ -23,6 +23,10 @@
 const mysql = require('mysql');
 const util = require('util');
 const readline = require('readline');
+const path = require('path');
+const PATHENV = path.join(__dirname, `../.env${process.env.NODE_ENV === 'dev' ? '.dev' : ''}`);
+console.log('PATHENV', PATHENV)
+require('dotenv').config({ path: PATHENV });
 
 // ── Configuração ─────────────────────────────────────────────────────────────
 const DB_CONFIG = {
@@ -33,6 +37,8 @@ const DB_CONFIG = {
     database: process.env.DB_NAME || 'DEVdboregonsys',
     charset: 'utf8mb4'
 };
+
+console.log('DB_CONFIG', DB_CONFIG)
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);

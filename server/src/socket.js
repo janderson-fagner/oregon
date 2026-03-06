@@ -11,6 +11,7 @@ const getSecretKey = () => {
 
 function setupSocket(server) {
     io = new Server(server, {
+        path: '/socket.io',
         cors: {
             origin: "*",
             methods: ["GET", "POST"]

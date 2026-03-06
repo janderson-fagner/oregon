@@ -27,7 +27,7 @@
         method: "GET",
         query: {
           itemsPerPage: allChats.value.length + 12,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -78,7 +78,7 @@
         method: "GET",
         query: {
           q: searchQuery.value,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -159,7 +159,7 @@
       const res = await $api("/zap/getChat/" + id, {
         method: "GET",
         query: {
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -437,7 +437,7 @@
           message: message.value,
           midiaPath: filePath,
           replyId: viewReply.value && msgReply.value ? msgReply.value.id : null,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -502,7 +502,7 @@
         method: "POST",
         query: {
           chatId: selectedChat.value.id,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
         body: formData,
       });
@@ -583,7 +583,7 @@
         method: "GET",
         query: {
           action,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -728,7 +728,7 @@
         method: "GET",
         query: {
           action,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 
@@ -807,7 +807,7 @@
     const body = {
       msgId: msg.id,
       texto: msg.textoEdit,
-      clientId: 'atendimento_1'
+      type: 'atendimento'
     };
 
     console.log("body editMsg", body);
@@ -894,7 +894,7 @@
         method: "GET",
         query: {
           limit: selectedChat.value.messagens.length + 50,
-          clientId: 'atendimento_1'
+          type: 'atendimento'
         },
       });
 

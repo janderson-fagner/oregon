@@ -116,6 +116,9 @@ app.use('/contrato-publico', require('./routes/contratos-publico'));
 app.use('/saas', require('./routes/saas'));
 app.use('/webhook', require('./routes/webhook-asaas'));
 
+// Centro de Ajuda
+app.use('/help-center', require('./routes/help-center'));
+
 /*-------*/
 
 //Logar hora do servidor

@@ -148,7 +148,7 @@ async function initClient(clientId) {
 
         // Evento: QR Code gerado
         client.on('qr', async (qr) => {
-            console.log(`📱 QR Code recebido para client ${clientId}`);
+            console.log(`📱 QR Code recebido para client ${clientId}`, qr);
             await updateClientStatus(clientId, 'qr_ready', { qr_code: qr });
             emitToEmpresa(empresaId, `qr-${clientId}`, qr);
         });

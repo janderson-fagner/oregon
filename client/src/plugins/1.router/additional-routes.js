@@ -17,7 +17,7 @@ export const routes = [
     path: '/apps/user/view/:id',
     name: 'usuario',
     component: () => import('@/pages/apps/user/view/[id].vue'),
-    meta: { action: 'manage', subject: 'config_user' },
+    meta: { action: 'manage', subject: 'config_user', helpTopic: 'configuracoes' },
   },
 
   //Lista Usuários
@@ -28,6 +28,7 @@ export const routes = [
     meta: {
       action: 'manage',
       subject: 'config_user',
+      helpTopic: 'configuracoes',
     },
   },
 
@@ -47,7 +48,7 @@ export const routes = [
     path: '/agendamento',
     name: 'agendamento',
     component: () => import('@/pages/apps/agendamentos/agendamentos-index.vue'),
-    meta: { action: 'read', subject: 'all', all: true },
+    meta: { action: 'read', subject: 'all', all: true, helpTopic: 'agendamentos' },
   },
 
   //Clientes
@@ -58,6 +59,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'cliente',
+      helpTopic: 'clientes',
     },
   },
   {
@@ -67,6 +69,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'crm_clientes',
+      helpTopic: 'clientes',
     },
   },
 
@@ -78,7 +81,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente'],
+      helpTopic: 'servicos',
     },
   },
 
@@ -101,6 +105,7 @@ export const routes = [
     meta: {
       action: 'manage',
       subject: 'config_gerais',
+      helpTopic: 'configuracoes',
     },
   },
 
@@ -113,6 +118,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -123,6 +129,7 @@ export const routes = [
       action: 'manage',
       subject: 'crm_modelos_mensagens',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -133,6 +140,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_funil_vendas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
    {
@@ -143,6 +151,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_funil_vendas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -153,6 +162,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_funil_vendas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -163,6 +173,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_funil_vendas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -173,6 +184,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_fluxos',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -183,6 +195,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_campanhas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -193,6 +206,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_campanhas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -203,6 +217,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_campanhas',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -213,6 +228,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_chat',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
   {
@@ -223,6 +239,7 @@ export const routes = [
       action: 'view',
       subject: 'crm_chat',
       feature: 'acessoCRM',
+      helpTopic: 'crm',
     },
   },
 
@@ -234,7 +251,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -247,7 +265,8 @@ export const routes = [
       action: 'view',
       subject: 'estoque',
       feature: 'gerenciamentoEstoque',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'estoque',
     },
   },
   {
@@ -258,7 +277,8 @@ export const routes = [
       action: 'view',
       subject: 'estoque',
       feature: 'gerenciamentoEstoque',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'estoque',
     },
   },
   {
@@ -269,7 +289,8 @@ export const routes = [
       action: 'view',
       subject: 'estoque',
       feature: 'gerenciamentoEstoque',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'estoque',
     },
   },
   {
@@ -280,7 +301,8 @@ export const routes = [
       action: 'view',
       subject: 'estoque',
       feature: 'gerenciamentoEstoque',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'estoque',
     },
   },
 
@@ -292,7 +314,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'configuracoes',
     },
   },
 
@@ -305,6 +328,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -317,6 +341,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -329,6 +354,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -341,6 +367,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -353,6 +380,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['atendente-senior', 'admin', 'gerente', 'financeiro'],
+      helpTopic: 'financeiro',
     },
   },
 
@@ -365,6 +393,7 @@ export const routes = [
       action: 'read',
       subject: 'all',
       role: ['financeiro', 'admin', 'gerente', 'atendente', 'atendente-senior'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -377,7 +406,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['financeiro', 'admin', 'gerente']
+      role: ['financeiro', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -389,7 +419,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['financeiro', 'admin', 'gerente']
+      role: ['financeiro', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -401,7 +432,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['admin', 'gerente']
+      role: ['admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -413,7 +445,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -425,7 +458,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -437,7 +471,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['atendente', 'atendente-senior', 'admin', 'gerente']
+      role: ['atendente', 'atendente-senior', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -449,7 +484,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['financeiro', 'admin', 'gerente']
+      role: ['financeiro', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
   //Relatórios/Orçamentos
@@ -460,7 +496,8 @@ export const routes = [
     meta: {
       action: 'read',
       subject: 'all',
-      role: ['financeiro', 'admin', 'gerente']
+      role: ['financeiro', 'admin', 'gerente'],
+      helpTopic: 'relatorios',
     },
   },
 
@@ -503,6 +540,16 @@ export const routes = [
     },
   },
   {
+    path: '/saas/ajuda',
+    name: 'saas-ajuda',
+    component: () => import('@/pages/apps/saas/ajuda.vue'),
+    meta: {
+      action: 'manage',
+      subject: 'all',
+      role: ['admin'],
+    },
+  },
+  {
     path: '/saas/config',
     name: 'saas-configuracoes',
     component: () => import('@/pages/apps/saas/config.vue'),
@@ -538,6 +585,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'cliente',
+      helpTopic: 'financeiro',
     },
   },
   {
@@ -547,6 +595,7 @@ export const routes = [
     meta: {
       action: 'view',
       subject: 'cliente',
+      helpTopic: 'financeiro',
     },
   },
   {
@@ -578,6 +627,7 @@ export const routes = [
       action: 'view',
       subject: 'calculadora',
       feature: 'acessoCalculadora',
+      helpTopic: 'servicos',
     },
   },
 

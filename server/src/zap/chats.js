@@ -39,7 +39,7 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
         const chatsAll = await client.getChats();
 
         let chats = chatsAll.filter(chat => {
-            if (chat.isGroup || chat.id.server !== 'c.us' || chat.id.server !== 'lid') {
+            if (chat.isGroup || (chat.id.server !== 'c.us' && chat.id.server !== 'lid')) {
                 return false;
             }
 
@@ -69,7 +69,11 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
             const contato = await chat.getContact();
 
             if (contato) {
-                contato.avatar = await contato.getProfilePicUrl();
+                try {
+                    contato.avatar = await contato.getProfilePicUrl();
+                } catch (e) {
+                    contato.avatar = null;
+                }
                 chat.contact = contato;
             }
         }
@@ -138,7 +142,11 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
         const contato = await chat.getContact();
 
         if (contato) {
-            contato.avatar = await contato.getProfilePicUrl();
+            try {
+                contato.avatar = await contato.getProfilePicUrl();
+            } catch (e) {
+                contato.avatar = null;
+            }
             chat.contact = contato;
         }
 

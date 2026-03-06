@@ -53,17 +53,19 @@ const {
 } = require('../zap');
 
 /**
- * Obtém o clientId dos parâmetros da requisição
- * Por padrão usa 'default' se não fornecido
+ * Resolve o clientId do WhatsApp a partir do usuário autenticado (SaaS).
+ * Convenção de ID: {tipo}_{empresa_id} (ex: atendimento_1, disparos_2)
+ * @param {Object} req - Request com req.user.empresa_id
+ * @param {string} [tipo] - Tipo do client (atendimento, disparos). Se null, usa query/body 'type' ou default 'atendimento'
+ * @returns {string} clientId no formato {tipo}_{empresa_id}
  */
-function getClientId(req) {
-    if(req.query?.clientId ) {
-        return req.query.clientId;
-    } else if(req.body?.clientId) {
-        return req.body.clientId;
-    } else {
-        return 'atendimento_1';
+function getClientId(req, tipo = null) {
+    const empresa_id = req.user?.empresa_id;
+    if (!empresa_id) {
+        throw new Error('Usuário não autenticado');
     }
+    const type = tipo || req.query?.type || req.body?.type || 'atendimento';
+    return `${type}_${empresa_id}`;
 }
 
 // ============= ROTAS DE GERENCIAMENTO DE CLIENTS =============
@@ -103,10 +105,17 @@ router.post('/clients/create', async (req, res) => {
     }
 });
 
-// Remove um client
+// Remove um client (valida que pertence à empresa do usuário)
 router.delete('/clients/delete/:clientId', async (req, res) => {
     try {
         const { clientId } = req.params;
+        const empresa_id = req.user?.empresa_id;
+
+        // Valida que o client pertence à empresa do usuário
+        const check = await dbQuery('SELECT id FROM Clients WHERE id = ? AND empresa_id = ?', [clientId, empresa_id]);
+        if (check.length === 0) {
+            return res.status(403).json({ error: 'Client não pertence à sua empresa' });
+        }
 
         const result = await deleteClient(clientId);
 
@@ -170,15 +179,12 @@ router.get('/disconnect', async (req, res) => {
 router.get('/check-conn', async (req, res) => {
     try {
         const clientId = getClientId(req);
+        const empresa_id = req.user.empresa_id;
 
-        const empresa_id = req.user?.empresa_id || null;
-        let checkQuery = 'SELECT * FROM Clients WHERE id = ?';
-        let checkParams = [clientId];
-        if (empresa_id) {
-            checkQuery += ' AND empresa_id = ?';
-            checkParams.push(empresa_id);
-        }
-        const clientData = await dbQuery(checkQuery, checkParams);
+        const clientData = await dbQuery(
+            'SELECT * FROM Clients WHERE id = ? AND empresa_id = ?',
+            [clientId, empresa_id]
+        );
 
         if (clientData.length === 0) {
             return res.status(200).json({ status: 'Desconectado', clientId });
@@ -186,8 +192,8 @@ router.get('/check-conn', async (req, res) => {
 
         const status = clientData[0].status === 'connected' ? 'Conectado' : 'Desconectado';
 
-        res.status(200).json({ 
-            status, 
+        res.status(200).json({
+            status,
             clientId,
             data: clientData[0]
         });
@@ -377,7 +383,7 @@ router.get('/getChat/:id', async (req, res) => {
             return res.status(200).json({ status: 'Desconectado' });
         }
 
-        const empresa_id = req.user?.empresa_id || null;
+        const empresa_id = req.user.empresa_id;
         const chat = await getChatById(clientId, id, mapeado, limit, empresa_id);
 
         if (!chat) {

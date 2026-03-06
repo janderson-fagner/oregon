@@ -47,7 +47,7 @@
     "socket": "^1.1.23",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.3",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#a379900",
+    "whatsapp-web.js": "^1.34.6",
     "xlsx": "^0.18.5"
   }
 }

@@ -1,6 +1,5 @@
 import { io } from "socket.io-client"
 import { useCookie } from '@core/composable/useCookie'
-import { watch } from 'vue'
 
 /**
  * Socket.io client com autenticação JWT, reconexão robusta e isolamento por empresa.
@@ -10,19 +9,7 @@ import { watch } from 'vue'
  */
 
 function getSocketUrl() {
-  if (import.meta.env.VITE_SOCKET_URL) {
-    return import.meta.env.VITE_SOCKET_URL
-  }
-  const apiUrl = import.meta.env.VITE_API_BASE_URL || ''
-  if (apiUrl.startsWith('http')) {
-    try {
-      const url = new URL(apiUrl)
-      return url.origin
-    } catch (e) {
-      return window.location.origin
-    }
-  }
-  return window.location.origin
+  return import.meta.env.VITE_APP_URL || window.location.origin
 }
 
 /**
@@ -37,8 +24,12 @@ function getToken() {
   }
 }
 
+const isDevVite = import.meta.env.DEV;
+
+console.log('isDevVite', isDevVite, 'url', getSocketUrl())
 // Cria o socket SEM autoConnect - conectamos manualmente após ter o token
 export const socket = io(getSocketUrl(), {
+  path: isDevVite ? '/apidev/socket.io' : '/socket.io',
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,

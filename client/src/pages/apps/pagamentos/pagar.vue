@@ -1,20 +1,154 @@
 <script setup>
-  import { VDataTableServer } from "vuetify/labs/VDataTable";
-  import { useConfirm } from "@/utils/confirm.js";
-  import { paginationMeta } from "@api-utils/paginationMeta";
-  import { useAlert } from "@/composables/useAlert";
-  import { can } from "@layouts/plugins/casl";
-  import { useFunctions } from "@/composables/useFunctions";
-  import moment from "moment";
+import { VDataTableServer } from "vuetify/labs/VDataTable";
+import { useConfirm } from "@/utils/confirm.js";
+import { paginationMeta } from "@api-utils/paginationMeta";
+import { useAlert } from "@/composables/useAlert";
+import { can } from "@layouts/plugins/casl";
+import { useFunctions } from "@/composables/useFunctions";
+import moment from "moment";
 
-  import PagarDialog from "@/views/apps/pagamentos/PagarDialog.vue";
-  import DespesasDialog from "@/views/apps/pagamentos/DespesasDialog.vue";
+import PagarDialog from "@/views/apps/pagamentos/PagarDialog.vue";
+import DespesasDialog from "@/views/apps/pagamentos/DespesasDialog.vue";
 
-  const { setAlert } = useAlert();
-  const { debounce } = useFunctions();
+const { setAlert } = useAlert();
+const { debounce } = useFunctions();
 
-  const router = useRouter();
-  const route = useRoute();
+const router = useRouter();
+const route = useRoute();
+
+if (!can("pagar", "financeiro_despesa")) {
+  setAlert(
+    "Você não tem permissão para acessar esta página.",
+    "error",
+    "tabler-alert-triangle",
+    3000
+  );
+  router.push("/");
+}
+
+const pagar = ref([]);
+const loading = ref(false);
+
+// 👉 Store
+const searchQuery = ref("");
+const dataDeQuery = ref(moment().startOf("month").format("YYYY-MM-DD"));
+const dataAteQuery = ref(moment().endOf("month").format("YYYY-MM-DD"));
+const pagoQuery = ref(5);
+const funcionarioQuery = ref(null);
+const tipoQuery = ref(null);
+
+// Data table options
+const itemsPerPage = ref(10);
+const page = ref(1);
+const sortBy = ref();
+const orderBy = ref();
+const totalPagar = ref(0);
+
+const updateOptions = (options) => {
+  page.value = options.page;
+  sortBy.value = options.sortBy[0]?.key;
+  orderBy.value = options.sortBy[0]?.order;
+
+  getPagar();
+};
+
+// Headers
+const headers = [
+  {
+    title: "Descrição",
+    key: "descricao",
+    sortable: false,
+  },
+  {
+    title: "Tipo",
+    key: "tipo",
+  },
+  {
+    title: "Valor",
+    key: "valor",
+  },
+  {
+    title: "Vencimento",
+    key: "data",
+  },
+  {
+    title: "Status",
+    key: "pago",
+  },
+  {
+    title: "Ações",
+    key: "actions",
+    sortable: false,
+  },
+];
+
+const selecionados = ref([]);
+const contas = ref([]);
+
+const pagoSelect = [
+  { value: 0, title: "Todos" },
+  { value: 5, title: "Não pagos" },
+  { value: 1, title: "Pago" },
+  { value: 2, title: "Em aberto" },
+  { value: 3, title: "Em atraso" },
+  { value: 4, title: "Pagar hoje" },
+];
+
+const relatorios = ref({
+  totalaPagar: 0,
+  totalEmAberto: 0,
+  totalPago: 0,
+  totalEmAtraso: 0,
+});
+
+const widgetData = ref([
+  {
+    title: "Total a Pagar",
+    value: relatorios.value.totalaPagar,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-credit-card",
+    iconColor: "warning",
+  },
+  {
+    title: "Total em Aberto",
+    value: relatorios.value.totalEmAberto,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-x",
+    iconColor: "error",
+  },
+  {
+    title: "Total Pago",
+    value: relatorios.value.totalPago,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-check",
+    iconColor: "success",
+  },
+  {
+    title: "Total em Atraso",
+    value: relatorios.value.totalEmAtraso,
+    desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
+      dataAteQuery.value
+    ).format("DD/MM/YYYY")}`,
+    icon: "tabler-alert-triangle",
+    iconColor: "error",
+  },
+]);
+
+const formatValor = (valor) => {
+  return valor.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+};
+
+const getPagar = async () => {
+  if (loading.value) return;
 
   if (!can("pagar", "financeiro_despesa")) {
     setAlert(
@@ -24,361 +158,232 @@
       3000
     );
     router.push("/");
+    return;
   }
 
-  const pagar = ref([]);
-  const loading = ref(true);
+  if (!dataDeQuery.value || !dataAteQuery.value) {
+    return setAlert(
+      "Selecione a data inicial e final para filtrar as contas a pagar.",
+      "warning",
+      "tabler-alert-triangle",
+      4000
+    );
+  }
 
-  // 👉 Store
-  const searchQuery = ref("");
-  const dataDeQuery = ref(moment().startOf("month").format("YYYY-MM-DD"));
-  const dataAteQuery = ref(moment().endOf("month").format("YYYY-MM-DD"));
-  const pagoQuery = ref(5);
-  const funcionarioQuery = ref(null);
-  const tipoQuery = ref(null);
+  const dataDeQ = JSON.parse(JSON.stringify(dataDeQuery.value));
+  const dataAteQ = JSON.parse(JSON.stringify(dataAteQuery.value));
 
-  // Data table options
-  const itemsPerPage = ref(10);
-  const page = ref(1);
-  const sortBy = ref();
-  const orderBy = ref();
-  const totalPagar = ref(0);
-
-  const updateOptions = (options) => {
-    page.value = options.page;
-    sortBy.value = options.sortBy[0]?.key;
-    orderBy.value = options.sortBy[0]?.order;
-
-    getPagar();
+  let queryPagar = {
+    page: page.value,
+    itemsPerPage: itemsPerPage.value,
+    q: searchQuery.value,
+    sortBy: sortBy.value,
+    orderBy: orderBy.value,
+    dataDe: dataDeQ,
+    dataAte: dataAteQ,
+    status: pagoQuery.value,
+    funcionario: funcionarioQuery.value,
+    tipo: tipoQuery.value,
   };
 
-  // Headers
-  const headers = [
-    {
-      title: "Descrição",
-      key: "descricao",
-      sortable: false,
-    },
-    {
-      title: "Tipo",
-      key: "tipo",
-    },
-    {
-      title: "Valor",
-      key: "valor",
-    },
-    {
-      title: "Vencimento",
-      key: "data",
-    },
-    {
-      title: "Status",
-      key: "pago",
-    },
-    {
-      title: "Ações",
-      key: "actions",
-      sortable: false
-    }
-  ];
+  console.log("Query Pagar", queryPagar);
+  selecionados.value = [];
+  loading.value = true;
 
-  const selecionados = ref([]);
-  const contas = ref([]);
+  try {
+    const res = await $api("/pagamentos/list/pagar", {
+      query: queryPagar,
+    });
 
-  const pagoSelect = [
-    { value: 0, title: "Todos" },
-    { value: 5, title: "Não pagos" },
-    { value: 1, title: "Pago" },
-    { value: 2, title: "Em aberto" },
-    { value: 3, title: "Em atraso" },
-    { value: 4, title: "Pagar hoje" },
-  ];
+    if (!res) return;
 
-  const relatorios = ref({
-    totalaPagar: 0,
-    totalEmAberto: 0,
-    totalPago: 0,
-    totalEmAtraso: 0,
+    console.log("pagar:", res);
+
+    pagar.value = res.pagar;
+    totalPagar.value = res.totalPagar;
+
+    let descW = `${moment(dataDeQ).format("DD/MM/YYYY")} - ${moment(
+      dataAteQ
+    ).format("DD/MM/YYYY")}`;
+
+    //Atualizar widgets
+    widgetData.value = [
+      {
+        title: "Total a Pagar",
+        value: res.relatorios.totalaPagar,
+        desc: descW,
+        icon: "tabler-credit-card",
+        iconColor: "warning",
+      },
+      {
+        title: "Total em Aberto",
+        value: res.relatorios.totalEmAberto,
+        desc: descW,
+        icon: "tabler-x",
+        iconColor: "error",
+      },
+      {
+        title: "Total Pago",
+        value: res.relatorios.totalPago,
+        desc: descW,
+        icon: "tabler-check",
+        iconColor: "success",
+      },
+      {
+        title: "Total em Atraso",
+        value: res.relatorios.totalEmAtraso,
+        desc: descW,
+        icon: "tabler-alert-triangle",
+        iconColor: "error",
+      },
+    ];
+  } catch (error) {
+    console.error("Error getting produtos:", error, error.response);
+
+    pagar.value = [];
+  }
+
+  loading.value = false;
+};
+
+onMounted(() => {
+  getPagar();
+});
+
+const checkDateStatus = (date) => {
+  if (!date) return { status: "Em aberto", color: "info" };
+
+  if (moment(date).isBefore(moment(), "day")) {
+    return { status: "Em atraso", color: "error" };
+  } else if (moment(date).isSame(moment(), "day")) {
+    return { status: "Pagar hoje", color: "warning" };
+  }
+
+  return { status: "Em aberto", color: "info" };
+};
+
+watch(selecionados, (newVal) => {
+  console.log("selecionados:", newVal);
+
+  contas.value = newVal;
+
+  //Adicionar classe "row-selecionada" nas linhas selecionadas
+  const rows = document.querySelectorAll(".tabela-produtos tbody tr");
+  rows.forEach((row) => {
+    row.classList.remove("row-selecionada");
   });
 
-  const widgetData = ref([
-    {
-      title: "Total a Pagar",
-      value: relatorios.value.totalaPagar,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-credit-card",
-      iconColor: "warning",
-    },
-    {
-      title: "Total em Aberto",
-      value: relatorios.value.totalEmAberto,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-x",
-      iconColor: "error",
-    },
-    {
-      title: "Total Pago",
-      value: relatorios.value.totalPago,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-check",
-      iconColor: "success",
-    },
-    {
-      title: "Total em Atraso",
-      value: relatorios.value.totalEmAtraso,
-      desc: `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`,
-      icon: "tabler-alert-triangle",
-      iconColor: "error",
-    },
-  ]);
+  newVal.forEach((item) => {
+    const row = document.querySelector(
+      `.tabela-produtos tbody tr td div[data-id-item="${item.id}"]`
+    )?.parentElement?.parentElement;
+    if (row) row.classList.add("row-selecionada");
+  });
+});
 
-  const formatValor = (valor) => {
-    return valor.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
-  };
+const isPagarDrawerVisible = ref(false);
 
-  const getPagar = async () => {
-    if (!can("pagar", "financeiro_despesa")) {
-      setAlert(
-        "Você não tem permissão para acessar esta página.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-      router.push("/");
-      return;
-    }
+const openPagarDrawer = () => {
+  if (selecionados.value.length == 0) {
+    setAlert(
+      "Selecione as contas para pagamento antes de adicionar uma saída!",
+      "error",
+      "tabler-alert-triangle",
+      4000
+    );
+    return;
+  }
+  isPagarDrawerVisible.value = true;
+};
 
-    if (!dataDeQuery.value || !dataAteQuery.value) {
-      return setAlert(
-        "Selecione a data inicial e final para filtrar as contas a pagar.",
-        "warning",
-        "tabler-alert-triangle",
-        4000
-      );
-    }
-
-    let queryPagar = {
-      page: page.value,
-      itemsPerPage: itemsPerPage.value,
-      q: searchQuery.value,
-      sortBy: sortBy.value,
-      orderBy: orderBy.value,
-      dataDe: dataDeQuery.value,
-      dataAte: dataAteQuery.value,
-      status: pagoQuery.value,
-      funcionario: funcionarioQuery.value,
-      tipo: tipoQuery.value,
-    };
-
-    console.log("Query Pagar", queryPagar);
+watch(isPagarDrawerVisible, (newVal) => {
+  if (!newVal) {
     selecionados.value = [];
-    loading.value = true;
+  }
+});
 
-    try {
-      const res = await $api("/pagamentos/list/pagar", {
-        query: queryPagar,
-      });
+const funcionarios = ref([]);
+const atualUser = useCookie("userData").value;
 
-      if (!res) return;
-
-      console.log("pagar:", res);
-
-      pagar.value = res.pagar;
-      totalPagar.value = res.totalPagar;
-
-      let descW = `${moment(dataDeQuery.value).format("DD/MM/YYYY")} - ${moment(
-        dataAteQuery.value
-      ).format("DD/MM/YYYY")}`;
-
-      //Atualizar widgets
-      widgetData.value = [
-        {
-          title: "Total a Pagar",
-          value: res.relatorios.totalaPagar,
-          desc: descW,
-          icon: "tabler-credit-card",
-          iconColor: "warning",
-        },
-        {
-          title: "Total em Aberto",
-          value: res.relatorios.totalEmAberto,
-          desc: descW,
-          icon: "tabler-x",
-          iconColor: "error",
-        },
-        {
-          title: "Total Pago",
-          value: res.relatorios.totalPago,
-          desc: descW,
-          icon: "tabler-check",
-          iconColor: "success",
-        },
-        {
-          title: "Total em Atraso",
-          value: res.relatorios.totalEmAtraso,
-          desc: descW,
-          icon: "tabler-alert-triangle",
-          iconColor: "error",
-        },
-      ];
-    } catch (error) {
-      console.error("Error getting produtos:", error, error.response);
-
-      pagar.value = [];
-    }
-
-    loading.value = false;
-  };
-
-  onMounted(() => {
-    getPagar();
-  });
-
-  const checkDateStatus = (date) => {
-    if (!date) return { status: "Em aberto", color: "info" };
-
-    if (moment(date).isBefore(moment(), "day")) {
-      return { status: "Em atraso", color: "error" };
-    } else if (moment(date).isSame(moment(), "day")) {
-      return { status: "Pagar hoje", color: "warning" };
-    }
-
-    return { status: "Em aberto", color: "info" };
-  };
-
-  watch(selecionados, (newVal) => {
-    console.log("selecionados:", newVal);
-
-    contas.value = newVal;
-
-    //Adicionar classe "row-selecionada" nas linhas selecionadas
-    const rows = document.querySelectorAll(".tabela-produtos tbody tr");
-    rows.forEach((row) => {
-      row.classList.remove("row-selecionada");
+const fetchResources = async () => {
+  let link = "/agenda/funcionarios";
+  try {
+    const res = await $api(link, {
+      method: "GET",
+      query: {
+        ativo: null,
+        data: atualUser.id,
+      },
     });
 
-    newVal.forEach((item) => {
-      const row = document.querySelector(
-        `.tabela-produtos tbody tr td div[data-id-item="${item.id}"]`
-      )?.parentElement?.parentElement;
-      if (row) row.classList.add("row-selecionada");
+    if (!res) return;
+
+    funcionarios.value = res;
+
+    //Adicionar todos os funcionários
+    funcionarios.value.unshift({
+      id: null,
+      fullName: "Todos",
     });
-  });
+  } catch (error) {
+    console.error("Error fetching resources", error);
+  }
+};
 
-  const isPagarDrawerVisible = ref(false);
+fetchResources();
 
-  const openPagarDrawer = () => {
-    if (selecionados.value.length == 0) {
-      setAlert(
-        "Selecione as contas para pagamento antes de adicionar uma saída!",
-        "error",
-        "tabler-alert-triangle",
-        4000
-      );
-      return;
-    }
-    isPagarDrawerVisible.value = true;
-  };
+const tipoItens = [
+  { value: null, title: "Todos" },
+  { value: "Despesa", title: "Despesas" },
+  { value: "Comissão", title: "Comissões" },
+];
 
-  watch(isPagarDrawerVisible, (newVal) => {
-    if (!newVal) {
-      selecionados.value = [];
-    }
-  });
+const isDespesaDrawerVisible = ref(false);
+const DespesaData = ref({});
 
-  const funcionarios = ref([]);
-  const atualUser = useCookie("userData").value;
+watch(isDespesaDrawerVisible, (newVal) => {
+  if (!newVal) {
+    DespesaData.value = {};
+  }
+});
 
-  const fetchResources = async () => {
-    let link = "/agenda/funcionarios";
-    try {
-      const res = await $api(link, {
-        method: "GET",
-        query: {
-          ativo: null,
-          data: atualUser.id,
-        },
-      });
+const editarDespesa = async (item) => {
+  if (!can("edit", "financeiro_despesa")) {
+    setAlert(
+      "Você não tem permissão para editar despesas!",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+    return;
+  }
 
-      if (!res) return;
+  if (item.includes("D")) item = item.replace("D", "");
+  try {
+    const res = await $api(`/pagamentos/get/despesas/${item}`, {
+      method: "GET",
+    });
 
-      funcionarios.value = res;
+    if (!res) return;
 
-      //Adicionar todos os funcionários
-      funcionarios.value.unshift({
-        id: null,
-        fullName: "Todos",
-      });
-    } catch (error) {
-      console.error("Error fetching resources", error);
-    }
-  };
+    console.log("Produto edit:", res);
 
-  fetchResources();
+    DespesaData.value = res;
+    isDespesaDrawerVisible.value = true;
+  } catch (error) {
+    console.error("Error getting produto:", error, error.response);
 
-  const tipoItens = [
-    { value: null, title: "Todos" },
-    { value: "Despesa", title: "Despesas" },
-    { value: "Comissão", title: "Comissões" },
-  ];
+    setAlert(
+      error?.response?._data?.message ||
+        "Erro ao carregar despesa! Tente novamente.",
+      "error",
+      "tabler-alert-triangle",
+      3000
+    );
+  }
+};
 
-  const isDespesaDrawerVisible = ref(false);
-  const DespesaData = ref({});
-
-  watch(isDespesaDrawerVisible, (newVal) => {
-    if (!newVal) {
-      DespesaData.value = {};
-    }
-  });
-
-  const editarDespesa = async (item) => {
-    if (!can("edit", "financeiro_despesa")) {
-      setAlert(
-        "Você não tem permissão para editar despesas!",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-      return;
-    }
-
-    if(item.includes('D')) item = item.replace('D', '');
-    try {
-      const res = await $api(`/pagamentos/get/despesas/${item}`, {
-        method: "GET",
-      });
-
-      if (!res) return;
-
-      console.log("Produto edit:", res);
-
-      DespesaData.value = res;
-      isDespesaDrawerVisible.value = true;
-    } catch (error) {
-      console.error("Error getting produto:", error, error.response);
-
-      setAlert(
-        error?.response?._data?.message ||
-          "Erro ao carregar despesa! Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        3000
-      );
-    }
-  };
-
-  const debouncedGetPagar = debounce(getPagar, 500);
+const debouncedGetPagar = () => {};
 </script>
 <template>
   <VCard class="mb-6">
@@ -419,7 +424,7 @@
           />
         </VCol>
 
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <AppSelect
             v-model="pagoQuery"
             :items="pagoSelect"
@@ -432,7 +437,7 @@
           />
         </VCol>
 
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <AppSelect
             v-model="funcionarioQuery"
             :items="funcionarios"
@@ -445,7 +450,7 @@
           />
         </VCol>
 
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <AppSelect
             v-model="tipoQuery"
             :items="tipoItens"
@@ -454,6 +459,16 @@
             density="compact"
             @update:model-value="debouncedGetPagar"
           />
+        </VCol>
+
+        <VCol cols="12" sm="3">
+          <label class="v-label mb-1 text-body-2 text-high-emphasis w-100" style="opacity: 0 !important;">
+            Pesquisar
+          </label>
+          <VBtn color="primary" @click="getPagar">
+            <VIcon icon="tabler-search" class="mr-1" />
+            Pesquisar
+          </VBtn>
         </VCol>
       </VRow>
     </VCardText>
@@ -577,7 +592,11 @@
       </template>
 
       <template #item.actions="{ item }">
-        <IconBtn color="warning" @click="editarDespesa(item.id)" v-if="item.tipo == 'Despesa'">
+        <IconBtn
+          color="warning"
+          @click="editarDespesa(item.id)"
+          v-if="item.tipo == 'Despesa'"
+        >
           <VIcon icon="tabler-edit" />
         </IconBtn>
       </template>
@@ -665,11 +684,11 @@
 </template>
 
 <style>
-  tr.v-data-table__tr.row-selecionada {
-    background-color: #3182ce75;
-  }
+tr.v-data-table__tr.row-selecionada {
+  background-color: #3182ce75;
+}
 
-  .tabela-pagar .v-selection-control--disabled {
-    display: none !important;
-  }
+.tabela-pagar .v-selection-control--disabled {
+  display: none !important;
+}
 </style>

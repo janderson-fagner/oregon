@@ -376,7 +376,7 @@ const mountMenu = () => {
           {
             title: 'Área de Ajuda',
             icon: { icon: 'tabler-help' },
-            // to: 'saas-ajuda',
+            to: 'saas-ajuda',
             action: 'manage',
             subject: 'all'
           },
