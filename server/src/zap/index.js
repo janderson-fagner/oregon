@@ -33,10 +33,11 @@ async function setupClientListeners(clientId) {
 
     // Listener de criação de mensagens
     client.on('message_create', async (message) => {
+        //console.log('[MESSAGE_CREATE] Mensagem recebida:', message, empresaId);
         try {
             const chat = await message.getChat();
 
-            if (chat && !chat.isGroup && chat.type != 'e2e_notification' &&
+            if (chat && !chat.isGroup && message.type != 'e2e_notification' && chat.type != 'e2e_notification' &&
                 (chat.id.server === 'c.us' || chat.id.server === 'lid')
                 && !usersJump.includes(chat.id.user)) {
 
@@ -57,14 +58,14 @@ async function setupClientListeners(clientId) {
                             const { handleIncomingMessage } = require('../flows/core/flowEngine');
                             let phone;
 
-                            if(chat.id.server === 'c.us'){
+                            if (chat.id.server === 'c.us') {
                                 phone = chat.id.user;
-                            } else if(chat.id.server === 'lid'){
+                            } else if (chat.id.server === 'lid') {
                                 const contato = await chat.getContact();
                                 phone = contato.number;
                             }
 
-                            if(!phone){
+                            if (!phone) {
                                 console.error('Número de telefone não encontrado');
                                 return;
                             }
@@ -85,7 +86,8 @@ async function setupClientListeners(clientId) {
                                 chatId: chat.id._serialized,
                                 text: message.body || '',
                                 mediaPath,
-                                mediaType
+                                mediaType,
+                                empresa_id: empresaId
                             });
                         } catch (e) {
                             console.error('flowEngine incoming error:', e.message);
@@ -126,7 +128,7 @@ async function setupClientListeners(clientId) {
  */
 function removeClientListeners(clientId) {
     const client = getClientById(clientId);
-    
+
     if (!client) {
         return;
     }
@@ -146,9 +148,9 @@ function removeClientListeners(clientId) {
 async function initDefaultClient() {
     try {
         console.log('🔄 Verificando clients para auto-inicialização...');
-        
+
         const dbQuery = require('../utils/dbHelper');
-        
+
         // Buscar TODOS os clients que estavam conectados (multi-tenant SaaS)
         const allClients = await dbQuery('SELECT * FROM Clients WHERE status = ?', ['connected']);
 
@@ -158,7 +160,7 @@ async function initDefaultClient() {
                 if (true) {
                     console.log(`🚀 Auto-inicializando client ${clientId}...`);
                     const result = await clientFunctions.initClient(clientId);
-                    
+
                     if (result.success) {
                         setupClientListeners(clientId);
                         console.log(`✅ Client ${clientId} inicializado com sucesso`);
@@ -170,7 +172,7 @@ async function initDefaultClient() {
                 console.error(`❌ Erro ao inicializar client ${clientId}:`, error);
             }
         }
-        
+
         console.log('✅ Auto-inicialização de clients concluída');
     } catch (error) {
         console.error('Erro na auto-inicialização:', error);
@@ -184,11 +186,11 @@ async function initDefaultClient() {
  */
 async function initClientWithListeners(clientId) {
     const result = await clientFunctions.initClient(clientId);
-    
+
     if (result.success) {
         setupClientListeners(clientId);
     }
-    
+
     return result;
 }
 
@@ -208,20 +210,20 @@ module.exports = {
     ...clientFunctions,
     initClient: initClientWithListeners, // Sobrescreve com versão que adiciona listeners
     disconnectClient: disconnectClientWithCleanup, // Sobrescreve com versão que remove listeners
-    
+
     // Funções de mensagens
     ...messageFunctions,
-    
+
     // Funções de chats
     ...chatFunctions,
-    
+
     // Funções utilitárias
     ...utilFunctions,
-    
+
     // Funções de gerenciamento de listeners
     setupClientListeners,
     removeClientListeners,
-    
+
     // Inicialização
     initDefaultClient
 };

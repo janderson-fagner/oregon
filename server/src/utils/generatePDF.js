@@ -21,7 +21,7 @@ const montserratBoldFont = path.join(__dirname, '../email-templates/fonts/Montse
 const capitalizeName = (name) => {
     if (!name) return '';
     name = name.toLowerCase().trim();
-    return name.split(' ').map(word => word.length > 3 ? word.charAt(0).toUpperCase() + word.slice(1) : word).join(' ');
+    return name.split(' ').map(word => word.length > 2 ? word.charAt(0).toUpperCase() + word.slice(1) : word).join(' ');
 }
 
 const formatValor = (valor) => {

@@ -65,7 +65,7 @@ async function forwardToHumanOnError(context, errorReason) {
         
         // Notificar equipe (se configurado)
         try {
-            const notifyConfig = await dbQuery("SELECT value FROM Options WHERE type = 'gemini_comportamento' LIMIT 1");
+            const notifyConfig = await dbQuery("SELECT value FROM Options WHERE type = 'gemini_comportamento' AND empresa_id = ? LIMIT 1", [context.empresa_id]);
             if (notifyConfig?.[0]?.value) {
                 const config = parseJSON(notifyConfig[0].value);
                 if (config?.notifyOnForward && config?.notifyNumber) {
@@ -209,7 +209,25 @@ async function processAIActions(node, context) {
     
     const config = parseJSON(node.config) || {};
     const capabilities = config.capabilities || {};
-    const userInput = (context.mensagem && context.mensagem.text) || context.ultima_mensagem || '';
+    let userInput = (context.mensagem && context.mensagem.text) || context.ultima_mensagem || '';
+
+    // Extrair mídia da mensagem (áudio, imagem, etc.) para enviar ao Gemini
+    const mediaFiles = [];
+    if (context.mensagem && context.mensagem.mediaPath && context.mensagem.mediaType) {
+        mediaFiles.push({
+            path: context.mensagem.mediaPath,
+            type: context.mensagem.mediaType
+        });
+        flowLog.log('INFO', '📎 Mídia detectada na mensagem', {
+            type: context.mensagem.mediaType,
+            path: context.mensagem.mediaPath
+        });
+
+        // Se é áudio sem texto, indicar ao Gemini que deve ouvir o áudio
+        if (!userInput && context.mensagem.mediaType.includes('audio')) {
+            userInput = '[O cliente enviou um áudio. Ouça e responda de acordo.]';
+        }
+    }
     
     // Enriquecer contexto
     context = await enrichContextWithClient(context);
@@ -343,11 +361,11 @@ async function processAIActions(node, context) {
     // ═══════════════════════════════════════════════════════════════════
     let outputFormat = 'text';
     try {
-        const audioConfig = await getAudioConfig();
+        const audioConfig = await getAudioConfig(context.empresa_id);
         if (audioConfig.audio?.ativo || context.fullAudio || context.ttsEnabled) {
             // Verificar se a próxima mensagem será áudio baseado no ciclo TTS
             // Nota: não incrementamos o contador aqui, apenas verificamos
-            const willBeAudio = context.fullAudio || await shouldUseTTS(true);
+            const willBeAudio = context.fullAudio || await shouldUseTTS(true, context.empresa_id);
             if (willBeAudio) {
                 outputFormat = 'audio';
                 flowLog.log('INFO', '🎤 Próxima mensagem será ÁUDIO - instruções de áudio ativadas para Gemini');
@@ -370,7 +388,8 @@ async function processAIActions(node, context) {
             clientId: context.clientId,
             chatId: context.chatId,
             tools: tools,
-            capabilities: enabledCapabilities
+            capabilities: enabledCapabilities,
+            mediaFiles: mediaFiles
         });
         
         flowLog.log('INFO', '✅ Resposta recebida do Gemini', {

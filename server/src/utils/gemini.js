@@ -67,11 +67,37 @@ async function getFileInfo(filePath) {
 }
 
 /**
+ * Converte arquivo em base64 para envio ao Gemini como inlineData
+ * @param {String} filePath - Caminho do arquivo
+ * @returns {Object|null} - { mimeType, base64Data, fileData: true }
+ */
+async function fileToBase64(filePath) {
+    try {
+        const fileInfo = await getFileInfo(filePath);
+        if (!fileInfo || !fileInfo.buffer) return null;
+        return {
+            mimeType: fileInfo.mimeType,
+            base64Data: fileInfo.buffer.toString('base64'),
+            fileData: true
+        };
+    } catch (error) {
+        console.error('❌ Erro ao converter arquivo para base64:', filePath, error.message);
+        return null;
+    }
+}
+
+/**
  * Obtém configuração completa do Gemini do banco de dados
+ * @param {Number} empresa_id - ID da empresa (obrigatório - multi-tenant)
  * @returns {Object} - Configuração do Gemini
  */
-async function getGeminiConfig() {
-    console.log('🔧 Buscando configuração do Gemini no banco de dados...');
+async function getGeminiConfig(empresa_id) {
+    if (!empresa_id) {
+        console.error('❌ getGeminiConfig: empresa_id é obrigatório!');
+        throw new Error('empresa_id é obrigatório para buscar configuração do Gemini');
+    }
+
+    console.log('🔧 Buscando configuração do Gemini no banco de dados... (empresa_id:', empresa_id, ')');
 
     const rows = await dbQuery(`SELECT * FROM Options WHERE type IN (
         "gemini_key",
@@ -81,7 +107,7 @@ async function getGeminiConfig() {
         "gemini_disponibilidade",
         "gemini_protecao",
         "gemini_audio"
-    )`);
+    ) AND empresa_id = ?`, [parseInt(empresa_id)]);
 
     const get = (t) => {
         const r = rows.find(x => x.type === t);
@@ -618,10 +644,10 @@ async function generateGeminiText({
     console.log('📱 Client/Chat:', clientId, '/', chatId);
     console.log('📎 Arquivos de mídia:', mediaFiles ? mediaFiles.length : 0);
 
-    const config = await getGeminiConfig();
+    const config = await getGeminiConfig(context.empresa_id);
 
     if (!config.apiKey) {
-        console.error('❌ API Key do Gemini não configurada!');
+        console.error('❌ API Key do Gemini não configurada para empresa', context.empresa_id);
         return 'Desculpe, o sistema de atendimento está temporariamente indisponível. Por favor, tente novamente mais tarde.';
     }
 
@@ -882,13 +908,13 @@ async function generateGeminiTextWithActions(params) {
     // ═══════════════════════════════════════════════════════════════════
     // SETUP UNICO - tudo criado 1x
     // ═══════════════════════════════════════════════════════════════════
-    const config = await getGeminiConfig();
+    const context = geminiParams.context || {};
+    const config = await getGeminiConfig(context.empresa_id);
     if (!config.apiKey) {
-        throw new Error('API Key do Gemini nao configurada');
+        throw new Error('API Key do Gemini nao configurada para empresa ' + context.empresa_id);
     }
 
     const genAI = new GoogleGenAI({ apiKey: config.apiKey });
-    const context = geminiParams.context || {};
     const history = geminiParams.history || [];
 
     // Verificar se ja houve mensagem do assistente
@@ -925,15 +951,45 @@ async function generateGeminiTextWithActions(params) {
     // ═══════════════════════════════════════════════════════════════════
     // FORMATAR HISTORICO
     // ═══════════════════════════════════════════════════════════════════
-    const formattedHistory = history
-        .filter(msg => msg && (msg.parts || msg.text || msg.body))
-        .map(msg => {
+    // Formatar histórico com suporte a mídia (imagens/áudio/vídeo)
+    const historyPromises = history
+        .filter(msg => msg && (msg.parts || msg.text || msg.body || msg.media || msg.image))
+        .map(async (msg) => {
             let parts = [];
             if (Array.isArray(msg.parts) && msg.parts.length > 0) {
-                parts = msg.parts;
+                parts = [...msg.parts];
             } else if (msg.text || msg.body) {
                 parts = [{ text: msg.text || msg.body }];
             }
+
+            // Incluir mídia do histórico como inlineData para o Gemini
+            const mediaPath = msg.image || msg.media?.caminho || msg.media?.path || null;
+            if (mediaPath) {
+                try {
+                    const fileData = await fileToBase64(mediaPath);
+                    if (fileData && fileData.fileData) {
+                        parts.unshift({
+                            inlineData: {
+                                mimeType: fileData.mimeType,
+                                data: fileData.base64Data
+                            }
+                        });
+                        // Se não tem texto, adicionar descrição mínima
+                        if (!parts.some(p => p.text)) {
+                            const tipoMidia = (fileData.mimeType || '').split('/')[0] || 'arquivo';
+                            parts.push({ text: `[${tipoMidia} enviado]` });
+                        }
+                    }
+                } catch (err) {
+                    console.log('⚠️ Não foi possível carregar mídia do histórico:', mediaPath, err.message);
+                }
+            } else if (msg.audio) {
+                // Áudio: não enviar binário, só indicar que foi áudio
+                if (!parts.some(p => p.text) || (parts[0]?.text || '').trim() === '') {
+                    parts = [{ text: '[mensagem de áudio enviada]' }];
+                }
+            }
+
             if (parts.length > 0) {
                 return {
                     role: msg.role || (msg.from_me === 1 ? 'model' : 'user'),
@@ -941,8 +997,9 @@ async function generateGeminiTextWithActions(params) {
                 };
             }
             return null;
-        })
-        .filter(msg => msg !== null);
+        });
+
+    const formattedHistory = (await Promise.all(historyPromises)).filter(msg => msg !== null);
 
     // Preparar tools
     const toolsList = tools && Array.isArray(tools) && tools.length > 0 ? tools : undefined;
@@ -966,8 +1023,29 @@ async function generateGeminiTextWithActions(params) {
         }
     });
 
-    // Preparar mensagem do usuario
+    // Preparar mensagem do usuario (texto + mídia se houver)
     const userParts = [];
+
+    // Adicionar mídia (áudio, imagem, etc.) se houver
+    if (geminiParams.mediaFiles && geminiParams.mediaFiles.length > 0) {
+        for (const mediaFile of geminiParams.mediaFiles) {
+            try {
+                const fileData = await fileToBase64(mediaFile.path);
+                if (fileData && fileData.fileData) {
+                    userParts.push({
+                        inlineData: {
+                            mimeType: fileData.mimeType,
+                            data: fileData.base64Data
+                        }
+                    });
+                    console.log(`📎 Mídia anexada ao prompt: ${mediaFile.path} (${fileData.mimeType})`);
+                }
+            } catch (error) {
+                console.error('⚠️ Erro ao anexar mídia:', error.message);
+            }
+        }
+    }
+
     if (geminiParams.userText && geminiParams.userText.trim()) {
         userParts.push({ text: geminiParams.userText });
     }

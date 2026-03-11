@@ -126,6 +126,7 @@ export default defineConfig(({ command, mode }) => {
       'process.env': {
         VITE_API_BASE_URL: process.env.VITE_API_BASE_URL,
         VITE_APP_URL: process.env.VITE_APP_URL,
+        MODO: process.env.MODO,
       },
     },
     resolve: {

@@ -19,7 +19,7 @@ const { cleanNumber, checkNameContato, usersJump } = require('./utils');
  * @param {boolean} mapeado - Se deve retornar chats mapeados
  * @returns {Promise<Array>} Lista de chats
  */
-async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, mapeado = true) {
+async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, mapeado = true, empresa_id = null) {
     try {
         const client = getClientById(clientId);
         
@@ -72,10 +72,36 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
                 try {
                     contato.avatar = await contato.getProfilePicUrl();
                 } catch (e) {
+                    console.error('Erro ao obter avatar do contato:', e);
                     contato.avatar = null;
+                    contato.avatarError = e;
                 }
                 chat.contact = contato;
             }
+        }
+
+        // Busca todos os FlowRuns aguardando atendente para marcar na lista
+        let waitingRunsMap = {};
+        try {
+            const waitingRuns = await dbQuery(
+                `SELECT id, chat_id, flow_id, phone, status, created_at FROM FlowRuns
+                 WHERE waiting_for_response = 1 AND status = 'running'
+                 ${empresa_id ? 'AND empresa_id = ?' : ''}`,
+                empresa_id ? [empresa_id] : []
+            );
+            for (const run of waitingRuns) {
+                if (run.chat_id) {
+                    waitingRunsMap[run.chat_id] = {
+                        runId: run.id,
+                        flowId: run.flow_id,
+                        phone: run.phone,
+                        status: run.status,
+                        createdAt: run.created_at
+                    };
+                }
+            }
+        } catch (e) {
+            console.error('Erro ao buscar FlowRuns aguardando atendente:', e);
         }
 
         const mappedChats = chats.map(async chat => {
@@ -91,9 +117,11 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
                     id: chat.contact.id._serialized,
                     nome: checkNameContato(chat.contact),
                     numero: chat.contact.number,
-                    avatar: chat.contact.avatar
+                    avatar: chat.contact.avatar,
+                    raw: chat.contact
                 } : null,
                 ultimaMensagem: await mapearMsg(chat.lastMessage, false),
+                waitingForAgent: waitingRunsMap[chat.id._serialized] || null,
                 raw: chat
             };
 
@@ -242,6 +270,29 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
             cliente.tags = cliente.cli_tags ? JSON.parse(cliente.cli_tags) : [];
         }
 
+        // Busca FlowRun ativo aguardando atendente humano para este chat
+        let waitingForAgent = null;
+        try {
+            const flowRunQuery = await dbQuery(
+                `SELECT id, flow_id, phone, status, created_at FROM FlowRuns
+                 WHERE chat_id = ? AND waiting_for_response = 1 AND status = 'running'
+                 ORDER BY created_at DESC LIMIT 1`,
+                [chatId]
+            );
+            if (flowRunQuery && flowRunQuery.length > 0) {
+                const run = flowRunQuery[0];
+                waitingForAgent = {
+                    runId: run.id,
+                    flowId: run.flow_id,
+                    phone: run.phone,
+                    status: run.status,
+                    createdAt: run.created_at
+                };
+            }
+        } catch (e) {
+            console.error('Erro ao buscar FlowRun aguardando atendente:', e);
+        }
+
         const mappedChat = {
             id: chat.id._serialized,
             pinned: chat.pinned,
@@ -257,6 +308,7 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
             ultimaMensagem: await mapearMsg(chat.lastMessage),
             messagens: messagesComData,
             cliente: cliente,
+            waitingForAgent: waitingForAgent,
             limit: limit,
             raw: chat
         };
@@ -360,15 +412,111 @@ async function getAllContacts(clientId) {
 }
 
 /**
- * Remove tag de espera de atendimento (WhatsApp Business)
- * Esta função é um stub para compatibilidade com sistemas que usam WhatsApp Business API
- * @param {string} chatId - ID do chat
- * @returns {Promise<boolean>} True se removido com sucesso
+ * Busca a label de "aguardando atendimento" no WhatsApp Business
+ * Procura por labels cujo nome contenha "aguardando", "atendimento" (case-insensitive)
+ * @param {Object} client - Instância do client wwebjs
+ * @returns {Promise<Object|null>} Label encontrada ou null
  */
-async function removeWaitingForAgentTag(chatId) {
-    // Função stub - WhatsApp Business API não implementada
-    console.log('⚠️ removeWaitingForAgentTag: Função não implementada para whatsapp-web.js');
-    return false;
+async function findWaitingLabel(client) {
+    try {
+        const labels = await client.getLabels();
+        if (!labels || labels.length === 0) return null;
+
+        const keywords = ['aguardando atendimento', 'aguardando', 'atendimento'];
+        for (const keyword of keywords) {
+            const found = labels.find(l => l.name.toLowerCase().includes(keyword));
+            if (found) return found;
+        }
+        return null;
+    } catch (error) {
+        console.error('❌ Erro ao buscar labels do WhatsApp:', error.message);
+        return null;
+    }
+}
+
+/**
+ * Adiciona tag de "aguardando atendimento" no chat do WhatsApp Business
+ * @param {string} clientId - ID do client (ex: "atendimento_1")
+ * @param {string} chatId - ID do chat WhatsApp
+ * @returns {Promise<boolean>} True se adicionada com sucesso
+ */
+async function addWaitingForAgentTag(clientId, chatId) {
+    try {
+        const client = getClientById(clientId);
+        if (!client) {
+            console.log('⚠️ addWaitingForAgentTag: Client não encontrado:', clientId);
+            return false;
+        }
+
+        const label = await findWaitingLabel(client);
+        if (!label) {
+            console.log('⚠️ addWaitingForAgentTag: Nenhuma label de "aguardando atendimento" encontrada no WhatsApp');
+            return false;
+        }
+
+        // Buscar labels atuais do chat para preservar e adicionar a nova
+        const currentLabels = await client.getChatLabels(chatId);
+        const currentIds = currentLabels.map(l => l.id);
+
+        // Se já tem a label, não precisa adicionar
+        if (currentIds.includes(label.id)) {
+            console.log('ℹ️ Chat já possui a label de aguardando atendimento');
+            return true;
+        }
+
+        // addOrRemoveLabels define o estado final das labels do chat
+        // Precisa incluir as labels atuais + a nova
+        const finalLabelIds = [...currentIds, label.id];
+        await client.addOrRemoveLabels(finalLabelIds, [chatId]);
+
+        console.log(`✅ Label "${label.name}" (${label.id}) adicionada ao chat ${chatId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Erro ao adicionar tag de aguardando atendimento:', error.message);
+        return false;
+    }
+}
+
+/**
+ * Remove tag de "aguardando atendimento" do chat do WhatsApp Business
+ * @param {string} clientId - ID do client (ex: "atendimento_1")
+ * @param {string} chatId - ID do chat WhatsApp
+ * @returns {Promise<boolean>} True se removida com sucesso
+ */
+async function removeWaitingForAgentTag(clientId, chatId) {
+    try {
+        const client = getClientById(clientId);
+        if (!client) {
+            console.log('⚠️ removeWaitingForAgentTag: Client não encontrado:', clientId);
+            return false;
+        }
+
+        const label = await findWaitingLabel(client);
+        if (!label) {
+            console.log('⚠️ removeWaitingForAgentTag: Nenhuma label de "aguardando atendimento" encontrada no WhatsApp');
+            return false;
+        }
+
+        // Buscar labels atuais do chat
+        const currentLabels = await client.getChatLabels(chatId);
+        const currentIds = currentLabels.map(l => l.id);
+
+        // Se não tem a label, não precisa remover
+        if (!currentIds.includes(label.id)) {
+            console.log('ℹ️ Chat não possui a label de aguardando atendimento');
+            return true;
+        }
+
+        // Remover a label mantendo as demais
+        const finalLabelIds = currentIds.filter(id => id !== label.id);
+        await client.addOrRemoveLabels(finalLabelIds, [chatId]);
+
+        console.log(`✅ Label "${label.name}" (${label.id}) removida do chat ${chatId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Erro ao remover tag de aguardando atendimento:', error.message);
+        return false;
+    }
 }
 
 /**
@@ -412,10 +560,10 @@ async function getChatMessages(clientId, chatId, limit = 50) {
             return [];
         }
 
-        // Mapear mensagens para formato simples
+        // Mapear mensagens para formato simples (save=true para ter caminho de mídia)
         const messagesMap = await Promise.all(
             mensagens.map(async mensagem => {
-                return await mapearMsg(mensagem, false);
+                return await mapearMsg(mensagem, true);
             })
         );
 
@@ -477,6 +625,7 @@ module.exports = {
     getChatById,
     actionsChat,
     getAllContacts,
+    addWaitingForAgentTag,
     removeWaitingForAgentTag,
     getChatMessages
 };

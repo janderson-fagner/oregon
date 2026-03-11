@@ -55,15 +55,15 @@ function getUtils() {
 /**
  * Função para criar transporter SMTP dinâmico baseado nas configurações do banco
  */
-async function getSMTPTransporterFunction() {
+async function getSMTPTransporterFunction(empresaId) {
     if (!getSMTPTransporter) {
         const nodemailer = require('nodemailer');
-        
-        getSMTPTransporter = async () => {
+
+        getSMTPTransporter = async (empresaId) => {
             try {
                 const smtpConfig = await dbQuery(
-                    'SELECT value FROM Options WHERE type = ?',
-                    ['credenciais_smtp']
+                    'SELECT value FROM Options WHERE type = ? AND empresa_id = ?',
+                    ['credenciais_smtp', empresaId]
                 );
 
                 if (!smtpConfig || smtpConfig.length === 0) {
@@ -115,7 +115,7 @@ async function getSMTPTransporterFunction() {
             }
         };
     }
-    return getSMTPTransporter;
+    return getSMTPTransporter(empresaId);
 }
 
 /**
@@ -131,24 +131,31 @@ const parseJSON = (v) => {
  * @param {Number} flowId - ID do fluxo
  * @returns {Promise<Object>} - { flow, nodes, edges }
  */
-async function getFlowById(flowId) {
+async function getFlowById(flowId, empresaId) {
     flowLog.log('INFO', `Buscando fluxo ID: ${flowId}`);
 
-    const [flow] = await dbQuery('SELECT * FROM Flows WHERE id = ?', [flowId]);
+    let flow;
+    if (empresaId) {
+        [flow] = await dbQuery('SELECT * FROM Flows WHERE id = ? AND empresa_id = ?', [flowId, empresaId]);
+    } else {
+        [flow] = await dbQuery('SELECT * FROM Flows WHERE id = ?', [flowId]);
+    }
 
     if (!flow) {
         flowLog.log('ERROR', `Fluxo ${flowId} não encontrado`);
         return null;
     }
 
+    const flowEmpresaId = flow.empresa_id;
+
     flowLog.log('INFO', `Fluxo encontrado: ${flow.name}`, { status: flow.status });
 
     flow.trigger_conditions = flow.trigger_conditions ? JSON.parse(flow.trigger_conditions) : [];
 
-    const nodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? ORDER BY id ASC', [flowId]);
+    const nodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? AND empresa_id = ? ORDER BY id ASC', [flowId, flowEmpresaId]);
     flowLog.log('DEBUG', `Nós carregados: ${nodes.length}`);
 
-    const edges = await dbQuery('SELECT * FROM FlowEdges WHERE flow_id = ?', [flowId]);
+    const edges = await dbQuery('SELECT * FROM FlowEdges WHERE flow_id = ? AND empresa_id = ?', [flowId, flowEmpresaId]);
     flowLog.log('DEBUG', `Conexões carregadas: ${edges.length}`);
 
     return { flow, nodes, edges };
@@ -435,7 +442,8 @@ async function execAction(node, context) {
                     clientId: context.clientId,
                     cliente: context.cliente,
                     agendamento: context.agendamento,
-                    context: context.flat || {}
+                    context: context.flat || {},
+                    empresa_id: context.empresa_id
                 });
                 
                 return { output: 'stop' };
@@ -470,12 +478,12 @@ async function execAction(node, context) {
  * @param {Object} params - Parâmetros de inicialização
  * @returns {Promise<Number>} - ID da execução (run)
  */
-async function startFlow({ flowId, startNodeId, phone, cliente, agendamento, chatId, context = {}, whatsappContact = null, clientId = 'default' }) {
+async function startFlow({ flowId, startNodeId, phone, cliente, agendamento, chatId, context = {}, whatsappContact = null, clientId = 'default', empresa_id = null }) {
     flowLog.start(flowId, 'Fluxo', null);
 
     try {
         // Buscar fluxo
-        const flowData = await getFlowById(flowId);
+        const flowData = await getFlowById(flowId, empresa_id);
         if (!flowData) {
             throw new Error(`Fluxo ${flowId} não encontrado`);
         }
@@ -523,9 +531,9 @@ async function startFlow({ flowId, startNodeId, phone, cliente, agendamento, cha
 
         // Criar registro de execução
         const insertResult = await dbQuery(
-            `INSERT INTO FlowRuns (flow_id, current_node_id, status, cliente_id, chat_id, phone, context_json, created_at) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-            [flowId, initialNode.id, 'running', cliente?.cli_Id || null, chatId, phone, JSON.stringify(fullContext)]
+            `INSERT INTO FlowRuns (flow_id, current_node_id, status, cliente_id, chat_id, phone, context_json, empresa_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [flowId, initialNode.id, 'running', cliente?.cli_Id || null, chatId, phone, JSON.stringify(fullContext), flow.empresa_id]
         );
 
         const runId = insertResult.insertId;
@@ -564,7 +572,7 @@ async function advance(runId) {
         const flowId = run.flow_id;
 
         // Buscar fluxo
-        const flowData = await getFlowById(flowId);
+        const flowData = await getFlowById(flowId, context.empresa_id || run.empresa_id);
         if (!flowData) {
             throw new Error(`Fluxo ${flowId} não encontrado`);
         }
@@ -710,7 +718,7 @@ async function advance(runId) {
  * @param {Object} params - { phone, chatId, text, clientId, mediaPath, mediaType }
  * @returns {Promise<void>}
  */
-async function _processIncomingMessage({ phone, chatId, text, clientId = 'default', mediaPath = null, mediaType = null }) {
+async function _processIncomingMessage({ phone, chatId, text, clientId = 'default', mediaPath = null, mediaType = null, empresa_id = null }) {
     flowLog.log('INFO', 'Processando mensagem recebida', { phone, chatId, text: text?.substring(0, 50) });
 
     try {
@@ -730,13 +738,14 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
         // Buscar execução aguardando resposta
         const phoneToSearch = phone.slice(-8);
         const runs = await dbQuery(`
-            SELECT * FROM FlowRuns 
-            WHERE status = 'running' 
+            SELECT * FROM FlowRuns
+            WHERE status = 'running'
             AND waiting_for_response = 1
             AND (phone LIKE ? OR chat_id = ?)
+            AND empresa_id = ?
             ORDER BY id DESC
             LIMIT 1
-        `, [`%${phoneToSearch}%`, chatId]);
+        `, [`%${phoneToSearch}%`, chatId, empresa_id]);
 
         if (runs.length > 0) {
             // Processar resposta para execução existente
@@ -744,7 +753,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
             const context = parseJSON(run.context_json) || {};
 
             // Buscar nó atual para determinar tipo de wait
-            const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ?', [run.current_node_id]);
+            const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ? AND empresa_id = ?', [run.current_node_id, run.empresa_id]);
             if (currentNode.length === 0) {
                 flowLog.log('ERROR', 'Nó atual não encontrado');
                 return;
@@ -769,6 +778,18 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                                 'UPDATE FlowRuns SET waiting_for_response = 0, wait_state = NULL, context_json = ?, updated_at = NOW() WHERE id = ?',
                                 [JSON.stringify(context), run.id]
                             );
+
+                            // Remover tag de "aguardando atendimento" do WhatsApp
+                            if (chatId || run.chat_id) {
+                                try {
+                                    const { removeWaitingForAgentTag } = require('../../zap/chats');
+                                    const cId = context.clientId || `atendimento_${empresa_id}`;
+                                    await removeWaitingForAgentTag(cId, chatId || run.chat_id);
+                                } catch (tagErr) {
+                                    console.log('⚠️ Não foi possível remover tag do WhatsApp:', tagErr.message);
+                                }
+                            }
+
                             flowLog.log('INFO', `Desbloqueio por mensagem configurada no run ${run.id}`);
                             await advance(run.id);
                             return;
@@ -822,7 +843,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                 flowLog.log('INFO', `Condição: ${result.conditionMet ? 'VERDADEIRA' : 'FALSA'}`);
                 
                 // Buscar próxima edge baseada no resultado
-                const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ?', [node.id]);
+                const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? AND empresa_id = ?', [node.id, context.empresa_id]);
                 const nextEdge = edges.find(e => {
                     const label = (e.label || '').toLowerCase();
                     return result.conditionMet ? 
@@ -864,7 +885,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                     flowLog.log('INFO', `Opção ${result.selectedIndex + 1} selecionada: ${result.option.label}`);
                     
                     // Buscar edge correspondente à opção
-                    const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? ORDER BY id ASC', [node.id]);
+                    const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? AND empresa_id = ? ORDER BY id ASC', [node.id, context.empresa_id]);
                     let nextEdge = null;
                     
                     // Tentar encontrar edge específica para a opção
@@ -902,7 +923,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                         );
                         
                         // Buscar edge de timeout/max_attempts
-                        const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ?', [node.id]);
+                        const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? AND empresa_id = ?', [node.id, context.empresa_id]);
                         const timeoutEdge = edges.find(e => {
                             const label = (e.label || '').toLowerCase();
                             return label.includes('timeout') || label.includes('max') || label.includes('limite');
@@ -964,10 +985,11 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
         
         // Buscar fluxos com trigger de mensagem WhatsApp
         const flowsWithMessageTrigger = await dbQuery(`
-            SELECT * FROM Flows 
-            WHERE trigger_type = 'mensagem_whatsapp' 
+            SELECT * FROM Flows
+            WHERE trigger_type = 'mensagem_whatsapp'
             AND status = 'ativo'
-        `);
+            AND empresa_id = ?
+        `, [empresa_id]);
 
         if (flowsWithMessageTrigger.length === 0) {
             flowLog.log('INFO', 'Nenhum fluxo com trigger de mensagem WhatsApp encontrado');
@@ -980,7 +1002,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
         let cliente = null;
         try {
             const { getClienteByPhone } = require('../actions/clienteActions');
-            const flowEmpresaId = flowsWithMessageTrigger[0]?.empresa_id || null;
+            const flowEmpresaId = empresa_id || flowsWithMessageTrigger[0]?.empresa_id || null;
             cliente = await getClienteByPhone(phone, flowEmpresaId);
 
             flowLog.log('INFO', `Cliente encontrado: ${JSON.stringify(cliente)}`);
@@ -1006,6 +1028,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
             clientId,
             mediaPath,
             mediaType,
+            empresa_id,
             cliente
         }, flowsWithMessageTrigger);
 
@@ -1046,14 +1069,14 @@ async function checkWaitTimeouts() {
                 context.timeout_at = moment().format('YYYY-MM-DD HH:mm:ss');
 
                 // Buscar nó atual
-                const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ?', [run.current_node_id]);
+                const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ? AND empresa_id = ?', [run.current_node_id, run.empresa_id]);
                 if (currentNode.length === 0) {
                     flowLog.log('ERROR', `Nó ${run.current_node_id} não encontrado para timeout`);
                     continue;
                 }
 
                 const node = currentNode[0];
-                const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? ORDER BY id ASC', [node.id]);
+                const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? AND empresa_id = ? ORDER BY id ASC', [node.id, run.empresa_id]);
 
                 // Procurar edge de timeout
                 let timeoutEdge = edges.find(e => {

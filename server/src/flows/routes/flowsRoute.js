@@ -18,13 +18,14 @@ const { getUserLoggedUser } = require('../../utils/functions');
  */
 router.get('/', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         let { q, page = 1, itemsPerPage = 10, sortBy, orderBy } = req.query;
-        
-        let whereClause = '';
-        let params = [];
-        
+
+        let whereClause = 'WHERE empresa_id = ?';
+        let params = [empresa_id];
+
         if (q) {
-            whereClause = 'WHERE name LIKE ?';
+            whereClause += ' AND name LIKE ?';
             params.push(`%${q}%`);
         }
         
@@ -73,7 +74,14 @@ router.get('/', getUserLoggedUser, async (req, res) => {
  */
 router.get('/:id', getUserLoggedUser, async (req, res) => {
     try {
-        const data = await getFlowById(parseInt(req.params.id, 10));
+        const empresa_id = req.user.empresa_id;
+        const flowId = parseInt(req.params.id, 10);
+
+        // Verificar se o fluxo pertence à empresa do usuário
+        const flowCheck = await dbQuery('SELECT id FROM Flows WHERE id = ? AND empresa_id = ?', [flowId, empresa_id]);
+        if (!flowCheck || flowCheck.length === 0) return res.status(404).json({ message: 'Não encontrado' });
+
+        const data = await getFlowById(flowId);
         if (!data) return res.status(404).json({ message: 'Não encontrado' });
         res.json(data);
     } catch (err) { 
@@ -87,31 +95,32 @@ router.get('/:id', getUserLoggedUser, async (req, res) => {
  */
 router.post('/', getUserLoggedUser, async (req, res) => {
     try {
-        const { 
-            name, 
-            description, 
-            status = 'ativo', 
-            trigger_type = null, 
-            webhook_key = null, 
+        const empresa_id = req.user.empresa_id;
+        const {
+            name,
+            description,
+            status = 'ativo',
+            trigger_type = null,
+            webhook_key = null,
             trigger_conditions = null,
             priority = 50,
             interruptible = true,
             global_keywords = null,
-            nodes = [], 
-            edges = [] 
+            nodes = [],
+            edges = []
         } = req.body;
-        
-        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0 
-            ? JSON.stringify(trigger_conditions) 
+
+        const triggerConditionsJson = trigger_conditions && Array.isArray(trigger_conditions) && trigger_conditions.length > 0
+            ? JSON.stringify(trigger_conditions)
             : null;
-        
+
         const globalKeywordsJson = global_keywords && Array.isArray(global_keywords) && global_keywords.length > 0
             ? JSON.stringify(global_keywords)
             : null;
-        
+
         const inserted = await dbQuery(
-            'INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords) VALUES (?,?,?,?,?,?,?,?,?)',
-            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson]
+            'INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords, empresa_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, empresa_id]
         );
         
         const flowId = inserted.insertId || inserted;
@@ -119,26 +128,26 @@ router.post('/', getUserLoggedUser, async (req, res) => {
         // Inserir nós
         for (const n of nodes) {
             await dbQuery(
-                'INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y) VALUES (?,?,?,?,?,?)', 
-                [flowId, n.type, n.label || null, JSON.stringify(n.config || {}), n.position_x || 100, n.position_y || 100]
+                'INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y, empresa_id) VALUES (?,?,?,?,?,?,?)',
+                [flowId, n.type, n.label || null, JSON.stringify(n.config || {}), n.position_x || 100, n.position_y || 100, empresa_id]
             );
         }
-        
+
         // Inserir edges
-        const allNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ?', [flowId]);
+        const allNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? AND empresa_id = ?', [flowId, empresa_id]);
         const findNodeId = (idx) => allNodes[idx]?.id;
-        
+
         for (const e of edges) {
             const sourceId = e.source_node_id || findNodeId(e.sourceIndex || 0);
             const targetId = e.target_node_id || findNodeId(e.targetIndex || 0);
-            
+
             const finalSourceId = typeof sourceId === 'string' ? findNodeId(e.sourceIndex || 0) : sourceId;
             const finalTargetId = typeof targetId === 'string' ? findNodeId(e.targetIndex || 0) : targetId;
-            
+
             if (finalSourceId && finalTargetId) {
                 await dbQuery(
-                    'INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json) VALUES (?,?,?,?,?)', 
-                    [flowId, finalSourceId, finalTargetId, e.label || null, JSON.stringify(e.condition || null)]
+                    'INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json, empresa_id) VALUES (?,?,?,?,?,?)',
+                    [flowId, finalSourceId, finalTargetId, e.label || null, JSON.stringify(e.condition || null), empresa_id]
                 );
             }
         }
@@ -156,8 +165,9 @@ router.post('/', getUserLoggedUser, async (req, res) => {
  */
 router.put('/:id', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
-        const { 
+        const {
             name, 
             description, 
             status = 'ativo', 
@@ -180,13 +190,13 @@ router.put('/:id', getUserLoggedUser, async (req, res) => {
             : null;
         
         await dbQuery(
-            'UPDATE Flows SET name=?, description=?, status=?, trigger_type=?, webhook_key=?, trigger_conditions=?, priority=?, interruptible=?, global_keywords=?, updated_at=NOW() WHERE id=?',
-            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, id]
+            'UPDATE Flows SET name=?, description=?, status=?, trigger_type=?, webhook_key=?, trigger_conditions=?, priority=?, interruptible=?, global_keywords=?, updated_at=NOW() WHERE id=? AND empresa_id=?',
+            [name, description, status, trigger_type, webhook_key, triggerConditionsJson, priority, interruptible ? 1 : 0, globalKeywordsJson, id, empresa_id]
         );
-        
+
         // Deletar nós e conexões antigas
-        await dbQuery('DELETE FROM FlowEdges WHERE flow_id=?', [id]);
-        await dbQuery('DELETE FROM FlowNodes WHERE flow_id=?', [id]);
+        await dbQuery('DELETE FROM FlowEdges WHERE flow_id=? AND empresa_id=?', [id, empresa_id]);
+        await dbQuery('DELETE FROM FlowNodes WHERE flow_id=? AND empresa_id=?', [id, empresa_id]);
         
         // Criar mapa de IDs
         const nodeIdMap = {};
@@ -195,24 +205,24 @@ router.put('/:id', getUserLoggedUser, async (req, res) => {
         for (let i = 0; i < nodes.length; i++) {
             const n = nodes[i];
             const result = await dbQuery(
-                'INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y) VALUES (?,?,?,?,?,?)', 
-                [id, n.type, n.label || null, JSON.stringify(n.config || {}), n.position_x || 100, n.position_y || 100]
+                'INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y, empresa_id) VALUES (?,?,?,?,?,?,?)',
+                [id, n.type, n.label || null, JSON.stringify(n.config || {}), n.position_x || 100, n.position_y || 100, empresa_id]
             );
-            
+
             const newNodeId = result.insertId;
             nodeIdMap[i] = newNodeId;
-            
+
             if (n.id) {
                 nodeIdMap[`id_${n.id}`] = newNodeId;
             }
-            
+
             if (n.label) {
                 nodeIdMap[`label_${n.label}`] = newNodeId;
             }
         }
-        
+
         // Buscar nós para fallback
-        const allNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? ORDER BY id', [id]);
+        const allNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? AND empresa_id = ? ORDER BY id', [id, empresa_id]);
         
         // Inserir edges
         for (const e of edges) {
@@ -247,12 +257,12 @@ router.put('/:id', getUserLoggedUser, async (req, res) => {
             
             if (sourceId && targetId) {
                 await dbQuery(
-                    'INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json) VALUES (?,?,?,?,?)', 
-                    [id, sourceId, targetId, e.label || null, JSON.stringify(e.condition || null)]
+                    'INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json, empresa_id) VALUES (?,?,?,?,?,?)',
+                    [id, sourceId, targetId, e.label || null, JSON.stringify(e.condition || null), empresa_id]
                 );
             }
         }
-        
+
         flowLog.log('INFO', 'Fluxo atualizado com sucesso', { flowId: id, name });
         res.json({ ok: true });
     } catch (err) { 
@@ -266,9 +276,10 @@ router.put('/:id', getUserLoggedUser, async (req, res) => {
  */
 router.post('/:id/duplicate', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const flowId = parseInt(req.params.id, 10);
-        
-        const originalFlow = await dbQuery('SELECT * FROM Flows WHERE id = ?', [flowId]);
+
+        const originalFlow = await dbQuery('SELECT * FROM Flows WHERE id = ? AND empresa_id = ?', [flowId, empresa_id]);
         
         if (!originalFlow || originalFlow.length === 0) {
             return res.status(404).json({ error: 'Fluxo não encontrado' });
@@ -278,8 +289,8 @@ router.post('/:id/duplicate', getUserLoggedUser, async (req, res) => {
         
         // Criar cópia
         const newFlowResult = await dbQuery(
-            `INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords, created_at, updated_at) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+            `INSERT INTO Flows (name, description, status, trigger_type, webhook_key, trigger_conditions, priority, interruptible, global_keywords, empresa_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
             [
                 `${flow.name} (Cópia)`,
                 flow.description,
@@ -289,38 +300,39 @@ router.post('/:id/duplicate', getUserLoggedUser, async (req, res) => {
                 flow.trigger_conditions,
                 flow.priority,
                 flow.interruptible,
-                flow.global_keywords
+                flow.global_keywords,
+                empresa_id
             ]
         );
         
         const newFlowId = newFlowResult.insertId;
         
         // Copiar nós
-        const originalNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ?', [flowId]);
+        const originalNodes = await dbQuery('SELECT * FROM FlowNodes WHERE flow_id = ? AND empresa_id = ?', [flowId, empresa_id]);
         const nodeIdMap = {};
-        
+
         for (const node of originalNodes) {
             const newNodeResult = await dbQuery(
-                `INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y, created_at) 
-                 VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-                [newFlowId, node.type, node.label, node.config, node.position_x, node.position_y]
+                `INSERT INTO FlowNodes (flow_id, type, label, config, position_x, position_y, empresa_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+                [newFlowId, node.type, node.label, node.config, node.position_x, node.position_y, empresa_id]
             );
             
             nodeIdMap[node.id] = newNodeResult.insertId;
         }
         
         // Copiar edges
-        const originalEdges = await dbQuery('SELECT * FROM FlowEdges WHERE flow_id = ?', [flowId]);
-        
+        const originalEdges = await dbQuery('SELECT * FROM FlowEdges WHERE flow_id = ? AND empresa_id = ?', [flowId, empresa_id]);
+
         for (const edge of originalEdges) {
             const newSourceId = nodeIdMap[edge.source_node_id];
             const newTargetId = nodeIdMap[edge.target_node_id];
-            
+
             if (newSourceId && newTargetId) {
                 await dbQuery(
-                    `INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json, created_at) 
-                     VALUES (?, ?, ?, ?, ?, NOW())`,
-                    [newFlowId, newSourceId, newTargetId, edge.label, edge.condition_json]
+                    `INSERT INTO FlowEdges (flow_id, source_node_id, target_node_id, label, condition_json, empresa_id, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+                    [newFlowId, newSourceId, newTargetId, edge.label, edge.condition_json, empresa_id]
                 );
             }
         }
@@ -343,8 +355,9 @@ router.post('/:id/duplicate', getUserLoggedUser, async (req, res) => {
  */
 router.delete('/:id', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
-        await dbQuery('DELETE FROM Flows WHERE id=?', [id]);
+        await dbQuery('DELETE FROM Flows WHERE id=? AND empresa_id=?', [id, empresa_id]);
         flowLog.log('INFO', 'Fluxo deletado', { flowId: id });
         res.json({ ok: true });
     } catch (err) { 
@@ -358,14 +371,15 @@ router.delete('/:id', getUserLoggedUser, async (req, res) => {
  */
 router.put('/toggle-status/:id', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
         const { status } = req.body;
-        
+
         if (!status || !['ativo', 'inativo'].includes(status)) {
             return res.status(400).json({ message: 'Status inválido' });
         }
-        
-        await dbQuery('UPDATE Flows SET status=?, updated_at=NOW() WHERE id=?', [status, id]);
+
+        await dbQuery('UPDATE Flows SET status=?, updated_at=NOW() WHERE id=? AND empresa_id=?', [status, id, empresa_id]);
         flowLog.log('INFO', `Fluxo ${status}`, { flowId: id });
         res.json({ ok: true, status });
     } catch (err) { 
@@ -381,7 +395,13 @@ router.put('/toggle-status/:id', getUserLoggedUser, async (req, res) => {
  */
 router.post('/:id/run', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const id = parseInt(req.params.id, 10);
+
+        // Verificar se o fluxo pertence à empresa do usuário
+        const flowCheck = await dbQuery('SELECT id FROM Flows WHERE id = ? AND empresa_id = ?', [id, empresa_id]);
+        if (!flowCheck || flowCheck.length === 0) return res.status(404).json({ message: 'Fluxo não encontrado' });
+
         const { startNodeId, phone, cliente = null, agendamento = null, chatId = null, context = {} } = req.body;
         const runId = await startFlow({ flowId: id, startNodeId, phone, cliente, agendamento, chatId, context });
         flowLog.log('INFO', 'Fluxo executado manualmente', { flowId: id, runId });
@@ -411,9 +431,10 @@ router.post('/run/:runId/advance', getUserLoggedUser, async (req, res) => {
  */
 router.post('/run/:runId/release-agent-block', getUserLoggedUser, async (req, res) => {
     try {
+        const empresa_id = req.user.empresa_id;
         const runId = parseInt(req.params.runId, 10);
-        
-        const runs = await dbQuery('SELECT * FROM FlowRuns WHERE id = ?', [runId]);
+
+        const runs = await dbQuery('SELECT * FROM FlowRuns WHERE id = ? AND empresa_id = ?', [runId, empresa_id]);
         if (!runs || runs.length === 0) {
             return res.status(404).json({ message: 'Execução não encontrada' });
         }
@@ -421,14 +442,15 @@ router.post('/run/:runId/release-agent-block', getUserLoggedUser, async (req, re
         const run = runs[0];
         const context = JSON.parse(run.context_json || '{}');
         
-        // Remover tag do WhatsApp Business se disponível
+        // Remover tag de "aguardando atendimento" do WhatsApp
         if (run.chat_id) {
             try {
-                const zap = require('../../zap');
-                await zap.removeWaitingForAgentTag(run.chat_id);
-                flowLog.log('INFO', 'Tag removida do WhatsApp Business');
+                const { removeWaitingForAgentTag } = require('../../zap/chats');
+                const clientId = context.clientId || `atendimento_${empresa_id}`;
+                await removeWaitingForAgentTag(clientId, run.chat_id);
+                flowLog.log('INFO', 'Tag de aguardando atendimento removida do WhatsApp');
             } catch (error) {
-                flowLog.log('INFO', 'Não foi possível remover tag');
+                flowLog.log('INFO', 'Não foi possível remover tag do WhatsApp:', error.message);
             }
         }
         
@@ -437,10 +459,19 @@ router.post('/run/:runId/release-agent-block', getUserLoggedUser, async (req, re
         delete context.wait_for_agent_finish_message;
         
         await dbQuery(
-            'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, context_json = ? WHERE id = ?',
-            ['completed', JSON.stringify(context), runId]
+            'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, context_json = ? WHERE id = ? AND empresa_id = ?',
+            ['completed', JSON.stringify(context), runId, empresa_id]
         );
-        
+
+        // Desbloquear fluxos do cliente se foi bloqueado por wait_for_agent
+        if (run.cliente_id) {
+            await dbQuery(
+                `UPDATE CLIENTES SET flows_blocked = 0, flows_blocked_at = NULL, flows_blocked_reason = NULL
+                 WHERE cli_Id = ? AND flows_blocked_reason = 'wait_for_agent'`,
+                [run.cliente_id]
+            );
+        }
+
         flowLog.log('INFO', 'Bloqueio de atendimento liberado', { runId });
         
         res.json({ 

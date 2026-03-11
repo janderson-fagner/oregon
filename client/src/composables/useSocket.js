@@ -25,11 +25,11 @@ function getToken() {
 }
 
 const isDevVite = import.meta.env.DEV;
+const conectadoProd = (import.meta.env.MODO || process.env.MODO) === 'conectadoprod';
 
-console.log('isDevVite', isDevVite, 'url', getSocketUrl())
 // Cria o socket SEM autoConnect - conectamos manualmente após ter o token
 export const socket = io(getSocketUrl(), {
-  path: isDevVite ? '/apidev/socket.io' : '/socket.io',
+  path: isDevVite && !conectadoProd ? '/apidev/socket.io' : '/socket.io',
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,

@@ -123,11 +123,19 @@ async function syncHistoryFromWhatsApp(context, clientId, chatId) {
             const messages = await getChatMessages(clientId, chatId, 20);
 
             if (messages && messages.length > 0) {
-                context.history = messages.map(msg => ({
-                    role: msg.from_me === 1 || msg.fromMe === true ? 'model' : 'user',
-                    parts: [{ text: msg.body || msg.text || '' }],
-                    timestamp: msg.timestamp || new Date().toISOString()
-                })).filter(msg => msg.parts[0].text);
+                context.history = messages.map(msg => {
+                    const entry = {
+                        role: msg.from_me === 1 || msg.fromMe === true ? 'model' : 'user',
+                        parts: [{ text: msg.body || msg.text || '' }],
+                        timestamp: msg.timestamp || new Date().toISOString()
+                    };
+                    // Preservar dados de mídia para o Gemini processar
+                    if (msg.media) entry.media = msg.media;
+                    if (msg.image) entry.image = msg.image;
+                    if (msg.audio) entry.audio = msg.audio;
+                    if (msg.video) entry.video = msg.video;
+                    return entry;
+                }).filter(msg => msg.parts[0].text || msg.media || msg.image);
 
                 flowLog.log('INFO', `📚 Sincronizado ${context.history.length} mensagens do WhatsApp`);
             }

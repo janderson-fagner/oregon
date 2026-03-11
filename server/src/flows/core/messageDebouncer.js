@@ -37,7 +37,7 @@ function setProcessor(fn) {
  * Ponto de entrada principal - bufferiza mensagem e controla debounce
  * @param {Object} params - { phone, chatId, text, clientId, mediaPath, mediaType }
  */
-function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = null, mediaType = null }) {
+function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = null, mediaType = null, empresa_id = null }) {
     const phoneKey = (phone || '').replace(/\D/g, '');
     if (!phoneKey) return;
 
@@ -50,7 +50,7 @@ function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = n
             debounceTimer: null,
             isProcessing: false,
             pendingQueue: [],
-            params: { clientId, phone, chatId },
+            params: { clientId, phone, chatId, empresa_id },
             lastActivity: now
         });
     }
@@ -59,7 +59,7 @@ function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = n
     state.lastActivity = now;
 
     // Atualizar params com os mais recentes
-    state.params = { clientId, phone, chatId };
+    state.params = { clientId, phone, chatId, empresa_id };
 
     // Se está processando, colocar na fila de pendentes
     if (state.isProcessing) {
@@ -132,7 +132,8 @@ async function _flushMessages(phoneKey) {
             text: combinedText,
             clientId: state.params.clientId,
             mediaPath: lastMediaPath,
-            mediaType: lastMediaType
+            mediaType: lastMediaType,
+            empresa_id: state.params.empresa_id
         });
     } catch (error) {
         console.error(`[Debouncer] ${phoneKey}: Erro no processamento:`, error.message);

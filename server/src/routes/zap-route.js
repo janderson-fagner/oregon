@@ -357,7 +357,8 @@ router.get('/allChats', async (req, res) => {
             return res.status(200).json({ status: 'Desconectado', chats: [] });
         }
 
-        const chats = await getAllChats(clientId, itemsPerPage, page, q, mapeado);
+        const empresa_id = req.user.empresa_id;
+        const chats = await getAllChats(clientId, itemsPerPage, page, q, mapeado, empresa_id);
 
         return res.status(200).json(chats);
     } catch (error) {

@@ -426,13 +426,25 @@ async function processMessageWithInterruption({ phone, chatId, text }) {
                 flowLog.log('INFO', 'Cliente bloqueado - Desbloqueando automaticamente', {
                     clienteId: clienteBlocked[0].cli_Id
                 });
-                
+
                 await dbQuery(`
-                    UPDATE CLIENTES 
+                    UPDATE CLIENTES
                     SET flows_blocked = 0,
                         updated_at = NOW()
                     WHERE cli_Id = ?
                 `, [clienteBlocked[0].cli_Id]);
+
+                // Remover tag de "aguardando atendimento" do WhatsApp
+                if (chatId) {
+                    try {
+                        const { removeWaitingForAgentTag } = require('../../zap/chats');
+                        // Determinar clientId baseado na empresa do cliente
+                        const clienteEmpresa = clienteBlocked[0].empresa_id || 1;
+                        await removeWaitingForAgentTag(`atendimento_${clienteEmpresa}`, chatId);
+                    } catch (tagErr) {
+                        console.log('⚠️ Não foi possível remover tag do WhatsApp:', tagErr.message);
+                    }
+                }
             }
 
             // Interromper fluxo atual se existir

@@ -68,7 +68,7 @@ async function sendWhatsAppMessage(config, context) {
                     let shouldGenerate = context.fullAudio;
 
                     if (!shouldGenerate && context.ttsEnabled) {
-                        shouldGenerate = await shouldUseTTS();
+                        shouldGenerate = await shouldUseTTS(false, context.empresa_id);
                     }
 
                     if (shouldGenerate) {
@@ -76,7 +76,7 @@ async function sendWhatsAppMessage(config, context) {
                         const ttsResult = await textToSpeech(message, {
                             filename: `sim-tts-${Date.now()}`,
                             force: context.fullAudio // Força TTS mesmo se não estiver ativo na config
-                        });
+                        }, context.empresa_id);
 
                         if (ttsResult.success) {
                             audioPath = ttsResult.audioPath;
@@ -135,13 +135,13 @@ async function sendWhatsAppMessage(config, context) {
             const { shouldUseTTS, textToSpeech } = require('../helpers/textToSpeech');
             
             try {
-                useTTS = await shouldUseTTS();
+                useTTS = await shouldUseTTS(false, context.empresa_id);
                 
                 if (useTTS) {
                     console.log('🎤 Convertendo mensagem para áudio (TTS)...');
                     const ttsResult = await textToSpeech(message, {
                         filename: `ai-message-${Date.now()}`
-                    });
+                    }, context.empresa_id);
                     
                     if (ttsResult.success) {
                         audioPath = ttsResult.audioPath;

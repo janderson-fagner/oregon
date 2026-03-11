@@ -103,7 +103,9 @@
       setAlert(`Erro ao conectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
     }
 
-    client.loading = false;
+    setTimeout(() => {
+      client.loading = false;
+    }, 8000);
   };
 
   // Desconecta um client específico
@@ -126,7 +128,9 @@
       setAlert(`Erro ao desconectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
     }
 
-    client.loading = false;
+    setTimeout(() => {
+      client.loading = false;
+    }, 8000);
   };
 
   // Setup dos listeners do socket para cada client

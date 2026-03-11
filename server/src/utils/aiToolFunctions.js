@@ -1575,7 +1575,17 @@ async function executeToolFunction(functionName, args, context = {}) {
                     ]);
                     
                     console.log('✅ Encaminhado para atendente');
-                    
+
+                    // Adicionar tag de "aguardando atendimento" no WhatsApp
+                    if (context.chatId && context.clientId) {
+                        try {
+                            const { addWaitingForAgentTag } = require('../zap/chats');
+                            await addWaitingForAgentTag(context.clientId, context.chatId);
+                        } catch (tagErr) {
+                            console.log('⚠️ Não foi possível adicionar tag no WhatsApp:', tagErr.message);
+                        }
+                    }
+
                     return {
                         success: true,
                         wait_for_agent: true,

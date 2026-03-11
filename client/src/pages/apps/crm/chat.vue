@@ -86,7 +86,7 @@
 
       console.log("res chats", res);
 
-      if (res == "Desconectado") {
+      if (res?.status && res?.status == "Desconectado") {
         setAlert(
           "Não foi possível obter as conversas, verifique se o WhatsApp está conectado.",
           "error"
@@ -121,7 +121,7 @@
 
     msgText = msgText.replace(/<br>/g, " ");
 
-    if (msg.hasMedia && msg.midia) {
+    if (msg.hasMedia && msg.media) {
       let media = msg.media;
 
       //console.log("media", media);
@@ -186,13 +186,17 @@
 
         rolarFimChat();
       } else {
-        let nchat = {
-          ...res,
-          ultimaMensagem: res.messagens?.length
-            ? res.messagens[res.messagens.length - 1]
-            : null,
+        // Evita duplicação: verifica se o chat já existe na lista
+        const jaExiste = allChats.value.some(c => c.id == res.id);
+        if (!jaExiste) {
+          let nchat = {
+            ...res,
+            ultimaMensagem: res.messagens?.length
+              ? res.messagens[res.messagens.length - 1]
+              : null,
+          }
+          allChats.value.unshift(nchat);
         }
-        allChats.value.unshift(nchat);
       }
     } catch (error) {
       console.error("Error fetching chat:", error, error.response);
@@ -219,6 +223,8 @@
     getChat(chat.id, index);
   };
 
+  const _pendingChatLoads = new Set();
+
   const handleNewMessage = (msg) => {
     if (!msg) return;
 
@@ -227,22 +233,29 @@
     console.log("chatIndex", chatIndex);
 
     if (chatIndex < 0 && (!searchQuery.value || searchQuery.value == "")) {
-      return getChat(msg.idChat, -1, true);
+      // Evita múltiplas requisições simultâneas para o mesmo chat
+      if (_pendingChatLoads.has(msg.idChat)) return;
+      _pendingChatLoads.add(msg.idChat);
+      return getChat(msg.idChat, -1, true).finally(() => _pendingChatLoads.delete(msg.idChat));
     }
 
     allChats.value[chatIndex].ultimaMensagem = msg;
     if (!msg.fromMe) allChats.value[chatIndex].naoLida += 1;
 
     if (selectedChat?.value?.id == msg.idChat) {
-      selectedChat.value.messagens = [
-        ...selectedChat.value.messagens,
-        msg,
-      ].sort((a, b) => {
-        return (
-          moment(a.data, "DD/MM/YYYY HH:mm:ss") -
-          moment(b.data, "DD/MM/YYYY HH:mm:ss")
-        );
-      });
+      // Evita duplicação: verifica se a mensagem já existe no chat
+      const jaExiste = selectedChat.value.messagens.some(m => m.id == msg.id);
+      if (!jaExiste) {
+        selectedChat.value.messagens = [
+          ...selectedChat.value.messagens,
+          msg,
+        ].sort((a, b) => {
+          return (
+            moment(a.data, "DD/MM/YYYY HH:mm:ss") -
+            moment(b.data, "DD/MM/YYYY HH:mm:ss")
+          );
+        });
+      }
       allChats.value[chatIndex].naoLida = 0;
       rolarFimChat();
     }
@@ -1142,6 +1155,15 @@
                   <p class="chat-name">
                     {{ chat.nome }}
                   </p>
+                  <VChip
+                    v-if="chat.waitingForAgent"
+                    color="warning"
+                    size="x-small"
+                    label
+                    class="ml-1"
+                  >
+                    Aguardando
+                  </VChip>
                   <p class="ml-auto mb-0 text-disabled text-caption">
                     <VIcon icon="tabler-pin-filled" v-if="chat.pinned" />
                     {{ chat.ultimaAcao ? handleData(chat.ultimaAcao) : "" }}
@@ -1572,6 +1594,7 @@
                   overflow-wrap: anywhere;
                   white-space: normal;
                 "
+                :style="{ 'margin-right': msg.fromMe ? '15px' : '40px' }"
               />
               <span
                 class="text-disabled text-caption position-absolute"

@@ -1392,8 +1392,9 @@ async function execActionInSimulation(node, context) {
 router.get('/tts-status', async (req, res) => {
     try {
         const { getTTSStatus, getAudioConfig } = require('../flows/helpers/textToSpeech');
-        const status = await getTTSStatus();
-        const config = await getAudioConfig();
+        const empresa_id = req.query.empresa_id || TEST_EMPRESA_ID;
+        const status = await getTTSStatus(empresa_id);
+        const config = await getAudioConfig(empresa_id);
 
         res.json({
             success: true,
@@ -1429,7 +1430,8 @@ router.post('/tts-preview', async (req, res) => {
         }
 
         const { getAudioConfig, textToSpeech } = require('../flows/helpers/textToSpeech');
-        const config = await getAudioConfig();
+        const empresa_id = req.body.empresa_id || TEST_EMPRESA_ID;
+        const config = await getAudioConfig(empresa_id);
 
         if (!config.apiKey) {
             return res.status(400).json({

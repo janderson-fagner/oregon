@@ -8,6 +8,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const dbQuery = require('../../utils/dbHelper');
+const { GoogleGenAI } = require('@google/genai');
 
 /**
  * Parse seguro de JSON
@@ -167,16 +168,22 @@ function formatTextForSpeech(text) {
 
 /**
  * Obtém configurações de áudio do banco
+ * @param {Number} empresa_id - ID da empresa (obrigatório - multi-tenant)
  */
-async function getAudioConfig() {
-    console.log('🔊 Buscando configurações de áudio...');
-    
+async function getAudioConfig(empresa_id) {
+    if (!empresa_id) {
+        console.error('❌ getAudioConfig: empresa_id é obrigatório!');
+        throw new Error('empresa_id é obrigatório para buscar configuração de áudio');
+    }
+
+    console.log('🔊 Buscando configurações de áudio... (empresa_id:', empresa_id, ')');
+
     const rows = await dbQuery(`SELECT * FROM Options WHERE type IN (
         "gemini_audio",
         "gemini_comportamento",
         "elevenlabs_key",
         "elevenlabs_voice_id"
-    )`);
+    ) AND empresa_id = ?`, [parseInt(empresa_id)]);
     
     const get = (t) => {
         const r = rows.find(x => x.type === t);
@@ -432,8 +439,85 @@ async function saveAudioFile(audioBuffer, filename, extension = 'mp3') {
 }
 
 /**
+ * 🤖 VALIDAÇÃO E MELHORIA DE TEXTO PARA TTS COM GEMINI FLASH
+ *
+ * Usa gemini-2.5-flash para:
+ * 1. Remover qualquer resumo, instrução interna ou nota de sistema
+ * 2. Manter SOMENTE a mensagem conversacional para o cliente
+ * 3. Inserir audio tags do ElevenLabs v3 para naturalidade
+ * 4. Adaptar o texto para fala natural (contrações, ritmo, entonação)
+ *
+ * @param {String} text - Texto bruto da resposta do Gemini principal
+ * @returns {Promise<String>} - Texto validado e otimizado para TTS
+ */
+async function validateTextForTTS(text, empresa_id) {
+    if (!text || text.trim().length < 5) return text;
+
+    try {
+        // Buscar API key do Gemini filtrado por empresa
+        const rows = await dbQuery(`SELECT value FROM Options WHERE type = 'gemini_key' AND empresa_id = ? LIMIT 1`, [parseInt(empresa_id)]);
+        const apiKey = rows && rows.length > 0 ? (parseJSON(rows[0].value) || rows[0].value) : null;
+
+        if (!apiKey) {
+            console.warn('⚠️ validateTextForTTS: API Key do Gemini não encontrada, pulando validação');
+            return text;
+        }
+
+        const genAI = new GoogleGenAI({ apiKey });
+
+        const prompt = `Você é um processador de texto para Text-to-Speech (TTS) via ElevenLabs v3.
+
+ENTRADA (texto bruto de uma IA de atendimento):
+"${text.replace(/"/g, '\\"')}"
+
+REGRAS OBRIGATÓRIAS:
+1. REMOVA completamente qualquer conteúdo que NÃO seja a mensagem direta ao cliente:
+   - Resumos ("Resumo:", "### Resumo")
+   - Notas internas ("Nota:", "Ação do Sistema", "Encaminhando")
+   - Instruções de sistema, análises, headers markdown (###, ##)
+   - Qualquer texto que comece com "Cliente solicitando", "Cliente quer", etc
+2. MANTENHA apenas a fala conversacional dirigida ao cliente
+3. Insira audio tags do ElevenLabs v3 onde for NATURAL (máximo 2-3 por mensagem):
+   - [warmly] para saudações e acolhimento
+   - [cheerfully] para confirmações positivas e boas notícias
+   - [reassuringly] para tranquilizar sobre processos
+   - [softly] para despedidas
+   - [excitedly] para ofertas e novidades
+4. Adapte para fala natural:
+   - Datas por extenso: "15/03" → "quinze de março"
+   - Horários por extenso: "14:30" → "duas e meia da tarde"
+   - Valores por extenso: "R$ 150" → "cento e cinquenta reais"
+   - Use contrações naturais do português falado
+   - Pontuação para ritmo: vírgulas para pausas curtas, reticências para pausas longas
+5. Seja CONCISO: máximo 3-4 frases
+6. SEM emojis, SEM formatação markdown (*negrito*, _itálico_), SEM listas com bullets
+
+RESPONDA APENAS com o texto processado, sem explicações.`;
+
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt
+        });
+
+        const validated = response?.text?.trim();
+
+        if (validated && validated.length > 3) {
+            console.log('✅ Texto validado pelo Gemini Flash para TTS');
+            console.log('   Original:', text.substring(0, 80) + '...');
+            console.log('   Validado:', validated.substring(0, 80) + '...');
+            return validated;
+        }
+
+        return text;
+    } catch (error) {
+        console.error('⚠️ Erro na validação TTS com Gemini Flash:', error.message);
+        return text; // Fallback: usa texto original
+    }
+}
+
+/**
  * 🧹 LIMPEZA INTELIGENTE DE TEXTO PARA TTS
- * 
+ *
  * Prepara o texto para síntese de voz natural:
  * - Remove formatação de chat (negrito, itálico)
  * - Converte emojis em pausas ou remove
@@ -576,11 +660,15 @@ function cleanTextForTTS(text) {
  * 🎤 FUNÇÃO PRINCIPAL DE TTS
  * Converte texto em áudio natural usando ElevenLabs
  */
-async function textToSpeech(text, options = {}) {
-    console.log('\n🎤 === INICIANDO TEXT-TO-SPEECH ===');
+async function textToSpeech(text, options = {}, empresa_id) {
+    if (!empresa_id) {
+        console.error('❌ textToSpeech: empresa_id é obrigatório!');
+        return { success: false, error: 'empresa_id é obrigatório para TTS' };
+    }
+    console.log('\n🎤 === INICIANDO TEXT-TO-SPEECH === (empresa_id:', empresa_id, ')');
 
     try {
-        const config = await getAudioConfig();
+        const config = await getAudioConfig(empresa_id);
 
         // Verificar se áudio está ativo (pode ser forçado via options.force)
         if (!config.audio.ativo && !options.force) {
@@ -599,13 +687,16 @@ async function textToSpeech(text, options = {}) {
         }
         
         // Limpar texto
-        const cleanText = cleanTextForTTS(text);
-        
+        // Validar e melhorar texto com Gemini Flash antes da limpeza
+        const validatedText = await validateTextForTTS(text, empresa_id);
+
+        const cleanText = cleanTextForTTS(validatedText);
+
         if (!cleanText || cleanText.length < 3) {
             console.log('⚠️ Texto muito curto ou vazio');
             return { success: false, error: 'Texto inválido para TTS' };
         }
-        
+
         console.log('📝 Texto limpo:', cleanText.substring(0, 80) + '...');
 
         // Determinar voice ID com ordem de prioridade:
@@ -689,9 +780,13 @@ const TTS_CYCLE = 3; // A cada 3 mensagens, alterna texto/áudio (menos intrusiv
  *                            Útil para determinar formato de saída ANTES de gerar a mensagem
  * @returns {Promise<Boolean>} - true se deve usar áudio
  */
-async function shouldUseTTS(peekOnly = false) {
+async function shouldUseTTS(peekOnly = false, empresa_id) {
+    if (!empresa_id) {
+        console.error('❌ shouldUseTTS: empresa_id é obrigatório!');
+        return false;
+    }
     try {
-        const config = await getAudioConfig();
+        const config = await getAudioConfig(empresa_id);
 
         if (!config.audio.ativo) {
             return false;
@@ -744,8 +839,11 @@ function forceNextAsAudio() {
 /**
  * Status atual do TTS
  */
-async function getTTSStatus() {
-    const config = await getAudioConfig();
+async function getTTSStatus(empresa_id) {
+    if (!empresa_id) {
+        throw new Error('empresa_id é obrigatório para getTTSStatus');
+    }
+    const config = await getAudioConfig(empresa_id);
     return {
         enabled: config.audio.ativo || false,
         counter: ttsMessageCounter,

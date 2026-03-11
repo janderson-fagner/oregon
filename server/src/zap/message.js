@@ -201,67 +201,28 @@ function convertMp3ToOgg(inputPath) {
     });
 }
 
+
 /**
- * Verifica modo de desenvolvimento e redireciona mensagens
- * @param {string} clientId - ID do client
- * @param {string} originalNumber - Número original do destinatário
- * @param {Function} sendFunction - Função de envio a ser executada
- * @param {number|null} empresa_id - ID da empresa (opcional)
- * @returns {Promise<boolean>} True se enviado com sucesso
+ * Formata mensagem para WhatsApp
+ * @param {string} message - Mensagem a ser formatada
+ * @returns {string} Mensagem formatada
  */
-async function checkDevModeAndSend(clientId, originalNumber, sendFunction, empresa_id = null) {
-    try {
-        let optionsQuery = 'SELECT * FROM Options';
-        let optionsParams = [];
-        if (empresa_id) {
-            optionsQuery += ' WHERE empresa_id = ?';
-            optionsParams.push(empresa_id);
-        }
-        const options = await dbQuery(optionsQuery, optionsParams);
-
-        if (options.length > 0) {
-            let devMode = options.filter(option => option.type == 'modo_dev')[0]?.value;
-
-            if (devMode == "true") {
-                let numerosDev = options.filter(option => option.type == 'numeros_dev')[0]?.value;
-
-                if (numerosDev && typeof numerosDev == 'string') {
-                    numerosDev = JSON.parse(numerosDev);
-                }
-
-                if (numerosDev && numerosDev.length > 0) {
-                    let numeros = numerosDev.map((number) => cleanNumber(number));
-
-                    if (!numeros.includes(cleanNumber(originalNumber))) {
-                        console.log('Modo dev ativo: enviando para números de desenvolvimento');
-
-                        for (let i = 0; i < numeros.length; i++) {
-                            let numero = numeros[i];
-                            
-                            await sendFunction(numero);
-
-                            // Aguarda 5 segundos entre os envios
-                            if (i < numeros.length - 1) {
-                                await new Promise(resolve => setTimeout(resolve, 5000));
-                            }
-                        }
-
-                        return true;
-                    }
-                } else {
-                    console.log('Nenhum número de dev encontrado!');
-                    return false;
-                }
-            }
-        }
-
-        // Se não está em modo dev, envia normalmente
-        await sendFunction(originalNumber);
-        return true;
-    } catch (error) {
-        console.error('Erro no checkDevModeAndSend:', error);
-        return false;
-    }
+function formatMessage(message) {
+    return message.replace(/<p><br><\/p>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/<em>/gi, '_').replace(/<\/em>/gi, '_')
+    .replace(/<strong>/gi, '*').replace(/<\/strong>/gi, '*')
+    .replace(/<s>/gi, '~').replace(/<\/s>/gi, '~')
+    .replace(/<br\s*\/?/gi, '\n')
+    .replace(/<(?!br\b)(\w+)[^>]*>\s*<\/\1>/gi, '')
+    .replace(/<[^>]+>/g, '');
 }
 
 /**
@@ -291,6 +252,8 @@ async function sendZapMessage(clientId, number, message) {
             const rawNumber = formatPhoneNumber(targetNumber);
             const chatId = await resolveChatId(client, rawNumber);
 
+            message = formatMessage(message);
+
             try {
                 await client.sendMessage(chatId, message);
                 console.log(`✅ Mensagem enviada com sucesso para ${targetNumber}`);
@@ -301,7 +264,7 @@ async function sendZapMessage(clientId, number, message) {
         };
 
         // Verifica modo dev e envia
-        return await checkDevModeAndSend(clientId, number, sendToNumber);
+        return await sendToNumber(number);
     } catch (error) {
         console.error('Erro ao enviar mensagem:', error);
 
@@ -355,6 +318,7 @@ async function sendZapMessageImage(clientId, number, message, imagePath) {
             const media = new MessageMedia(mimeType, image.toString('base64'), filename);
 
             try {
+                message = formatMessage(message);
                 await client.sendMessage(chatId, media, { caption: message });
                 console.log(`✅ Mensagem com imagem enviada para ${targetNumber}`);
             } catch (error) {
@@ -363,8 +327,7 @@ async function sendZapMessageImage(clientId, number, message, imagePath) {
             }
         };
 
-        // Verifica modo dev e envia
-        return await checkDevModeAndSend(clientId, number, sendToNumber);
+        return await sendToNumber(number);
     } catch (error) {
         console.error('Erro ao enviar mensagem com imagem:', error);
 
@@ -414,6 +377,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
         if (!midiaPath) {
             if (!idReply) {
                 try {
+                    message = formatMessage(message);
                     await client.sendMessage(chatId, message);
                 } catch (error) {
                     console.error('Erro ao enviar mensagem (catch):', error);
@@ -426,6 +390,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
                     return false;
                 }
 
+                message = formatMessage(message);
                 await messageReplay.reply(message);
             }
         } else {
@@ -463,6 +428,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
                         console.log('Enviando mensagem com áudio como voz:', filePath);
 
                         try {
+                            message = formatMessage(message);
                             await client.sendMessage(chatId, media, { sendAudioAsVoice: true, caption: message });
                         } catch (error) {
                             console.error('Erro ao enviar mensagem (catch):', error);
@@ -476,6 +442,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
                         }
 
                         try {
+                            message = formatMessage(message);
                             await client.sendMessage(chatId, media, {
                                 sendAudioAsVoice: true,
                                 quotedMessageId: messageReplay.id._serialized
@@ -489,6 +456,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
 
                     if (!idReply) {
                         try {
+                            message = formatMessage(message);
                             await client.sendMessage(chatId, media, { caption: message });
                         } catch (error) {
                             console.error('Erro ao enviar mensagem (catch):', error);
@@ -502,6 +470,7 @@ async function sendMessageChat(clientId, chatId, message, idReply = null, midiaP
                         }
 
                         try {
+                            message = formatMessage(message);
                             await client.sendMessage(chatId, media, {
                                 caption: message,
                                 quotedMessageId: messageReplay.id._serialized
