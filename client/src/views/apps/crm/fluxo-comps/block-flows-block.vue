@@ -36,50 +36,6 @@
           Mensagem enviada ao cliente após {{ localConfig.action === 'block' ? 'bloquear' : 'desbloquear' }} os fluxos
         </p>
         
-        <!-- Variáveis disponíveis -->
-        <div class="mb-3">
-          <a @click="toggleVariaveisTutorial" class="cursor-pointer text-primary">
-            Ver variáveis disponíveis
-            <VIcon
-              :icon="viewVariaveisTutorial ? 'tabler-chevron-up' : 'tabler-chevron-down'"
-              size="small"
-            />
-          </a>
-
-          <v-fade-transition>
-            <div v-if="viewVariaveisTutorial" class="mt-3">
-              <VCard variant="outlined" class="pa-3">
-                <p class="text-caption mb-3">
-                  Clique em uma variável para copiá-la. Use dentro do texto com
-                  duplas chaves. Ex.:
-                  <span class="font-weight-bold" v-pre>{{ cliente_nome }}</span>
-                </p>
-
-                <div class="d-flex flex-wrap gap-2">
-                  <VChip
-                    v-for="variable in variaveisDisponiveis"
-                    :key="variable.value"
-                    size="small"
-                    :color="
-                      variable.type === 'cliente'
-                        ? 'primary'
-                        : variable.type === 'pedido'
-                        ? 'info'
-                        : 'success'
-                    "
-                    variant="tonal"
-                    class="cursor-pointer"
-                    @click="copyVariable(variable.value)"
-                  >
-                    <VIcon icon="tabler-copy" size="small" class="me-1" />
-                    {{ variable.title }}
-                  </VChip>
-                </div>
-              </VCard>
-            </div>
-          </v-fade-transition>
-        </div>
-        
         <!-- Editor Quill -->
         <div class="inputQP">
           <div id="toolbar-block-flows-message">
@@ -108,67 +64,15 @@
       </VCol>
     </VRow>
     
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Como funciona</h6>
-      <VCard variant="outlined" class="pa-4">
-        <VList density="compact">
-          <VListItem v-if="localConfig.action === 'block'">
-            <template #prepend>
-              <VIcon icon="tabler-lock" color="error" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              <strong>Bloqueia PERMANENTEMENTE</strong> todos os fluxos para este cliente
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem v-else>
-            <template #prepend>
-              <VIcon icon="tabler-lock-open" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              <strong>Desbloqueia</strong> e permite que o cliente receba fluxos novamente
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-message-circle" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Envia mensagem opcional ao cliente (se configurada)
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-database" color="info" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Atualiza o campo <code>flows_blocked</code> no banco de dados
-            </VListItemTitle>
-          </VListItem>
-        </VList>
-      </VCard>
-    </div>
-
-    <VAlert :type="localConfig.action === 'block' ? 'error' : 'success'" variant="tonal">
-      <template #prepend>
-        <VIcon :icon="localConfig.action === 'block' ? 'tabler-shield-lock' : 'tabler-shield-check'" />
-      </template>
-      <div class="text-sm">
-        <template v-if="localConfig.action === 'block'">
-          <strong>Bloqueio Permanente:</strong> Diferente do "Aguardar Atendimento", 
-          este bloqueio é permanente e só pode ser removido manualmente através do 
-          painel de clientes ou de outro fluxo com ação de desbloqueio.
-        </template>
-        <template v-else>
-          <strong>Desbloqueio:</strong> O cliente voltará a receber todos os fluxos 
-          automáticos normalmente após a execução deste bloco.
-        </template>
-      </div>
-    </VAlert>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-lock', color: 'error', text: 'Bloqueia PERMANENTEMENTE todos os fluxos para este cliente' },
+        { icon: 'tabler-lock-open', color: 'success', text: 'Desbloqueia e permite que o cliente receba fluxos novamente' },
+        { icon: 'tabler-message-circle', color: 'primary', text: 'Envia mensagem opcional ao cliente (se configurada)' },
+        { icon: 'tabler-database', color: 'info', text: 'Atualiza o campo flows_blocked no banco de dados' },
+      ]"
+      hint="Bloqueio é permanente e só pode ser removido manualmente ou por outro fluxo com ação de desbloqueio."
+    />
   </div>
 </template>
 
@@ -177,6 +81,7 @@ import { ref, watch, onMounted } from 'vue';
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
 import { getAllVariables } from '@/utils/dynamicVariables.js';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -201,7 +106,6 @@ const localConfig = ref({
 const variaveisDisponiveis = ref([]);
 const variavel = ref(null);
 const refQuillEditor = ref(null);
-const viewVariaveisTutorial = ref(false);
 
 // Configurações do editor Quill
 const editorOptions = {
@@ -239,45 +143,6 @@ const insertVariable = () => {
 
   insertVariableInline(quill, value);
   variavel.value = null;
-};
-
-// Função para copiar variável
-const copyVariable = (variableValue) => {
-  const variableText = `{{${variableValue}}}`;
-  
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(variableText).then(() => {
-      setAlert(`Variável ${variableText} copiada!`, 'success', 'tabler-copy', 2000);
-    }).catch(() => {
-      fallbackCopyToClipboard(variableText);
-    });
-  } else {
-    fallbackCopyToClipboard(variableText);
-  }
-};
-
-const fallbackCopyToClipboard = (text) => {
-  const textArea = document.createElement('textarea');
-  textArea.value = text;
-  textArea.style.position = 'fixed';
-  textArea.style.left = '-999999px';
-  textArea.style.top = '-999999px';
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-  
-  try {
-    document.execCommand('copy');
-    setAlert(`Variável ${text} copiada!`, 'success', 'tabler-copy', 2000);
-  } catch (err) {
-    setAlert('Erro ao copiar variável', 'error', 'tabler-alert-circle', 2000);
-  }
-  
-  document.body.removeChild(textArea);
-};
-
-const toggleVariaveisTutorial = () => {
-  viewVariaveisTutorial.value = !viewVariaveisTutorial.value;
 };
 
 // Emitir atualização

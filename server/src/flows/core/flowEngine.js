@@ -5,6 +5,7 @@
  */
 
 const moment = require('moment');
+require('moment-timezone');
 const dbQuery = require('../../utils/dbHelper');
 
 // Importar helpers
@@ -179,6 +180,9 @@ function findNextNodes(edges, currentNodeId) {
  * @param {Object} ctx - Contexto flat
  * @returns {Boolean} - Resultado da avaliação
  */
+// Formatos de data aceitos para parsing
+const DATE_FORMATS = ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD', 'DD/MM/YYYY HH:mm:ss', 'DD/MM/YYYY HH:mm', 'DD/MM/YYYY', moment.ISO_8601];
+
 function evalCondition(cond, ctx) {
     if (!cond) return true;
 
@@ -201,21 +205,27 @@ function evalCondition(cond, ctx) {
             result = !(fieldValue || '').toString().includes((compareValue || '').toString());
             break;
         case 'eq':
+        case 'equals':
             result = fieldValue == compareValue;
             break;
         case 'neq':
+        case 'not_equals':
             result = fieldValue != compareValue;
             break;
         case 'gt':
+        case 'greater':
             result = Number(fieldValue) > Number(compareValue);
             break;
         case 'lt':
+        case 'less':
             result = Number(fieldValue) < Number(compareValue);
             break;
         case 'gte':
+        case 'greater_equal':
             result = Number(fieldValue) >= Number(compareValue);
             break;
         case 'lte':
+        case 'less_equal':
             result = Number(fieldValue) <= Number(compareValue);
             break;
         case 'empty':
@@ -233,6 +243,215 @@ function evalCondition(cond, ctx) {
                 result = false;
             }
             break;
+        // ─── Operadores de data ───
+        case 'is_today': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const today = moment().tz('America/Sao_Paulo').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(today, 'day');
+            break;
+        }
+        case 'is_tomorrow': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const tomorrow = moment().tz('America/Sao_Paulo').add(1, 'day').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(tomorrow, 'day');
+            break;
+        }
+        case 'is_yesterday': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const yesterday = moment().tz('America/Sao_Paulo').subtract(1, 'day').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(yesterday, 'day');
+            break;
+        }
+        case 'within_days': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowWd = moment().tz('America/Sao_Paulo').startOf('day');
+            const endWd = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'days').endOf('day');
+            result = fd.isValid() && fd.isBetween(nowWd, endWd, null, '[]');
+            break;
+        }
+        case 'within_past_days': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowPd = moment().tz('America/Sao_Paulo').endOf('day');
+            const startPd = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'days').startOf('day');
+            result = fd.isValid() && fd.isBetween(startPd, nowPd, null, '[]');
+            break;
+        }
+        case 'within_months': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowWm = moment().tz('America/Sao_Paulo').startOf('day');
+            const endWm = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'months').endOf('day');
+            result = fd.isValid() && fd.isBetween(nowWm, endWm, null, '[]');
+            break;
+        }
+        case 'within_past_months': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowPm = moment().tz('America/Sao_Paulo').endOf('day');
+            const startPm = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'months').startOf('day');
+            result = fd.isValid() && fd.isBetween(startPm, nowPm, null, '[]');
+            break;
+        }
+        case 'is_this_week': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const weekStart = moment().tz('America/Sao_Paulo').startOf('week');
+            const weekEnd = moment().tz('America/Sao_Paulo').endOf('week');
+            result = fd.isValid() && fd.isBetween(weekStart, weekEnd, null, '[]');
+            break;
+        }
+        case 'is_last_week': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const lwStart = moment().tz('America/Sao_Paulo').subtract(1, 'week').startOf('week');
+            const lwEnd = moment().tz('America/Sao_Paulo').subtract(1, 'week').endOf('week');
+            result = fd.isValid() && fd.isBetween(lwStart, lwEnd, null, '[]');
+            break;
+        }
+        case 'is_next_week': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nwStart = moment().tz('America/Sao_Paulo').add(1, 'week').startOf('week');
+            const nwEnd = moment().tz('America/Sao_Paulo').add(1, 'week').endOf('week');
+            result = fd.isValid() && fd.isBetween(nwStart, nwEnd, null, '[]');
+            break;
+        }
+        case 'is_this_month': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const mStart = moment().tz('America/Sao_Paulo').startOf('month');
+            const mEnd = moment().tz('America/Sao_Paulo').endOf('month');
+            result = fd.isValid() && fd.isBetween(mStart, mEnd, null, '[]');
+            break;
+        }
+        case 'is_last_month': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const lmStart = moment().tz('America/Sao_Paulo').subtract(1, 'month').startOf('month');
+            const lmEnd = moment().tz('America/Sao_Paulo').subtract(1, 'month').endOf('month');
+            result = fd.isValid() && fd.isBetween(lmStart, lmEnd, null, '[]');
+            break;
+        }
+        case 'is_next_month': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nmStart = moment().tz('America/Sao_Paulo').add(1, 'month').startOf('month');
+            const nmEnd = moment().tz('America/Sao_Paulo').add(1, 'month').endOf('month');
+            result = fd.isValid() && fd.isBetween(nmStart, nmEnd, null, '[]');
+            break;
+        }
+        case 'is_this_year': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const yStart = moment().tz('America/Sao_Paulo').startOf('year');
+            const yEnd = moment().tz('America/Sao_Paulo').endOf('year');
+            result = fd.isValid() && fd.isBetween(yStart, yEnd, null, '[]');
+            break;
+        }
+        case 'is_last_year': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const lyStart = moment().tz('America/Sao_Paulo').subtract(1, 'year').startOf('year');
+            const lyEnd = moment().tz('America/Sao_Paulo').subtract(1, 'year').endOf('year');
+            result = fd.isValid() && fd.isBetween(lyStart, lyEnd, null, '[]');
+            break;
+        }
+        case 'is_future_date': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowFut = moment().tz('America/Sao_Paulo').endOf('day');
+            result = fd.isValid() && fd.isAfter(nowFut);
+            break;
+        }
+        case 'is_past_date': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowPast = moment().tz('America/Sao_Paulo').startOf('day');
+            result = fd.isValid() && fd.isBefore(nowPast);
+            break;
+        }
+        case 'exactly_days_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetDay = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'days').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetDay, 'day');
+            break;
+        }
+        case 'exactly_months_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetMonth = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'months').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetMonth, 'day');
+            break;
+        }
+        case 'exactly_years_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetYear = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'years').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetYear, 'day');
+            break;
+        }
+        case 'exactly_days_from_now': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetDay = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'days').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetDay, 'day');
+            break;
+        }
+        case 'exactly_months_from_now': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetMonth = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'months').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetMonth, 'day');
+            break;
+        }
+        case 'exactly_years_from_now': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetYear = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'years').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isSame(targetYear, 'day');
+            break;
+        }
+        case 'date_before': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const target = moment(compareValue, DATE_FORMATS, true);
+            result = fd.isValid() && target.isValid() && fd.startOf('day').isBefore(target.startOf('day'));
+            break;
+        }
+        case 'date_after': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const target = moment(compareValue, DATE_FORMATS, true);
+            result = fd.isValid() && target.isValid() && fd.startOf('day').isAfter(target.startOf('day'));
+            break;
+        }
+        // ─── Operadores de horas ───
+        case 'within_hours': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowWh = moment().tz('America/Sao_Paulo');
+            const endWh = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'hours');
+            result = fd.isValid() && fd.isBetween(nowWh, endWh, null, '[]');
+            break;
+        }
+        case 'within_past_hours': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const nowPh = moment().tz('America/Sao_Paulo');
+            const startPh = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'hours');
+            result = fd.isValid() && fd.isBetween(startPh, nowPh, null, '[]');
+            break;
+        }
+        case 'exactly_hours_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetH = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'hours');
+            result = fd.isValid() && fd.startOf('hour').isSame(targetH.startOf('hour'), 'hour');
+            break;
+        }
+        case 'exactly_hours_from_now': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const targetH = moment().tz('America/Sao_Paulo').add(Number(compareValue), 'hours');
+            result = fd.isValid() && fd.startOf('hour').isSame(targetH.startOf('hour'), 'hour');
+            break;
+        }
+        // ─── Operadores "a mais de" (more_than) ───
+        case 'more_than_hours_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const threshold = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'hours');
+            result = fd.isValid() && fd.isBefore(threshold);
+            break;
+        }
+        case 'more_than_days_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const threshold = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'days').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isBefore(threshold);
+            break;
+        }
+        case 'more_than_months_ago': {
+            const fd = moment(fieldValue, DATE_FORMATS, true);
+            const threshold = moment().tz('America/Sao_Paulo').subtract(Number(compareValue), 'months').startOf('day');
+            result = fd.isValid() && fd.startOf('day').isBefore(threshold);
+            break;
+        }
         default:
             flowLog.log('WARN', `Operador desconhecido: ${cond.operator}`);
             result = true;
@@ -577,12 +796,27 @@ async function advance(runId) {
             throw new Error(`Fluxo ${flowId} não encontrado`);
         }
 
-        const { nodes, edges } = flowData;
+        const { flow, nodes, edges } = flowData;
+
+        // Verificar se o fluxo ainda está ativo antes de continuar
+        if (flow.status !== 'ativo') {
+            flowLog.log('INFO', `Run #${runId}: fluxo ${flowId} está ${flow.status} - cancelando execução`);
+            await dbQuery(
+                'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, updated_at = NOW() WHERE id = ?',
+                ['cancelled', runId]
+            );
+            return false;
+        }
 
         // Buscar nó atual
         const currentNode = nodes.find(n => n.id === run.current_node_id);
         if (!currentNode) {
-            throw new Error(`Nó ${run.current_node_id} não encontrado`);
+            flowLog.log('WARN', `Run #${runId} obsoleto - nó ${run.current_node_id} não encontrado no fluxo. Finalizando.`);
+            await dbQuery(
+                'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, updated_at = NOW() WHERE id = ?',
+                ['error', runId]
+            );
+            return false;
         }
 
         // Executar ação do nó atual
@@ -605,6 +839,27 @@ async function advance(runId) {
                 'UPDATE FlowRuns SET waiting_for_response = 1, wait_state = ?, next_run_at = NULL, context_json = ?, updated_at = NOW() WHERE id = ?',
                 [JSON.stringify(waitState), JSON.stringify(context), runId]
             );
+
+            // Bloquear fluxos do cliente para evitar novos disparos enquanto aguarda atendente
+            const clienteId = context.cliente?.cli_Id || context.cliente?.id;
+            if (clienteId) {
+                await dbQuery(
+                    `UPDATE CLIENTES SET flows_blocked = 1, flows_blocked_at = NOW(), flows_blocked_reason = 'wait_for_agent' WHERE cli_Id = ?`,
+                    [clienteId]
+                );
+                flowLog.log('INFO', `Cliente ${clienteId} bloqueado (wait_for_agent)`);
+            }
+
+            // Bloquear também por telefone (para contatos sem cadastro)
+            const phoneForBlock = context.phone || run.phone;
+            if (phoneForBlock) {
+                const chatIdForBlock = context.chatId || run.chat_id;
+                await dbQuery(
+                    `INSERT IGNORE INTO FlowBlockedPhones (phone, chat_id, blocked_at, blocked_reason, empresa_id)
+                     VALUES (?, ?, NOW(), 'wait_for_agent', ?)`,
+                    [phoneForBlock, chatIdForBlock || '', run.empresa_id]
+                ).catch(() => {});
+            }
 
             flowLog.log('INFO', `Execução ${runId} aguardando atendente humano. Desbloqueio via mensagem configurada ou chave env.`);
             return false;
@@ -666,8 +921,14 @@ async function advance(runId) {
         // Selecionar próximo nó baseado em condições ou output
         let nextEdge;
         if (result.output === 'true' || result.output === 'false') {
-            // Condição: procurar edge com label correspondente
-            nextEdge = nextEdges.find(e => e.label?.toLowerCase() === result.output.toLowerCase());
+            // Condição/Decisão: procurar edge com label correspondente
+            // Suporta labels "true"/"false" E "SIM"/"NÃO"
+            const isTrue = result.output === 'true';
+            nextEdge = nextEdges.find(e => {
+                const label = (e.label || '').toLowerCase().trim();
+                if (isTrue) return label === 'true' || label === 'sim';
+                return label === 'false' || label === 'não' || label === 'nao';
+            });
             if (!nextEdge) nextEdge = nextEdges[0];
         } else if (result.output && result.output.startsWith('option_')) {
             // AI Options: procurar edge com label correspondente à opção
@@ -728,7 +989,7 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
             processMessageWithInterruption = interruptionManager.processMessageWithInterruption;
         }
 
-        const interruptionResult = await processMessageWithInterruption({ phone, chatId, text });
+        const interruptionResult = await processMessageWithInterruption({ phone, chatId, text, empresa_id });
 
         if (!interruptionResult.shouldContinue) {
             flowLog.log('INFO', 'Mensagem bloqueada por sistema de interrupção');
@@ -755,9 +1016,14 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
             // Buscar nó atual para determinar tipo de wait
             const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ? AND empresa_id = ?', [run.current_node_id, run.empresa_id]);
             if (currentNode.length === 0) {
-                flowLog.log('ERROR', 'Nó atual não encontrado');
-                return;
-            }
+                // Run obsoleto: nó foi deletado (fluxo editado). Marcar como erro e continuar.
+                flowLog.log('WARN', `Run #${run.id} obsoleto - nó ${run.current_node_id} deletado. Finalizando run e prosseguindo.`);
+                await dbQuery(
+                    'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, updated_at = NOW() WHERE id = ?',
+                    ['error', run.id]
+                );
+                // Não retornar - deixar cair no fluxo normal para disparar novos fluxos se necessário
+            } else {
 
             const node = currentNode[0];
             const config = parseJSON(node.config) || {};
@@ -779,16 +1045,50 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                                 [JSON.stringify(context), run.id]
                             );
 
-                            // Remover tag de "aguardando atendimento" do WhatsApp
+                            // Desbloquear fluxos do cliente
+                            const clienteIdUnblock = context.cliente?.cli_Id || run.cliente_id;
+                            if (clienteIdUnblock) {
+                                await dbQuery(
+                                    `UPDATE CLIENTES SET flows_blocked = 0, flows_blocked_at = NULL, flows_blocked_reason = NULL WHERE cli_Id = ?`,
+                                    [clienteIdUnblock]
+                                );
+                            }
+                            // Remover bloqueio por telefone
+                            const phoneUnblock = (phone || run.phone || '').replace(/\D/g, '').slice(-8);
+                            if (phoneUnblock) {
+                                await dbQuery(
+                                    `DELETE FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? OR chat_id = ?`,
+                                    [phoneUnblock, chatId || run.chat_id || '']
+                                ).catch(() => {});
+                            }
+
+                            // Remover tags de atendimento do WhatsApp
                             if (chatId || run.chat_id) {
                                 try {
-                                    const { removeWaitingForAgentTag } = require('../../zap/chats');
+                                    const { removeAttendanceTags } = require('../../zap/chats');
                                     const cId = context.clientId || `atendimento_${empresa_id}`;
-                                    await removeWaitingForAgentTag(cId, chatId || run.chat_id);
+                                    await removeAttendanceTags(cId, chatId || run.chat_id).catch(() => {});
                                 } catch (tagErr) {
-                                    console.log('⚠️ Não foi possível remover tag do WhatsApp:', tagErr.message);
+                                    console.log('⚠️ Não foi possível remover tags do WhatsApp:', tagErr.message);
                                 }
                             }
+
+                            // Emitir evento socket
+                            try {
+                                const { emitChatStateUpdate } = require('../../utils/chatStateEmitter');
+                                emitChatStateUpdate(empresa_id, {
+                                    chatId: chatId || run.chat_id,
+                                    phone: phone || run.phone,
+                                    clienteId: clienteIdUnblock || null,
+                                    runId: run.id,
+                                    agent_status: null,
+                                    agent_user_id: null,
+                                    waiting_for_agent: false,
+                                    flows_blocked: false,
+                                    phone_blocked: false,
+                                    reason: 'unlock_by_message'
+                                });
+                            } catch (_) {}
 
                             flowLog.log('INFO', `Desbloqueio por mensagem configurada no run ${run.id}`);
                             await advance(run.id);
@@ -978,9 +1278,59 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
                 await advance(run.id);
                 return;
             }
+        } // fim do else (nó encontrado)
         }
 
-        // Se não há execução aguardando, verificar se há fluxos com trigger de mensagem WhatsApp
+        // Verificar se há um Run recém-finalizado para este telefone (últimos 60s)
+        // Se existir, continuar o mesmo fluxo em vez de disparar um novo (evita resposta duplicada)
+        const recentRun = await dbQuery(`
+            SELECT * FROM FlowRuns
+            WHERE status IN ('completed', 'finished')
+            AND (phone LIKE ? OR chat_id = ?)
+            AND empresa_id = ?
+            AND updated_at >= DATE_SUB(NOW(), INTERVAL 60 SECOND)
+            ORDER BY id DESC
+            LIMIT 1
+        `, [`%${phoneToSearch}%`, chatId, empresa_id]);
+
+        if (recentRun.length > 0) {
+            const run = recentRun[0];
+            const context = parseJSON(run.context_json) || {};
+
+            // Verificar se o fluxo tem nó AI Actions para continuar a conversa
+            const aiNode = await dbQuery(`
+                SELECT fn.* FROM FlowNodes fn
+                WHERE fn.flow_id = ? AND fn.type = 'ai_actions' AND fn.empresa_id = ?
+                LIMIT 1
+            `, [run.flow_id, empresa_id]);
+
+            if (aiNode.length > 0) {
+                flowLog.log('INFO', `Continuando conversa no fluxo recém-finalizado #${run.id} (Run < 60s atrás)`);
+
+                // Reativar o Run com o nó AI Actions
+                await dbQuery(
+                    'UPDATE FlowRuns SET status = ?, current_node_id = ?, waiting_for_response = 0, updated_at = NOW() WHERE id = ?',
+                    ['running', aiNode[0].id, run.id]
+                );
+
+                // Atualizar contexto com nova mensagem
+                context.ultima_mensagem = text;
+                if (mediaPath) {
+                    context.mediaPath = mediaPath;
+                    context.mediaType = mediaType;
+                }
+                await dbQuery(
+                    'UPDATE FlowRuns SET context_json = ? WHERE id = ?',
+                    [JSON.stringify(context), run.id]
+                );
+
+                // Avançar com a nova mensagem
+                await advance(run.id);
+                return;
+            }
+        }
+
+        // Se não há execução aguardando nem recente, verificar se há fluxos com trigger de mensagem WhatsApp
         flowLog.log('INFO', 'Nenhuma execução aguardando resposta, verificando triggers de mensagem WhatsApp');
         
         // Buscar fluxos com trigger de mensagem WhatsApp
@@ -1018,6 +1368,16 @@ async function _processIncomingMessage({ phone, chatId, text, clientId = 'defaul
         cliente.cli_celular = phone;
         cliente.telefone = phone;
         cliente.phone = phone;
+
+        // Atualizar data da última mensagem do cliente (recebida do WhatsApp)
+        if (cliente.cli_Id && empresa_id) {
+            dbQuery(
+                'UPDATE CLIENTES SET cli_ultima_msg_cliente_data = NOW(), cli_ultima_msg_data = NOW() WHERE cli_Id = ? AND empresa_id = ?',
+                [cliente.cli_Id, empresa_id]
+            ).catch(() => {});
+            cliente.cli_ultima_msg_cliente_data = new Date();
+            cliente.cli_ultima_msg_data = new Date();
+        }
 
         // Disparar cada fluxo encontrado
         const { triggerMessageReceivedFlows } = require('../core/flowTriggers');
@@ -1071,23 +1431,25 @@ async function checkWaitTimeouts() {
                 // Buscar nó atual
                 const currentNode = await dbQuery('SELECT * FROM FlowNodes WHERE id = ? AND empresa_id = ?', [run.current_node_id, run.empresa_id]);
                 if (currentNode.length === 0) {
-                    flowLog.log('ERROR', `Nó ${run.current_node_id} não encontrado para timeout`);
+                    flowLog.log('WARN', `Run #${run.id} obsoleto - nó ${run.current_node_id} não encontrado para timeout. Finalizando.`);
+                    await dbQuery(
+                        'UPDATE FlowRuns SET status = ?, waiting_for_response = 0, updated_at = NOW() WHERE id = ?',
+                        ['error', run.id]
+                    );
                     continue;
                 }
 
                 const node = currentNode[0];
                 const edges = await dbQuery('SELECT * FROM FlowEdges WHERE source_node_id = ? AND empresa_id = ? ORDER BY id ASC', [node.id, run.empresa_id]);
 
-                // Procurar edge de timeout
+                // Procurar edge de timeout (deve ter label explícita)
                 let timeoutEdge = edges.find(e => {
                     const label = (e.label || '').toLowerCase();
                     return label.includes('timeout') || label.includes('expirado') || label.includes('sem resposta');
                 });
 
-                // Se não encontrar edge de timeout, usar a última edge (convenção)
-                if (!timeoutEdge && edges.length > 0) {
-                    timeoutEdge = edges[edges.length - 1];
-                }
+                // Se não encontrar edge de timeout explícita, NÃO usar fallback
+                // O fluxo deve ser finalizado se não há caminho de timeout configurado
 
                 // Atualizar status
                 await dbQuery(
@@ -1130,11 +1492,324 @@ messageDebouncer.setProcessor(_processIncomingMessage);
 
 /**
  * Ponto de entrada público para mensagens recebidas (com debounce)
- * Bufferiza mensagens rápidas do mesmo telefone e processa uma única vez.
- * @param {Object} params - { phone, chatId, text, clientId, mediaPath, mediaType }
+ * Verifica bloqueio ANTES de enfileirar no debouncer.
+ * @param {Object} params - { phone, chatId, text, clientId, mediaPath, mediaType, empresa_id }
  */
-function handleIncomingMessage(params) {
+async function handleIncomingMessage(params) {
+    const { phone, chatId, empresa_id } = params;
+    if (!phone) return;
+
+    try {
+        const phoneClean = phone.replace(/\D/g, '');
+        const last8 = phoneClean.slice(-8);
+
+        // Verificar bloqueio no CLIENTES (flows_blocked = 1)
+        const { findClienteByPhoneBlocked } = require('../../utils/clienteHelper');
+        const clienteBloqueado = await findClienteByPhoneBlocked(last8, true, empresa_id);
+        if (clienteBloqueado) {
+            console.log(`[FlowEngine] Mensagem ignorada - cliente bloqueado (cli_Id: ${clienteBloqueado.cli_Id})`);
+            return;
+        }
+
+        // Verificar bloqueio por telefone (FlowBlockedPhones)
+        const phoneBloqueado = await dbQuery(
+            `SELECT id FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? OR chat_id = ? LIMIT 1`,
+            [last8, chatId || '']
+        );
+        if (phoneBloqueado && phoneBloqueado.length > 0) {
+            console.log(`[FlowEngine] Mensagem ignorada - telefone bloqueado (FlowBlockedPhones)`);
+            return;
+        }
+    } catch (err) {
+        // Em caso de erro na verificação, deixa passar (fail-open para não perder mensagens legítimas)
+        console.error('[FlowEngine] Erro ao verificar bloqueio pré-debounce:', err.message);
+    }
+
     messageDebouncer.queueMessage(params);
+}
+
+/**
+ * Limpar número de telefone (para uso em checkScheduledFlows)
+ */
+function cleanPhoneNumber(phone) {
+    if (!phone) return '';
+    return phone.replace(/\D/g, '');
+}
+
+/**
+ * Verifica e executa fluxos agendados (cron_minuto e cron_diario)
+ * Chamado a cada minuto pelo crons.js
+ */
+async function checkScheduledFlows() {
+    try {
+        const now = moment().tz('America/Sao_Paulo');
+        const currentHour = now.format('HH');
+        const currentMinute = now.format('mm');
+        const currentTimeNum = parseInt(currentHour) * 60 + parseInt(currentMinute);
+
+        // Buscar fluxos cron ativos
+        const cronFlows = await dbQuery(`
+            SELECT * FROM Flows
+            WHERE trigger_type IN ('cron_minuto', 'cron_diario', 'cron_hora')
+            AND status = 'ativo'
+        `);
+
+        if (!cronFlows || cronFlows.length === 0) return;
+
+        for (const flow of cronFlows) {
+            try {
+                // Para cron_diario: verificar horário exato configurado
+                if (flow.trigger_type === 'cron_diario') {
+                    const cronTime = flow.cron_time || '08:00';
+                    const [targetHour, targetMinute] = cronTime.split(':');
+                    if (currentHour !== targetHour || currentMinute !== targetMinute) continue;
+                }
+
+                // Para cron_hora: verificar se é no minuto 00
+                if (flow.trigger_type === 'cron_hora') {
+                    if (currentMinute !== '00') continue;
+                }
+
+                // Para cron_minuto e cron_hora: verificar horário comercial (se configurado)
+                if (flow.trigger_type === 'cron_minuto' || flow.trigger_type === 'cron_hora') {
+                    const startTime = flow.cron_time_start;
+                    const endTime = flow.cron_time_end;
+
+                    if (startTime && endTime) {
+                        const [startH, startM] = startTime.split(':').map(Number);
+                        const [endH, endM] = endTime.split(':').map(Number);
+                        const startNum = startH * 60 + startM;
+                        const endNum = endH * 60 + endM;
+
+                        if (currentTimeNum < startNum || currentTimeNum > endNum) {
+                            continue; // Fora do horário comercial
+                        }
+                    }
+                }
+
+                // Parse trigger_conditions
+                let conditions = flow.trigger_conditions;
+                if (typeof conditions === 'string') {
+                    try { conditions = JSON.parse(conditions); } catch (e) { conditions = []; }
+                }
+                if (!Array.isArray(conditions) || conditions.length === 0) {
+                    flowLog.log('WARN', `Cron flow ${flow.id} sem condições, pulando`);
+                    continue;
+                }
+
+                await executeCronFlow(flow, conditions);
+            } catch (error) {
+                flowLog.log('ERROR', `Erro ao processar cron flow ${flow.id}`, { error: error.message });
+            }
+        }
+    } catch (error) {
+        flowLog.log('ERROR', 'Erro em checkScheduledFlows', { error: error.message });
+    }
+}
+
+/**
+ * Executa um fluxo cron: itera sobre entidades relevantes baseado nas condições
+ */
+async function executeCronFlow(flow, conditions) {
+    const empresaId = flow.empresa_id;
+
+    // Detectar escopo baseado nas condições
+    const hasAgendamentoCondition = conditions.some(c =>
+        c.field && c.field.startsWith('agendamento_')
+    );
+
+    // Buscar nó start do fluxo
+    const startNodes = await dbQuery(
+        'SELECT * FROM FlowNodes WHERE flow_id = ? AND type = ? LIMIT 1',
+        [flow.id, 'start']
+    );
+    if (!startNodes || startNodes.length === 0) {
+        flowLog.log('WARN', `Cron flow ${flow.id} sem nó start`);
+        return;
+    }
+    const startNode = startNodes[0];
+
+    if (hasAgendamentoCondition) {
+        // Otimização: pré-filtrar por condições simples de data no SQL
+        let dateFilter = '';
+        const dateCondition = conditions.find(c =>
+            c.field === 'agendamento_data' && ['is_tomorrow', 'is_today', 'within_days'].includes(c.operator)
+        );
+
+        if (dateCondition) {
+            const today = moment().tz('America/Sao_Paulo').format('YYYY-MM-DD');
+            if (dateCondition.operator === 'is_today') {
+                dateFilter = ` AND DATE(a.age_data) = '${today}'`;
+            } else if (dateCondition.operator === 'is_tomorrow') {
+                const tomorrow = moment().tz('America/Sao_Paulo').add(1, 'day').format('YYYY-MM-DD');
+                dateFilter = ` AND DATE(a.age_data) = '${tomorrow}'`;
+            } else if (dateCondition.operator === 'within_days') {
+                const endDate = moment().tz('America/Sao_Paulo').add(Number(dateCondition.value), 'days').format('YYYY-MM-DD');
+                dateFilter = ` AND DATE(a.age_data) BETWEEN '${today}' AND '${endDate}'`;
+            }
+        }
+
+        // Buscar agendamentos com clientes
+        const rows = await dbQuery(`
+            SELECT a.*, c.cli_Id, c.cli_nome, c.cli_email, c.cli_celular, c.cli_genero,
+                   c.cli_cpf, c.cli_dataNasc AS cli_data_nasc, c.flows_blocked,
+                   s.ast_descricao AS age_status_nome
+            FROM AGENDAMENTO a
+            JOIN CLIENTES c ON a.cli_id = c.cli_Id
+            LEFT JOIN AGENDAMENTO_STATUS s ON a.ast_id = s.ast_id
+            WHERE a.empresa_id = ?
+            AND a.age_ativo = 1
+            AND (c.flows_blocked IS NULL OR c.flows_blocked != 1)
+            ${dateFilter}
+        `, [empresaId]);
+
+        if (!rows || rows.length === 0) return;
+
+        flowLog.log('INFO', `Cron flow ${flow.id}: ${rows.length} agendamentos encontrados para avaliar`);
+
+        for (const row of rows) {
+            try {
+                const phone = cleanPhoneNumber(row.cli_celular || '');
+                if (!phone) continue;
+
+                // Verificar se já existe run rodando para este flow+phone
+                const existing = await dbQuery(
+                    'SELECT id FROM FlowRuns WHERE flow_id = ? AND phone = ? AND status = ? LIMIT 1',
+                    [flow.id, phone, 'running']
+                );
+                if (existing && existing.length > 0) continue;
+
+                // Montar contexto
+                const context = {
+                    phone,
+                    cliente: {
+                        cli_Id: row.cli_Id,
+                        cli_nome: row.cli_nome,
+                        cli_email: row.cli_email,
+                        cli_celular: row.cli_celular,
+                        cli_genero: row.cli_genero,
+                        cli_cpf: row.cli_cpf,
+                        cli_data_nasc: row.cli_data_nasc
+                    },
+                    agendamento: {
+                        age_id: row.age_id,
+                        age_data: row.age_data,
+                        age_data_final: row.age_dataFim,
+                        age_hora_inicio: row.age_horaInicio,
+                        age_hora_fim: row.age_horaFim,
+                        age_status: row.ast_id,
+                        age_status_nome: row.age_status_nome,
+                        age_valor: row.age_valor,
+                        age_observacao: row.age_observacao,
+                        age_funcionario_id: row.fun_id,
+                        age_tipo: row.age_type
+                    },
+                    empresa_id: empresaId,
+                    triggerData: {
+                        triggerType: flow.trigger_type,
+                        timestamp: moment().tz('America/Sao_Paulo').format('YYYY-MM-DD HH:mm:ss')
+                    }
+                };
+
+                // Avaliar condições usando buildFlatContext
+                const flat = buildFlatContext(context);
+
+                const conditionsMet = evalConditions(conditions, flat);
+                if (!conditionsMet) continue;
+
+                // Iniciar fluxo
+                flowLog.log('INFO', `Cron flow ${flow.id}: iniciando para phone ${phone}`);
+                await startFlow({
+                    flowId: flow.id,
+                    startNodeId: startNode.id,
+                    phone: phone,
+                    cliente: context.cliente,
+                    agendamento: context.agendamento,
+                    context: context
+                });
+
+                // Delay aleatório entre 60s e 90s para evitar banimento no WhatsApp
+                const delayMs = 60000 + Math.floor(Math.random() * 30000);
+                flowLog.log('INFO', `Cron flow ${flow.id}: aguardando ${Math.round(delayMs / 1000)}s antes do próximo disparo`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            } catch (err) {
+                flowLog.log('ERROR', `Cron flow ${flow.id}: erro para registro ${row.age_id}`, { error: err.message });
+            }
+        }
+    } else {
+        // Apenas clientes (com último agendamento CONCLUÍDO - Atendido/Pago)
+        // Buscar IDs de status "concluídos" dinamicamente por empresa
+        const statusConcluidos = await dbQuery(
+            `SELECT ast_id FROM AGENDAMENTO_STATUS WHERE ast_descricao IN ('Atendido', 'Pago') AND empresa_id = ?`,
+            [empresaId]
+        );
+        const statusIds = statusConcluidos.length > 0
+            ? statusConcluidos.map(s => s.ast_id).join(',')
+            : '3,4'; // fallback
+
+        const clientes = await dbQuery(`
+            SELECT c.*,
+                   (SELECT MAX(a.age_data) FROM AGENDAMENTO a WHERE a.cli_id = c.cli_Id AND a.empresa_id = c.empresa_id AND a.age_ativo = 1 AND a.ast_id IN (${statusIds})) as cli_ultimo_agendamento,
+                   (SELECT COUNT(a.age_id) FROM AGENDAMENTO a WHERE a.cli_id = c.cli_Id AND a.empresa_id = c.empresa_id AND a.age_ativo = 1 AND a.ast_id IN (${statusIds})) as cli_qtd_agendamentos
+            FROM CLIENTES c
+            WHERE c.empresa_id = ? AND (c.flows_blocked IS NULL OR c.flows_blocked != 1)
+        `, [empresaId]);
+
+        if (!clientes || clientes.length === 0) return;
+
+        flowLog.log('INFO', `Cron flow ${flow.id}: ${clientes.length} clientes encontrados para avaliar`);
+
+        for (const cliente of clientes) {
+            try {
+                const phone = cleanPhoneNumber(cliente.cli_celular || '');
+                if (!phone) continue;
+
+                const existing = await dbQuery(
+                    'SELECT id FROM FlowRuns WHERE flow_id = ? AND phone = ? AND status = ? LIMIT 1',
+                    [flow.id, phone, 'running']
+                );
+                if (existing && existing.length > 0) continue;
+
+                const context = {
+                    phone,
+                    cliente: cliente,
+                    empresa_id: empresaId,
+                    triggerData: {
+                        triggerType: flow.trigger_type,
+                        timestamp: moment().tz('America/Sao_Paulo').format('YYYY-MM-DD HH:mm:ss')
+                    }
+                };
+
+                const flat = buildFlatContext(context);
+
+                const conditionsMet = evalConditions(conditions, flat);
+                if (!conditionsMet) continue;
+
+                flowLog.log('INFO', `Cron flow ${flow.id}: iniciando para phone ${phone}`);
+                await startFlow({
+                    flowId: flow.id,
+                    startNodeId: startNode.id,
+                    phone: phone,
+                    cliente: cliente,
+                    context: context
+                });
+
+                // Delay aleatório entre 60s e 90s para evitar banimento no WhatsApp
+                const delayMs = 60000 + Math.floor(Math.random() * 30000);
+                flowLog.log('INFO', `Cron flow ${flow.id}: aguardando ${Math.round(delayMs / 1000)}s antes do próximo disparo`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            } catch (err) {
+                flowLog.log('ERROR', `Cron flow ${flow.id}: erro para cliente ${cliente.cli_Id}`, { error: err.message });
+            }
+        }
+    }
+}
+
+/**
+ * Stub para checkTimeouts - o timeout handling real é feito por checkWaitTimeouts
+ */
+async function checkTimeouts() {
+    // Timeout handling is done in checkWaitTimeouts
 }
 
 // Exportar funções principais
@@ -1150,6 +1825,8 @@ module.exports = {
     findNextNodes,
     getSMTPTransporter: getSMTPTransporterFunction,
     checkWaitTimeouts,
+    checkScheduledFlows,
+    checkTimeouts,
 
     // Debouncer stats (para debug)
     getDebouncerStats: messageDebouncer.getStats,

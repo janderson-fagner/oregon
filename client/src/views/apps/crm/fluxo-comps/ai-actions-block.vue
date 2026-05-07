@@ -1,10 +1,12 @@
 <script setup>
-import { ref, onMounted } from "vue";
-import { getAllVariables, copyVariableToClipboard } from "@/utils/dynamicVariables.js";
-
-const { setAlert } = useAlert();
+import { ref } from "vue";
+import VariablesSection from './VariablesSection.vue';
 
 const props = defineProps({
+  flowVariables: {
+    type: Array,
+    default: () => []
+  },
   config: {
     type: Object,
     default: () => ({
@@ -38,8 +40,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:config"]);
-
-const variaveisDisponiveis = ref([]);
 
 // Ações disponíveis por categoria
 const agendamentoActions = [
@@ -142,11 +142,6 @@ const fallbackOptions = [
   { title: "Oferecer Alternativas", value: "offerAlternatives" }
 ];
 
-// Função para copiar variável
-const copyVariable = (variable) => {
-  copyVariableToClipboard(variable, setAlert);
-};
-
 // Atualizar configuração
 const updateConfig = (key, value) => {
   const newConfig = { ...props.config, [key]: value };
@@ -238,9 +233,6 @@ const removeFallbackAction = (index) => {
   updateConfig("fallbackActions", newFallbacks);
 };
 
-onMounted(async () => {
-  variaveisDisponiveis.value = await getAllVariables();
-});
 </script>
 
 <template>
@@ -255,10 +247,10 @@ onMounted(async () => {
         
         <!-- Alertas Informativos sobre Capacidades -->
         <VAlert type="info" variant="tonal" class="mb-4">
-          <VAlertTitle>
-            <VIcon icon="tabler-info-circle" class="me-2" />
+          <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+            <VIcon icon="tabler-info-circle" class="me-2" size="18" />
             O que a IA Consegue Fazer
-          </VAlertTitle>
+          </span>
           <div class="text-body-2">
             <p class="mb-2">A IA é um <strong>assistente virtual completo</strong> que pode:</p>
             <ul class="mb-2">
@@ -278,10 +270,10 @@ onMounted(async () => {
         </VAlert>
         
         <VAlert type="success" variant="tonal" class="mb-4">
-          <VAlertTitle>
-            <VIcon icon="tabler-wand" class="me-2" />
+          <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+            <VIcon icon="tabler-wand" class="me-2" size="18" />
             Visão Completa do Cliente
-          </VAlertTitle>
+          </span>
           <div class="text-body-2">
             <p class="mb-0">
               A IA tem acesso a um <strong>resumo completo</strong> de cada cliente, incluindo:
@@ -395,10 +387,10 @@ onMounted(async () => {
 
               <!-- Informação sobre Serviços GPT -->
               <VAlert type="info" variant="tonal" class="mt-4">
-                <VAlertTitle>
-                  <VIcon icon="tabler-info-circle" class="me-2" />
+                <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+                  <VIcon icon="tabler-info-circle" class="me-2" size="18" />
                   Sobre os Serviços
-                </VAlertTitle>
+                </span>
                 <p class="text-body-2 mb-0">
                   A IA utiliza automaticamente os serviços configurados em <strong>Configurações > GPT AI > Agendamentos</strong>.
                   <br><br>
@@ -529,10 +521,10 @@ onMounted(async () => {
         </p>
         
         <VAlert type="warning" variant="tonal" class="mb-3">
-          <VAlertTitle>
-            <VIcon icon="tabler-alert-triangle" class="me-2" />
+          <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+            <VIcon icon="tabler-alert-triangle" class="me-2" size="18" />
             Fallback Recomendado
-          </VAlertTitle>
+          </span>
           <p class="text-body-2 mb-0">
             O fallback padrão é <strong>"Aguardar Atendimento Humano"</strong>, que coloca o cliente 
             em uma fila para ser atendido por um humano quando a IA não consegue resolver. 
@@ -582,10 +574,10 @@ onMounted(async () => {
     <!-- Configurações Globais -->
     <VDivider class="my-4" />
     <VAlert type="info" variant="tonal" class="mb-4">
-      <VAlertTitle>
-        <VIcon icon="tabler-settings" class="me-2" />
+      <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+        <VIcon icon="tabler-settings" class="me-2" size="18" />
         Configurações Globais de IA
-      </VAlertTitle>
+      </span>
       <p class="text-caption mb-0">
         A IA usará as configurações definidas em <strong>Configurações > GPT AI</strong>:
         <br>• Serviços e regras de precificação
@@ -598,35 +590,7 @@ onMounted(async () => {
     </VAlert>
 
     <!-- Variáveis Disponíveis -->
-    <VDivider class="my-4" />
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Variáveis Disponíveis</h6>
-      <p class="text-caption text-medium-emphasis mb-4">
-        Clique em uma variável para copiá-la e usar nas instruções
-      </p>
-      
-      <div class="d-flex flex-wrap gap-2">
-        <VChip
-          v-for="variable in variaveisDisponiveis"
-          :key="variable.value"
-          size="small"
-          :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : 'primary'"
-          variant="tonal"
-          class="cursor-pointer"
-          @click="copyVariable(variable.value)"
-        >
-          <VIcon icon="tabler-copy" size="small" class="me-1" />
-          {{ variable.title }}
-        </VChip>
-      </div>
-      
-      <div class="text-caption mt-2">
-        <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-        <span class="text-success">Verde</span> = Dinâmicas | 
-        <span class="text-info">Azul</span> = Sistema | 
-        <span class="text-primary">Primário</span> = Cliente/Agendamento
-      </div>
-    </div>
+    <VariablesSection :flow-variables="props.flowVariables || []" />
 
     <!-- Exemplos de Instruções -->
     <VExpansionPanels>
@@ -639,10 +603,10 @@ onMounted(async () => {
         </VExpansionPanelTitle>
         <VExpansionPanelText>
           <VAlert type="success" variant="tonal" class="mb-3">
-            <VAlertTitle>
-              <VIcon icon="tabler-calendar" class="me-2" />
+            <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+              <VIcon icon="tabler-calendar" class="me-2" size="18" />
               Exemplo 1: Agendamento Completo com Serviços
-            </VAlertTitle>
+            </span>
             <p class="text-body-2 mb-0">
               "Você é um assistente virtual especializado em agendamentos de serviços. 
               Quando o cliente quiser marcar um horário, siga este fluxo:
@@ -664,10 +628,10 @@ onMounted(async () => {
           </VAlert>
 
           <VAlert type="info" variant="tonal" class="mb-3">
-            <VAlertTitle>
-              <VIcon icon="tabler-edit" class="me-2" />
+            <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+              <VIcon icon="tabler-edit" class="me-2" size="18" />
               Exemplo 2: Atualização de Agendamento
-            </VAlertTitle>
+            </span>
             <p class="text-body-2 mb-0">
               "Você pode ajudar clientes a remarcar ou modificar agendamentos. 
               Quando o cliente pedir para remarcar:
@@ -685,10 +649,10 @@ onMounted(async () => {
           </VAlert>
 
           <VAlert type="warning" variant="tonal">
-            <VAlertTitle>
-              <VIcon icon="tabler-search" class="me-2" />
+            <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+              <VIcon icon="tabler-search" class="me-2" size="18" />
               Exemplo 3: Consulta e Recomendação de Serviços
-            </VAlertTitle>
+            </span>
             <p class="text-body-2 mb-0">
               "Quando o cliente perguntar sobre serviços disponíveis:
               <br><br>

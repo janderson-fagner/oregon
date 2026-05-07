@@ -2,10 +2,10 @@
   <div>
     <!-- Aviso Principal -->
     <VAlert type="info" variant="tonal" class="mb-4">
-      <VAlertTitle>
-        <VIcon icon="tabler-robot" class="me-2" />
+      <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+        <VIcon icon="tabler-robot" class="me-2" size="18" />
         Atualização de Agendamento com IA
-      </VAlertTitle>
+      </span>
       <p class="mb-0">
         A IA identificará automaticamente qual agendamento o cliente deseja atualizar e coletará 
         as informações necessárias para realizar as alterações (reagendamento, mudança de serviço, etc).
@@ -50,86 +50,36 @@
       </VCardText>
     </VCard>
 
-    <!-- Como a IA Funciona -->
-    <VExpansionPanels>
-      <VExpansionPanel>
-        <VExpansionPanelTitle>
-          <div class="d-flex align-center">
-            <VIcon icon="tabler-help-circle" class="me-2" color="info" />
-            <span>Como funciona?</span>
-          </div>
-        </VExpansionPanelTitle>
-        <VExpansionPanelText>
-          <div class="text-body-2">
-            <p class="font-weight-bold">A IA seguirá este fluxo automaticamente:</p>
-            
-            <ol class="pl-4">
-              <li class="mb-2">
-                <strong>Identificar agendamento:</strong> Busca o agendamento do cliente no contexto
-              </li>
-              <li class="mb-2">
-                <strong>Entender mudanças desejadas:</strong>
-                <ul class="pl-4">
-                  <li>Reagendar (nova data/horário)</li>
-                  <li>Mudar serviço</li>
-                  <li>Alterar endereço</li>
-                  <li>Adicionar/remover serviços</li>
-                  <li>Cancelar agendamento</li>
-                </ul>
-              </li>
-              <li class="mb-2">
-                <strong>Verificar disponibilidade:</strong> Se for reagendamento, consulta novos horários
-              </li>
-              <li class="mb-2">
-                <strong>Recalcular preço:</strong> Se houver mudança de serviços
-              </li>
-              <li class="mb-2">
-                <strong>Confirmar alterações:</strong> Recapitula o que será alterado
-              </li>
-              <li class="mb-2">
-                <strong>Atualizar agendamento:</strong> Após confirmação do cliente
-              </li>
-            </ol>
+    <!-- Variáveis Disponíveis -->
+    <VariablesSection :flow-variables="props.flowVariables" />
 
-            <VAlert type="warning" variant="tonal" density="compact" class="mt-3">
-              <p class="text-caption mb-0">
-                <VIcon icon="tabler-alert-circle" size="14" class="me-1" />
-                <strong>Importante:</strong> A IA sempre verificará se há um agendamento válido no contexto. 
-                Se não houver, perguntará ao cliente qual agendamento ele deseja atualizar.
-              </p>
-            </VAlert>
-
-            <VAlert type="success" variant="tonal" density="compact" class="mt-3">
-              <p class="text-caption mb-0">
-                <VIcon icon="tabler-check" size="14" class="me-1" />
-                A IA pode identificar agendamentos por:
-                <br>• Número do agendamento
-                <br>• Data do agendamento
-                <br>• Serviço agendado
-                <br>• Último agendamento ativo do cliente
-              </p>
-            </VAlert>
-          </div>
-        </VExpansionPanelText>
-      </VExpansionPanel>
-    </VExpansionPanels>
-
-    <!-- Contexto Adicional -->
-    <VDivider class="my-4" />
-    
-    <div class="text-caption text-medium-emphasis">
-      <VIcon icon="tabler-info-circle" class="me-1" size="14" />
-      Este bloco atualizará um agendamento existente do cliente no fluxo, utilizando o contexto 
-      completo (agendamentos ativos, histórico, disponibilidade).
-    </div>
+    <!-- Informações -->
+    <BlockInfoSection
+      title="Como funciona"
+      :items="[
+        { icon: 'tabler-search', color: 'primary', text: 'Identifica automaticamente o agendamento do cliente no contexto' },
+        { icon: 'tabler-edit', color: 'info', text: 'Coleta as mudanças desejadas (reagendar, mudar serviço, alterar endereço, cancelar)' },
+        { icon: 'tabler-calendar-event', color: 'warning', text: 'Verifica disponibilidade e recalcula preço se necessário' },
+        { icon: 'tabler-check', color: 'success', text: 'Confirma alterações com o cliente antes de atualizar' },
+        { icon: 'tabler-refresh', color: 'success', text: 'Atualiza o agendamento após confirmação do cliente' },
+      ]"
+      hint="Este bloco atualizará um agendamento existente do cliente no fluxo, utilizando o contexto completo (agendamentos ativos, histórico, disponibilidade)."
+    />
   </div>
 </template>
 
 <script setup>
+import VariablesSection from './VariablesSection.vue'
+import BlockInfoSection from './BlockInfoSection.vue'
+
 const props = defineProps({
   config: {
     type: Object,
     required: true
+  },
+  flowVariables: {
+    type: Array,
+    default: () => []
   }
 });
 

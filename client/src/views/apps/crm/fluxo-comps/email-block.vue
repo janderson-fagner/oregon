@@ -1,5 +1,7 @@
 <script setup>
 import modeloDialog from "@/views/apps/crm/modeloDialogEmail.vue";
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   email: {
@@ -11,6 +13,10 @@ const props = defineProps({
     type: Object,
     required: false,
     default: null,
+  },
+  flowVariables: {
+    type: Array,
+    default: () => []
   },
 });
 
@@ -201,4 +207,19 @@ getTemplates();
       "
     />
   </VDialog>
+
+  <!-- Variáveis Disponíveis -->
+  <VariablesSection :flow-variables="props.flowVariables" />
+
+  <!-- Informações -->
+  <BlockInfoSection
+    title="Como funciona"
+    :items="[
+      { icon: 'tabler-mail', color: 'primary', text: 'Envia um email ao cliente usando modelo pré-configurado' },
+      { icon: 'tabler-template', color: 'info', text: 'Selecione ou crie modelos de email com editor visual' },
+      { icon: 'tabler-variable', color: 'success', text: 'Suporta variáveis dinâmicas no assunto e conteúdo do email' },
+      { icon: 'tabler-send', color: 'warning', text: 'O email é enviado automaticamente quando o fluxo chega neste bloco' },
+    ]"
+    hint="Configure os modelos de email em Configurações > Templates para reutilizá-los em diferentes fluxos."
+  />
 </template>

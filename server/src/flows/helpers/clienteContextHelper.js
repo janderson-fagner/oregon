@@ -169,8 +169,8 @@ async function getClienteResumoParaIA(cliente, empresa_id = null) {
     }
 
     // ===== OBSERVAÇÕES E PREFERÊNCIAS =====
-    if (cliente.cli_observacoes) {
-        resumo.push(`\n**Observações:** ${cliente.cli_observacoes}`);
+    if (cliente.cli_obs) {
+        resumo.push(`\n**Observações:** ${cliente.cli_obs}`);
     }
 
     return resumo.join('\n');

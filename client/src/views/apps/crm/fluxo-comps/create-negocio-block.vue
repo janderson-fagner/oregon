@@ -8,7 +8,7 @@
         icon="tabler-briefcase-plus"
         class="mb-4"
       >
-        <VAlertTitle class="mb-1">Criar Negócio</VAlertTitle>
+        <span class="text-subtitle-2 font-weight-bold">Criar Negócio</span>
         <div class="text-body-2">
           Este bloco criará um novo negócio no funil de vendas para o cliente atual.
           Configure as informações do negócio abaixo.
@@ -195,96 +195,26 @@
       </VExpansionPanels>
     </VCol>
 
-    <!-- Variáveis Disponíveis -->
     <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <div class="mb-4">
-        <h6 class="text-h6 mb-2">Variáveis Disponíveis</h6>
-        <p class="text-caption text-medium-emphasis mb-4">
-          Clique em uma variável para copiá-la e usá-la nos campos
-        </p>
-        
-        <div class="d-flex flex-wrap gap-2">
-          <VChip
-            v-for="variable in variaveisNegocio"
-            :key="variable.value"
-            size="small"
-            :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : 'primary'"
-            variant="tonal"
-            class="cursor-pointer"
-            @click="copyVariable(variable.value)"
-          >
-            <VIcon icon="tabler-copy" size="small" class="me-1" />
-            {{ variable.title }}
-          </VChip>
-        </div>
-        
-        <div class="text-caption mt-2">
-          <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-          <span class="text-success">Verde</span> = Dinâmicas | 
-          <span class="text-info">Azul</span> = Sistema | 
-          <span class="text-primary">Primário</span> = Cliente/Negócio
-        </div>
-      </div>
-    </VCol>
+      <VariablesSection :flow-variables="props.flowVariables" />
 
-    <!-- Informações Importantes -->
-    <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <VExpansionPanels>
-        <VExpansionPanel>
-          <VExpansionPanelTitle>
-            <div class="d-flex align-center gap-2">
-              <VIcon icon="tabler-info-circle" size="20" color="info" />
-              <span class="text-sm">Informações Importantes</span>
-            </div>
-          </VExpansionPanelTitle>
-          <VExpansionPanelText>
-            <VAlert color="info" variant="tonal" class="mb-0">
-              <div class="text-body-2">
-                <p class="mb-2">
-                  <strong>✅ O que este bloco faz:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>Cria um novo negócio no funil de vendas</li>
-                  <li>Vincula automaticamente ao cliente do contexto</li>
-                  <li>Permite definir etapa inicial, valor, origem e mais</li>
-                  <li>Suporta variáveis dinâmicas em todos os campos</li>
-                  <li>Adiciona registro no histórico do cliente</li>
-                </ul>
-                
-                <p class="mb-2">
-                  <strong>⚠️ Importante:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>O negócio será criado para o cliente do contexto do fluxo</li>
-                  <li>Título e Etapa do Funil são obrigatórios</li>
-                  <li>Outros campos são opcionais mas recomendados</li>
-                  <li>Use variáveis dinâmicas para preencher com dados capturados</li>
-                </ul>
-
-                <p class="mb-2">
-                  <strong>📝 Exemplos de uso:</strong>
-                </p>
-                <ul class="mb-0">
-                  <li><strong>Após interesse em produto:</strong> Criar negócio quando cliente demonstra interesse</li>
-                  <li><strong>Pós-atendimento:</strong> Transformar atendimento em oportunidade de venda</li>
-                  <li><strong>Campanha de marketing:</strong> Criar negócio automaticamente para leads qualificados</li>
-                </ul>
-              </div>
-            </VAlert>
-          </VExpansionPanelText>
-        </VExpansionPanel>
-      </VExpansionPanels>
+      <BlockInfoSection
+        :items="[
+          { icon: 'tabler-briefcase', color: 'success', text: 'Cria um novo negócio no funil de vendas' },
+          { icon: 'tabler-link', color: 'primary', text: 'Vincula automaticamente ao cliente do contexto' },
+          { icon: 'tabler-variable', color: 'info', text: 'Suporta variáveis dinâmicas em todos os campos' }
+        ]"
+        hint="Título e Etapa do Funil são obrigatórios. Outros campos são opcionais."
+      />
     </VCol>
   </VRow>
 </template>
 
 <script setup>
 import { ref, watch, onMounted } from 'vue';
-import { getAllVariables, copyVariableToClipboard } from '@/utils/dynamicVariables.js';
+import { getAllVariables } from '@/utils/dynamicVariables.js';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -300,8 +230,6 @@ const props = defineProps({
 
 const emit = defineEmits(['update:config']);
 
-const { setAlert } = useAlert();
-
 const localConfig = ref({
   titulo: props.config.titulo || '',
   etapaId: props.config.etapaId || null,
@@ -316,11 +244,6 @@ const etapas = ref([]);
 const tags = ref([]);
 const variaveisNegocio = ref([]);
 const loadingEtapas = ref(false);
-
-// Função para copiar variável
-const copyVariable = (variableValue) => {
-  copyVariableToClipboard(variableValue, setAlert);
-};
 
 const carregarEtapas = async () => {
   loadingEtapas.value = true;

@@ -138,55 +138,7 @@
         adicionado automaticamente o link do WhatsApp.
       </p>
 
-      <!-- Variáveis disponíveis -->
-      <div class="mb-3">
-        <a @click="toggleVariaveisTutorial" class="cursor-pointer text-primary">
-          Ver variáveis disponíveis
-          <VIcon
-            :icon="
-              viewVariaveisTutorial
-                ? 'tabler-chevron-up'
-                : 'tabler-chevron-down'
-            "
-            size="small"
-          />
-        </a>
-
-        <v-fade-transition>
-          <div v-if="viewVariaveisTutorial" class="mt-3">
-            <VCard variant="outlined" class="pa-3">
-              <p class="text-caption mb-3">
-                Clique em uma variável para copiá-la. Use dentro do texto com
-                duplas chaves. Ex.:
-                <span class="font-weight-bold" v-pre>{{ cliente_nome }}</span>
-              </p>
-
-              <div class="d-flex flex-wrap gap-2">
-                <VChip
-                  v-for="variable in variaveisItens"
-                  :key="variable.value"
-                  size="small"
-                  :color="
-                    variable.type === 'cliente'
-                      ? 'primary'
-                      : variable.type === 'pedido'
-                      ? 'info'
-                      : 'success'
-                  "
-                  variant="tonal"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variable.value)"
-                >
-                  <VIcon icon="tabler-copy" size="small" class="me-1" />
-                  {{ variable.title }}
-                </VChip>
-              </div>
-            </VCard>
-          </div>
-        </v-fade-transition>
-      </div>
-
-      <!-- Editor Quill -->
+        <!-- Editor Quill -->
       <div class="inputQP">
         <div id="toolbar-forward-message">
           <button class="ql-bold"></button>
@@ -213,50 +165,19 @@
       </div>
     </div>
 
-    <VDivider class="my-4" />
+    <VariablesSection :flow-variables="props.flowVariables" />
 
-    <!-- Informações -->
-    <VCard variant="outlined" class="pa-4">
-      <h6 class="text-subtitle-2 mb-2">
-        <VIcon icon="tabler-info-circle" class="me-1" />
-        Como funciona
-      </h6>
-      <VList density="compact">
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            A mensagem será enviada para o(s) número(s) configurado(s)
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            O número do contato no fluxo será incluído na mensagem
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Um link de contato do WhatsApp será adicionado automaticamente
-          </VListItemTitle>
-        </VListItem>
-        <VListItem v-if="localConfig.forwardType === 'ordered'">
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            O sistema controlará a ordem para distribuir os contatos de forma
-            equilibrada
-          </VListItemTitle>
-        </VListItem>
-      </VList>
-    </VCard>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-check', color: 'success', text: 'A mensagem será enviada para o(s) número(s) configurado(s)' },
+        { icon: 'tabler-check', color: 'success', text: 'O número do contato no fluxo será incluído na mensagem' },
+        { icon: 'tabler-check', color: 'success', text: 'Um link de contato do WhatsApp será adicionado automaticamente' },
+        { icon: 'tabler-arrows-sort', color: 'primary', text: 'Ordenada: distribui contatos seguindo a ordem da lista' },
+        { icon: 'tabler-dice', color: 'warning', text: 'Aleatória: encaminha para um número aleatório da lista' },
+        { icon: 'tabler-users', color: 'info', text: 'Todos: envia a mensagem para todos os números cadastrados' },
+      ]"
+      hint="O tipo de encaminhamento define como os contatos serão distribuídos entre os números."
+    />
   </div>
 </template>
 
@@ -265,7 +186,8 @@ import { ref, watch, onMounted } from "vue";
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
 import draggable from "vuedraggable";
-import { getAllVariables } from "@/utils/dynamicVariables.js";
+import VariablesSection from "./VariablesSection.vue";
+import BlockInfoSection from "./BlockInfoSection.vue";
 
 const props = defineProps({
   config: {
@@ -302,7 +224,6 @@ const forwardTypeOptions = [
 const variaveisItens = ref([]);
 const variavel = ref(null);
 const refQuillEditor = ref(null);
-const viewVariaveisTutorial = ref(false);
 
 // Configurações do editor Quill
 const editorOptions = {
@@ -390,54 +311,6 @@ const insertVariable = () => {
 
   insertVariableInline(quill, value);
   variavel.value = null;
-};
-
-// Função para copiar variável
-const copyVariableToClipboard = (variableValue) => {
-  const variableText = `{{${variableValue}}}`;
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard
-      .writeText(variableText)
-      .then(() => {
-        setAlert(
-          `Variável ${variableText} copiada!`,
-          "success",
-          "tabler-copy",
-          2000
-        );
-      })
-      .catch(() => {
-        fallbackCopyToClipboard(variableText);
-      });
-  } else {
-    fallbackCopyToClipboard(variableText);
-  }
-};
-
-const fallbackCopyToClipboard = (text) => {
-  const textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.style.position = "fixed";
-  textArea.style.left = "-999999px";
-  textArea.style.top = "-999999px";
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-
-  try {
-    document.execCommand("copy");
-    setAlert(`Variável ${text} copiada!`, "success", "tabler-copy", 2000);
-  } catch (err) {
-    setAlert("Erro ao copiar variável", "error", "tabler-alert-circle", 2000);
-  }
-
-  document.body.removeChild(textArea);
-};
-
-// Função para toggle do tutorial de variáveis
-const toggleVariaveisTutorial = () => {
-  viewVariaveisTutorial.value = !viewVariaveisTutorial.value;
 };
 
 // Carregar variáveis

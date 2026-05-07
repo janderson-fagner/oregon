@@ -793,6 +793,7 @@ router.get('/get/servicos', async (req, res) => {
             JOIN PAGAMENTO ON AGENDAMENTO.age_id = PAGAMENTO.age_id
             WHERE AGENDAMENTO.ast_id = 3
             AND PAGAMENTO.pgt_data IS NOT NULL
+            AND AGENDAMENTO.age_ativo = 1
             AND AGENDAMENTO.empresa_id = ${empresa_id}
             AND (
                 EXISTS (SELECT 1 FROM AXS WHERE AXS.age_id = AGENDAMENTO.age_id)
@@ -801,13 +802,11 @@ router.get('/get/servicos', async (req, res) => {
         `;
 
         if (dataDe) {
-            const formattedDataDe = new Date(dataDe).toISOString().split('T')[0];
-            queryAgendamentosComPagamento += ` AND DATE(PAGAMENTO.created_at) >= '${formattedDataDe}'`;
+            queryAgendamentosComPagamento += ` AND AGENDAMENTO.age_data >= '${dataDe}'`;
         }
 
         if (dataAte) {
-            const formattedDataAte = new Date(dataAte).toISOString().split('T')[0];
-            queryAgendamentosComPagamento += ` AND DATE(PAGAMENTO.created_at) <= '${formattedDataAte}'`;
+            queryAgendamentosComPagamento += ` AND AGENDAMENTO.age_data <= '${dataAte}'`;
         }
 
         const ageIdsComPagamento = await dbQuery(queryAgendamentosComPagamento);
@@ -832,50 +831,35 @@ router.get('/get/servicos', async (req, res) => {
         const ageIds = ageIdsComPagamento.map(item => item.age_id);
         let queryAgendamentos = `SELECT * FROM AGENDAMENTO WHERE age_id IN (${ageIds.join(',')}) AND empresa_id = ${empresa_id} ORDER BY age_data DESC`;
 
-        const agendamentos = await getAgendamentosSimple(queryAgendamentos, []);
+        const agendamentos = await getAgendamentosSimple(queryAgendamentos, [], empresa_id);
         const funcionarios = await dbQuery('SELECT * FROM User WHERE podeAgendamento = 1 AND empresa_id = ?', [empresa_id]);
         const statusAgendamentos = await dbQuery('SELECT * FROM AGENDAMENTO_STATUS');
 
         // ==========================
-        // 1.5 BUSCAR PAGAMENTOS PARA CADA AGENDAMENTO
+        // 1.5 BUSCAR PAGAMENTOS EFETIVOS POR AGENDAMENTO (mesma logica do financeiro)
         // ==========================
 
-        // Criar mapa de pagamentos por agendamento
         const pagamentosPorAgendamento = {};
 
-        for (const agendamento of agendamentos) {
-            // Buscar pagamentos deste agendamento que estejam no periodo
-            let queryPagamentos = `
-                SELECT pgt_id, pgt_data, pgt_json, created_at
-                FROM PAGAMENTO
-                WHERE age_id = ?
-                AND pgt_data IS NOT NULL
-                AND empresa_id = ?
-            `;
+        // Buscar todos os pagamentos dos agendamentos de uma vez
+        const queryPagamentosEfetivos = `
+            SELECT age_id, pgt_json
+            FROM PAGAMENTO
+            WHERE age_id IN (${ageIds.join(',')})
+            AND pgt_data IS NOT NULL
+            AND empresa_id = ${empresa_id}
+        `;
 
-            const params = [agendamento.age_id, empresa_id];
+        const pagamentosEfetivos = await dbQuery(queryPagamentosEfetivos);
 
-            if (dataDe) {
-                queryPagamentos += ` AND DATE(created_at) >= ?`;
-                params.push(dataDe);
-            }
-
-            if (dataAte) {
-                queryPagamentos += ` AND DATE(created_at) <= ?`;
-                params.push(dataAte);
-            }
-
-            const pagamentos = await dbQuery(queryPagamentos, params);
-
+        for (const pgt of pagamentosEfetivos) {
+            const pgtJson = pgt.pgt_json ? JSON.parse(pgt.pgt_json) : [];
             let valorPago = 0;
-            for (const pgt of pagamentos) {
-                const pgtJson = pgt.pgt_json ? JSON.parse(pgt.pgt_json) : [];
-                for (const item of pgtJson) {
-                    valorPago += parseFloat(item.pgt_valor || 0);
-                }
+            for (const item of pgtJson) {
+                valorPago += parseFloat(item.pgt_valor || 0);
             }
 
-            pagamentosPorAgendamento[agendamento.age_id] = valorPago;
+            pagamentosPorAgendamento[pgt.age_id] = (pagamentosPorAgendamento[pgt.age_id] || 0) + valorPago;
         }
 
         // ==========================
@@ -896,8 +880,8 @@ router.get('/get/servicos', async (req, res) => {
             const funId = agendamento.fun_id;
             const statusDescricao = statusAgendamentos.find(s => s.ast_id === astId)?.ast_descricao || 'Desconhecido';
 
-            // Pegar valor PAGO do agendamento (nao o valor teorico)
-            const valorPagoAgendamento = pagamentosPorAgendamento[agendamento.age_id] || 0;
+            // Valor efetivamente pago do agendamento - mesma logica do financeiro (totalReceitaRecebida)
+            const valorAgendamento = pagamentosPorAgendamento[agendamento.age_id] || 0;
 
             // Calcular valor total dos servicos para distribuir proporcionalmente
             let valorTotalServicos = 0;
@@ -914,12 +898,12 @@ router.get('/get/servicos', async (req, res) => {
                 const serQuantity = servico.ser_quantity || 1;
                 const serValorTeoricoTotal = serValor * serQuantity;
 
-                // Calcular valor proporcional PAGO deste servico
+                // Calcular valor proporcional do servico com base no valor do agendamento
                 let serValorTotal = 0;
                 if (valorTotalServicos > 0) {
-                    serValorTotal = (serValorTeoricoTotal / valorTotalServicos) * valorPagoAgendamento;
-                } else if (valorPagoAgendamento > 0 && agendamento.servicos.length > 0) {
-                    serValorTotal = valorPagoAgendamento / agendamento.servicos.length;
+                    serValorTotal = (serValorTeoricoTotal / valorTotalServicos) * valorAgendamento;
+                } else if (valorAgendamento > 0 && agendamento.servicos.length > 0) {
+                    serValorTotal = valorAgendamento / agendamento.servicos.length;
                 }
 
                 const isOld = servico.isOld || false;
@@ -1495,23 +1479,21 @@ router.get('/get/agendamentos', async (req, res) => {
                 statusMap[statusKey].valorFuturo += ageValor;
             }
 
-            // Por fonte
-            if (agendamento.age_fonte) {
-                const fonteKey = agendamento.age_fonte;
-                if (!fontesMap[fonteKey]) {
-                    fontesMap[fonteKey] = {
-                        fonte: fonteKey,
-                        quantidade: 0,
-                        valorRecebido: 0,
-                        valorFuturo: 0
-                    };
-                }
-                fontesMap[fonteKey].quantidade += 1;
-                if (isAtendido && isPago) {
-                    fontesMap[fonteKey].valorRecebido += valorPago;
-                } else if (isAgendadoOuConfirmado) {
-                    fontesMap[fonteKey].valorFuturo += ageValor;
-                }
+            // Por fonte (incluindo agendamentos sem fonte)
+            const fonteKey = agendamento.age_fonte || 'Sem fonte';
+            if (!fontesMap[fonteKey]) {
+                fontesMap[fonteKey] = {
+                    fonte: fonteKey,
+                    quantidade: 0,
+                    valorRecebido: 0,
+                    valorFuturo: 0
+                };
+            }
+            fontesMap[fonteKey].quantidade += 1;
+            if (isAtendido && isPago) {
+                fontesMap[fonteKey].valorRecebido += valorPago;
+            } else if (isAgendadoOuConfirmado) {
+                fontesMap[fonteKey].valorFuturo += ageValor;
             }
         }
 

@@ -46,8 +46,16 @@ async function sendWhatsAppMessage(config, context) {
     flowLog.actionSuccess('send_whatsapp_message', { step: 'start' });
 
     try {
-        // Substituir variáveis na mensagem
-        let message = await replaceVariables(config.message, context);
+        // Substituir variáveis na mensagem (config.content é o campo do banco, config.message é legado)
+        let message = await replaceVariables(config.content || config.message, context);
+
+        // Verificar se a mensagem não está vazia antes de enviar
+        const messageText = (message || '').replace(/<[^>]*>/g, '').trim();
+        if (!messageText) {
+            flowLog.actionError('send_whatsapp_message', new Error('Mensagem vazia - envio cancelado'));
+            console.error('⚠️ Tentativa de envio de mensagem vazia cancelada. Config:', JSON.stringify(config));
+            return { success: false, error: 'Mensagem vazia' };
+        }
 
         // 🧪 MODO SIMULAÇÃO: Coleta mensagens, não envia ao WhatsApp real
         // Mas PODE gerar áudio se ttsEnabled ou fullAudio estiverem ativos
@@ -61,7 +69,7 @@ async function sendWhatsAppMessage(config, context) {
             let sentAsAudio = false;
 
             if ((context.ttsEnabled || context.fullAudio) && !config.mediaPath) {
-                const { textToSpeech, shouldUseTTS, forceNextAsAudio } = require('../helpers/textToSpeech');
+                const { textToSpeech, shouldUseTTS, forceNextAsAudio, stripAudioTags } = require('../helpers/textToSpeech');
 
                 try {
                     // fullAudio = sempre áudio, ttsEnabled = usa ciclo de alternância
@@ -84,11 +92,19 @@ async function sendWhatsAppMessage(config, context) {
                             console.log('✅ [SIMULAÇÃO] Áudio gerado:', audioPath);
                         } else {
                             console.log('⚠️ [SIMULAÇÃO] Falha TTS:', ttsResult.error);
+                            message = stripAudioTags(message);
                         }
                     }
                 } catch (error) {
                     console.error('⚠️ [SIMULAÇÃO] Erro TTS:', error.message);
+                    message = stripAudioTags(message);
                 }
+            }
+
+            // Se não vai como áudio, limpar tags de áudio do texto
+            if (!sentAsAudio) {
+                const { stripAudioTags: stripTags } = require('../helpers/textToSpeech');
+                message = stripTags(message);
             }
 
             // Adicionar resposta com info de áudio se gerado
@@ -129,11 +145,20 @@ async function sendWhatsAppMessage(config, context) {
         // Verificar se deve usar TTS automaticamente (a cada 3 mensagens)
         let useTTS = false;
         let audioPath = null;
-        
-        // Só tentar TTS se não tiver mídia customizada e for mensagem de IA
-        if (!config.mediaPath && (context.isAIMessage || config.fromAI)) {
-            const { shouldUseTTS, textToSpeech } = require('../helpers/textToSpeech');
-            
+
+        // Respeitar preferência do contato (cliente pediu só texto)
+        let skipTTSForContact = context.preferTextOnly === true;
+        if (!skipTTSForContact && context.phone) {
+            try {
+                const { getPreferTextOnly } = require('../helpers/contactPreferences');
+                skipTTSForContact = await getPreferTextOnly(context.phone, context.empresa_id);
+            } catch (_) { /* fallback: tenta TTS normal */ }
+        }
+
+        // Só tentar TTS se não tiver mídia customizada, for mensagem de IA e contato não pediu texto
+        if (!config.mediaPath && (context.isAIMessage || config.fromAI) && !skipTTSForContact) {
+            const { shouldUseTTS, textToSpeech, stripAudioTags } = require('../helpers/textToSpeech');
+
             try {
                 useTTS = await shouldUseTTS(false, context.empresa_id);
                 
@@ -148,15 +173,24 @@ async function sendWhatsAppMessage(config, context) {
                         console.log('✅ Áudio gerado:', audioPath);
                     } else {
                         console.log('⚠️ Falha no TTS, enviando como texto:', ttsResult.error);
+                        // Limpar audio tags da mensagem para não vazar no texto
+                        message = stripAudioTags(message);
                         useTTS = false;
                     }
                 }
             } catch (error) {
                 console.error('⚠️ Erro ao processar TTS:', error.message);
+                message = stripAudioTags(message);
                 useTTS = false;
             }
         }
         
+        // Se não vai enviar como áudio, garantir que tags de áudio sejam removidas do texto
+        if (!useTTS || !audioPath) {
+            const { stripAudioTags: stripTags } = require('../helpers/textToSpeech');
+            message = stripTags(message);
+        }
+
         // Enviar mensagem
         if (useTTS && audioPath) {
             // Enviar como áudio (TTS)
@@ -206,12 +240,21 @@ async function sendWhatsAppMessage(config, context) {
             console.log('📝 Mensagem enviada como TEXTO');
         }
         
+        // Atualizar data da última mensagem enviada pelo sistema
+        if (context.cliente?.cli_Id && context.empresa_id) {
+            const dbQuery = require('../../utils/dbHelper');
+            dbQuery(
+                'UPDATE CLIENTES SET cli_ultima_msg_sistema_data = NOW(), cli_ultima_msg_data = NOW() WHERE cli_Id = ? AND empresa_id = ?',
+                [context.cliente.cli_Id, context.empresa_id]
+            ).catch(() => {});
+        }
+
         return {
             success: true,
             message: 'Mensagem enviada com sucesso',
             sentAsAudio: useTTS
         };
-        
+
     } catch (error) {
         flowLog.actionError('send_whatsapp_message', error);
         return { success: false, error: error.message };

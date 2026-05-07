@@ -6,6 +6,7 @@
  */
 
 const moment = require('moment');
+require('moment-timezone');
 const dbQuery = require('../../utils/dbHelper');
 const { empresaWhere } = require('../../utils/dbHelper');
 const { flowLog } = require('../helpers/logHelper');
@@ -451,6 +452,8 @@ async function checkTriggerConditions(conditions, context) {
  * @param {Object} context - Contexto
  * @returns {Promise<Boolean>} - Resultado da avaliação
  */
+const TRIGGER_DATE_FORMATS = ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD', 'DD/MM/YYYY HH:mm:ss', 'DD/MM/YYYY HH:mm', 'DD/MM/YYYY', moment.ISO_8601];
+
 async function evalCondition(condition, context) {
     const { field, operator, value } = condition;
     
@@ -515,6 +518,218 @@ async function evalCondition(condition, context) {
             case 'regex':
                 result = new RegExp(conditionValue).test(String(fieldValue));
                 break;
+            // ─── Operadores de data ───
+            case 'is_today': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const today = moment().tz('America/Sao_Paulo').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(today, 'day');
+                break;
+            }
+            case 'is_tomorrow': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const tomorrow = moment().tz('America/Sao_Paulo').add(1, 'day').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(tomorrow, 'day');
+                break;
+            }
+            case 'is_yesterday': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const yesterday = moment().tz('America/Sao_Paulo').subtract(1, 'day').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(yesterday, 'day');
+                break;
+            }
+            case 'within_days': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowWd = moment().tz('America/Sao_Paulo').startOf('day');
+                const endWd = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'days').endOf('day');
+                result = fd.isValid() && fd.isBetween(nowWd, endWd, null, '[]');
+                break;
+            }
+            case 'within_past_days': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowPd = moment().tz('America/Sao_Paulo').endOf('day');
+                const startPd = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'days').startOf('day');
+                result = fd.isValid() && fd.isBetween(startPd, nowPd, null, '[]');
+                break;
+            }
+            case 'within_months': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowWm = moment().tz('America/Sao_Paulo').startOf('day');
+                const endWm = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'months').endOf('day');
+                result = fd.isValid() && fd.isBetween(nowWm, endWm, null, '[]');
+                break;
+            }
+            case 'within_past_months': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowPm = moment().tz('America/Sao_Paulo').endOf('day');
+                const startPm = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'months').startOf('day');
+                result = fd.isValid() && fd.isBetween(startPm, nowPm, null, '[]');
+                break;
+            }
+            case 'is_this_week': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const weekStart = moment().tz('America/Sao_Paulo').startOf('week');
+                const weekEnd = moment().tz('America/Sao_Paulo').endOf('week');
+                result = fd.isValid() && fd.isBetween(weekStart, weekEnd, null, '[]');
+                break;
+            }
+            case 'is_last_week': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const lwStart = moment().tz('America/Sao_Paulo').subtract(1, 'week').startOf('week');
+                const lwEnd = moment().tz('America/Sao_Paulo').subtract(1, 'week').endOf('week');
+                result = fd.isValid() && fd.isBetween(lwStart, lwEnd, null, '[]');
+                break;
+            }
+            case 'is_next_week': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nwStart = moment().tz('America/Sao_Paulo').add(1, 'week').startOf('week');
+                const nwEnd = moment().tz('America/Sao_Paulo').add(1, 'week').endOf('week');
+                result = fd.isValid() && fd.isBetween(nwStart, nwEnd, null, '[]');
+                break;
+            }
+            case 'is_this_month': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const mStart = moment().tz('America/Sao_Paulo').startOf('month');
+                const mEnd = moment().tz('America/Sao_Paulo').endOf('month');
+                result = fd.isValid() && fd.isBetween(mStart, mEnd, null, '[]');
+                break;
+            }
+            case 'is_last_month': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const lmStart = moment().tz('America/Sao_Paulo').subtract(1, 'month').startOf('month');
+                const lmEnd = moment().tz('America/Sao_Paulo').subtract(1, 'month').endOf('month');
+                result = fd.isValid() && fd.isBetween(lmStart, lmEnd, null, '[]');
+                break;
+            }
+            case 'is_next_month': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nmStart = moment().tz('America/Sao_Paulo').add(1, 'month').startOf('month');
+                const nmEnd = moment().tz('America/Sao_Paulo').add(1, 'month').endOf('month');
+                result = fd.isValid() && fd.isBetween(nmStart, nmEnd, null, '[]');
+                break;
+            }
+            case 'is_this_year': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const yStart = moment().tz('America/Sao_Paulo').startOf('year');
+                const yEnd = moment().tz('America/Sao_Paulo').endOf('year');
+                result = fd.isValid() && fd.isBetween(yStart, yEnd, null, '[]');
+                break;
+            }
+            case 'is_last_year': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const lyStart = moment().tz('America/Sao_Paulo').subtract(1, 'year').startOf('year');
+                const lyEnd = moment().tz('America/Sao_Paulo').subtract(1, 'year').endOf('year');
+                result = fd.isValid() && fd.isBetween(lyStart, lyEnd, null, '[]');
+                break;
+            }
+            case 'is_future_date': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowFut = moment().tz('America/Sao_Paulo').endOf('day');
+                result = fd.isValid() && fd.isAfter(nowFut);
+                break;
+            }
+            case 'is_past_date': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowPast = moment().tz('America/Sao_Paulo').startOf('day');
+                result = fd.isValid() && fd.isBefore(nowPast);
+                break;
+            }
+            case 'exactly_days_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetDay = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'days').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetDay, 'day');
+                break;
+            }
+            case 'exactly_months_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetMonth = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'months').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetMonth, 'day');
+                break;
+            }
+            case 'exactly_years_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetYear = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'years').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetYear, 'day');
+                break;
+            }
+            case 'exactly_days_from_now': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetDay = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'days').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetDay, 'day');
+                break;
+            }
+            case 'exactly_months_from_now': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetMonth = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'months').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetMonth, 'day');
+                break;
+            }
+            case 'exactly_years_from_now': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetYear = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'years').startOf('day');
+                result = fd.isValid() && fd.startOf('day').isSame(targetYear, 'day');
+                break;
+            }
+            case 'date_before': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const target = moment(conditionValue, TRIGGER_DATE_FORMATS, true);
+                result = fd.isValid() && target.isValid() && fd.startOf('day').isBefore(target.startOf('day'));
+                break;
+            }
+            case 'date_after': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const target = moment(conditionValue, TRIGGER_DATE_FORMATS, true);
+                result = fd.isValid() && target.isValid() && fd.startOf('day').isAfter(target.startOf('day'));
+                break;
+            }
+            // ─── Operadores de horas ───
+            case 'within_hours': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowWh = moment().tz('America/Sao_Paulo');
+                const endWh = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'hours');
+                result = fd.isValid() && fd.isBetween(nowWh, endWh, null, '[]');
+                break;
+            }
+            case 'within_past_hours': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const nowPh = moment().tz('America/Sao_Paulo');
+                const startPh = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'hours');
+                result = fd.isValid() && fd.isBetween(startPh, nowPh, null, '[]');
+                break;
+            }
+            case 'exactly_hours_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetH = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'hours');
+                result = fd.isValid() && fd.startOf('hour').isSame(targetH.startOf('hour'), 'hour');
+                break;
+            }
+            case 'exactly_hours_from_now': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                const targetH = moment().tz('America/Sao_Paulo').add(Number(conditionValue), 'hours');
+                result = fd.isValid() && fd.startOf('hour').isSame(targetH.startOf('hour'), 'hour');
+                break;
+            }
+            // ─── Operadores "a mais de" (more_than) ───
+            case 'more_than_hours_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                if (!fd.isValid()) { result = false; break; } // Sem data = false
+                const threshold = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'hours');
+                result = fd.isBefore(threshold);
+                break;
+            }
+            case 'more_than_days_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                if (!fd.isValid()) { result = false; break; }
+                const threshold = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'days').startOf('day');
+                result = fd.startOf('day').isBefore(threshold);
+                break;
+            }
+            case 'more_than_months_ago': {
+                const fd = moment(fieldValue, TRIGGER_DATE_FORMATS, true);
+                if (!fd.isValid()) { result = false; break; }
+                const threshold = moment().tz('America/Sao_Paulo').subtract(Number(conditionValue), 'months').startOf('day');
+                result = fd.startOf('day').isBefore(threshold);
+                break;
+            }
             default:
                 result = false;
         }
@@ -534,34 +749,9 @@ async function evalCondition(condition, context) {
  * @returns {*} - Valor do campo
  */
 function getFieldValue(field, context) {
-    const { cliente, pedido, triggerData } = context;
-    
-    switch (field) {
-        // Campos do cliente
-        case 'cliente_nome':
-            return cliente?.cli_nome || cliente?.first_name || '';
-        case 'cliente_email':
-            return cliente?.cli_email || cliente?.email || '';
-        case 'cliente_telefone':
-            return cliente?.cli_celular || cliente?.phone || '';
-        case 'cliente_genero':
-            return cliente?.cli_genero || cliente?.genero || '';
-            
-        // Campos do pedido
-        case 'pedido_numero':
-            return pedido?.numero || '';
-        case 'pedido_status':
-            return pedido?.status || '';
-            
-        // Variáveis do sistema
-        case 'data_atual':
-            return moment().format('YYYY-MM-DD');
-        case 'hora_atual':
-            return moment().format('HH:mm');
-            
-        default:
-            return '';
-    }
+    const { buildFlatContext } = require('../helpers/contextHelper');
+    const flat = buildFlatContext(context);
+    return flat[field] !== undefined ? String(flat[field]) : '';
 }
 
 /**
@@ -589,6 +779,17 @@ async function triggerMessageReceivedFlows(messageData, flows = null) {
 
         if (clienteDB.length > 0 && clienteDB[0].flows_blocked === 1) {
             flowLog.log('INFO', `Cliente ${clienteDB[0].cli_nome} (ID: ${clienteDB[0].cli_Id}) está com fluxos bloqueados (flows_blocked). Ignorando trigger.`);
+            return;
+        }
+
+        // Verificar bloqueio por telefone (contatos sem cadastro - FlowBlockedPhones)
+        const last8Phone = cleanedPhone.slice(-8);
+        const phoneBlockedTrigger = await dbQuery(
+            `SELECT id FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? OR chat_id = ? LIMIT 1`,
+            [last8Phone, chatId || '']
+        );
+        if (phoneBlockedTrigger && phoneBlockedTrigger.length > 0) {
+            flowLog.log('INFO', `Telefone ${phone} está com fluxos bloqueados (FlowBlockedPhones). Ignorando trigger.`);
             return;
         }
 

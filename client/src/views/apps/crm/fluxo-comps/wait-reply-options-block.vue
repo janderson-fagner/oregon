@@ -107,54 +107,6 @@
         Escreva a mensagem que será exibida antes das opções.
       </p>
 
-      <!-- Variáveis disponíveis -->
-      <div class="mb-3">
-        <a @click="toggleVariaveisTutorial" class="cursor-pointer text-primary">
-          Ver variáveis disponíveis
-          <VIcon
-            :icon="
-              viewVariaveisTutorial
-                ? 'tabler-chevron-up'
-                : 'tabler-chevron-down'
-            "
-            size="small"
-          />
-        </a>
-
-        <v-fade-transition>
-          <div v-if="viewVariaveisTutorial" class="mt-3">
-            <VCard variant="outlined" class="pa-3">
-              <p class="text-caption mb-3">
-                Clique em uma variável para copiá-la. Use dentro do texto com
-                duplas chaves. Ex.:
-                <span class="font-weight-bold" v-pre>{{ cliente_nome }}</span>
-              </p>
-
-              <div class="d-flex flex-wrap gap-2">
-                <VChip
-                  v-for="variable in variaveisItens"
-                  :key="variable.value"
-                  size="small"
-                  :color="
-                    variable.type === 'cliente'
-                      ? 'primary'
-                      : variable.type === 'pedido'
-                      ? 'info'
-                      : 'success'
-                  "
-                  variant="tonal"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variable.value)"
-                >
-                  <VIcon icon="tabler-copy" size="small" class="me-1" />
-                  {{ variable.title }}
-                </VChip>
-              </div>
-            </VCard>
-          </div>
-        </v-fade-transition>
-      </div>
-
       <!-- Editor Quill -->
       <div class="inputQP">
         <div id="toolbar-menu-message">
@@ -277,48 +229,17 @@
       </VRow>
     </div>
 
-    <!-- Informações -->
-    <VCard variant="outlined" class="pa-4">
-      <h6 class="text-subtitle-2 mb-2">
-        <VIcon icon="tabler-info-circle" class="me-1" />
-        Como funciona
-      </h6>
-      <VList density="compact">
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            A mensagem será exibida seguida das opções numeradas
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            O usuário pode responder com o número ou o texto da opção
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Cada opção terá um ponto de saída no bloco para conectar ao próximo
-            passo
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Você pode reordenar as opções arrastando o bloco pela alça
-          </VListItemTitle>
-        </VListItem>
-      </VList>
-    </VCard>
+    <VariablesSection :flow-variables="props.flowVariables" />
+
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-check', color: 'success', text: 'A mensagem será exibida seguida das opções numeradas' },
+        { icon: 'tabler-check', color: 'success', text: 'O usuário pode responder com o número ou o texto da opção' },
+        { icon: 'tabler-check', color: 'success', text: 'Cada opção terá um ponto de saída no bloco para conectar ao próximo passo' },
+        { icon: 'tabler-check', color: 'success', text: 'Você pode reordenar as opções arrastando o bloco pela alça' },
+      ]"
+      hint="Configure o timeout e as tentativas máximas para controlar o comportamento do menu."
+    />
   </div>
 </template>
 
@@ -327,6 +248,8 @@ import { ref, watch, onMounted } from "vue";
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
 import draggable from "vuedraggable";
+import VariablesSection from "./VariablesSection.vue";
+import BlockInfoSection from "./BlockInfoSection.vue";
 
 const props = defineProps({
   config: {
@@ -361,7 +284,6 @@ const localConfig = ref({
 const variaveisItens = ref([]);
 const variavel = ref(null);
 const refQuillEditor = ref(null);
-const viewVariaveisTutorial = ref(false);
 
 // Configurações do editor Quill
 const editorOptions = {
@@ -442,54 +364,6 @@ const insertVariable = () => {
 
   insertVariableInline(quill, value);
   variavel.value = null;
-};
-
-// Função para copiar variável
-const copyVariableToClipboard = (variableValue) => {
-  const variableText = `{{${variableValue}}}`;
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard
-      .writeText(variableText)
-      .then(() => {
-        setAlert(
-          `Variável ${variableText} copiada!`,
-          "success",
-          "tabler-copy",
-          2000
-        );
-      })
-      .catch(() => {
-        fallbackCopyToClipboard(variableText);
-      });
-  } else {
-    fallbackCopyToClipboard(variableText);
-  }
-};
-
-const fallbackCopyToClipboard = (text) => {
-  const textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.style.position = "fixed";
-  textArea.style.left = "-999999px";
-  textArea.style.top = "-999999px";
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-
-  try {
-    document.execCommand("copy");
-    setAlert(`Variável ${text} copiada!`, "success", "tabler-copy", 2000);
-  } catch (err) {
-    setAlert("Erro ao copiar variável", "error", "tabler-alert-circle", 2000);
-  }
-
-  document.body.removeChild(textArea);
-};
-
-// Função para toggle do tutorial de variáveis
-const toggleVariaveisTutorial = () => {
-  viewVariaveisTutorial.value = !viewVariaveisTutorial.value;
 };
 
 // Carregar variáveis

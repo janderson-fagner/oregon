@@ -1,6 +1,8 @@
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue';
-import { getAllVariables, copyVariableToClipboard } from '@/utils/dynamicVariables';
+import { getAllVariables } from '@/utils/dynamicVariables';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 import { QuillEditor } from '@vueup/vue-quill';
 import '@vueup/vue-quill/dist/vue-quill.snow.css';
 
@@ -17,8 +19,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:config']);
-
-const { setAlert } = useAlert();
 
 const localConfig = ref({
   actions: props.config.actions || []
@@ -46,7 +46,6 @@ const genderOptions = [
 
 const variaveisDisponiveis = ref([]);
 const tags = ref([]);
-const showVariablesHelp = ref(false);
 const activeVariableMenu = ref(null);
 const variableMenuField = ref(null);
 
@@ -83,11 +82,6 @@ const needsDateField = (type) => {
 // Verificar se ação precisa de textarea
 const needsTextarea = (type) => {
   return type === 'update_notes';
-};
-
-// Copiar variável
-const copyVariable = (value) => {
-  copyVariableToClipboard(value, setAlert);
 };
 
 // Inserir variável no input
@@ -154,7 +148,7 @@ onMounted(async () => {
         icon="tabler-user-edit"
         class="mb-4"
       >
-        <VAlertTitle class="mb-1">Atualizar Cliente</VAlertTitle>
+        <span class="text-subtitle-2 font-weight-bold">Atualizar Cliente</span>
         <div class="text-body-2">
           Use este bloco para atualizar informações do cliente no sistema.
           O cliente será obtido automaticamente do contexto do fluxo.
@@ -364,201 +358,17 @@ onMounted(async () => {
       </VBtn>
     </VCol>
 
-    <!-- Variáveis Disponíveis -->
     <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <div class="d-flex align-center justify-space-between mb-3">
-        <div>
-          <label class="v-label text-body-2 text-high-emphasis d-block">
-            Variáveis Disponíveis
-          </label>
-          <p class="text-caption text-medium-emphasis mb-0">
-            Clique em uma variável para copiá-la
-          </p>
-        </div>
-        <VBtn
-          size="small"
-          color="info"
-          variant="text"
-          prepend-icon="tabler-chevron-down"
-          @click="showVariablesHelp = !showVariablesHelp"
-        >
-          {{ showVariablesHelp ? 'Ocultar' : 'Exibir' }}
-        </VBtn>
-      </div>
+      <VariablesSection :flow-variables="props.flowVariables" />
 
-      <VExpandTransition>
-        <div v-show="showVariablesHelp">
-          <div class="d-flex flex-wrap gap-2">
-            <VChip
-              v-for="variable in variaveisDisponiveis"
-              :key="variable.value"
-              size="small"
-              :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : 'primary'"
-              variant="tonal"
-              class="cursor-pointer"
-              @click="copyVariable(variable.value)"
-            >
-              <VIcon icon="tabler-copy" size="small" class="me-1" />
-              {{ variable.title }}
-            </VChip>
-          </div>
-          
-          <div class="text-caption mt-2">
-            <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-            <span class="text-success">Verde</span> = Dinâmicas | 
-            <span class="text-info">Azul</span> = Sistema | 
-            <span class="text-primary">Primário</span> = Cliente/Pedido
-          </div>
-        </div>
-      </VExpandTransition>
-    </VCol>
-
-    <!-- Informações Importantes -->
-    <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <VExpansionPanels>
-        <VExpansionPanel>
-          <VExpansionPanelTitle>
-            <div class="d-flex align-center gap-2">
-              <VIcon icon="tabler-info-circle" size="20" color="info" />
-              <span class="text-sm">Informações Importantes</span>
-            </div>
-          </VExpansionPanelTitle>
-          <VExpansionPanelText>
-            <VAlert color="info" variant="tonal" class="mb-3">
-              <div class="text-body-2">
-                <p class="mb-2">
-                  <strong>✅ O que este bloco faz:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>Atualiza informações do cadastro do cliente no sistema</li>
-                  <li>Pode atualizar múltiplos campos em uma única ação</li>
-                  <li>Suporta variáveis dinâmicas do fluxo</li>
-                  <li>Permite adicionar/remover tags</li>
-                  <li>Atualiza telefone, email, CPF, data de nascimento, etc.</li>
-                </ul>
-                
-                <p class="mb-2">
-                  <strong>⚠️ Importante:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>O cliente é obtido automaticamente do contexto do fluxo</li>
-                  <li>Campos vazios não serão atualizados</li>
-                  <li>Você pode atualizar apenas os campos desejados</li>
-                  <li>Suporta variáveis dinâmicas do fluxo</li>
-                </ul>
-
-                <p class="mb-2">
-                  <strong>📝 Exemplos de uso:</strong>
-                </p>
-                <ul class="mb-0">
-                  <li><strong>Atualizar telefone:</strong> Capturar novo telefone em "Aguardar Resposta" e atualizar aqui</li>
-                  <li><strong>Atualizar observações:</strong> Adicionar notas sobre o cliente durante o fluxo</li>
-                  <li><strong>Adicionar tags:</strong> Marcar cliente como "VIP" ou "Interessado em promoções"</li>
-                  <li><strong>Atualizar data de nascimento:</strong> Capturar e registrar aniversário</li>
-                </ul>
-              </div>
-            </VAlert>
-          </VExpansionPanelText>
-        </VExpansionPanel>
-      </VExpansionPanels>
-    </VCol>
-
-    <!-- Variáveis Disponíveis -->
-    <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <div class="mb-4">
-        <h6 class="text-h6 mb-2">Variáveis Disponíveis</h6>
-        <p class="text-caption text-medium-emphasis mb-4">
-          Clique em uma variável para copiá-la e usá-la nos valores dos campos
-        </p>
-        
-        <div class="d-flex flex-wrap gap-2">
-          <VChip
-            v-for="variable in variaveisDisponiveis"
-            :key="variable.value"
-            size="small"
-            :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : variable.type === 'cliente' ? 'primary' : 'secondary'"
-            variant="tonal"
-            class="cursor-pointer"
-            @click="copyVariableToClipboard(variable.value)"
-          >
-            <VIcon icon="tabler-copy" size="small" class="me-1" />
-            {{ variable.title }}
-          </VChip>
-        </div>
-        
-        <div class="text-caption mt-2">
-          <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-          <span class="text-success">Verde</span> = Dinâmicas (capturadas no fluxo) | 
-          <span class="text-info">Azul</span> = Sistema | 
-          <span class="text-primary">Primário</span> = Cliente
-        </div>
-      </div>
-    </VCol>
-
-    <!-- Como Funciona -->
-    <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <div class="mb-4">
-        <h6 class="text-h6 mb-2">Como funciona</h6>
-        <VCard variant="outlined" class="pa-4">
-          <VList density="compact">
-            <VListItem>
-              <template #prepend>
-                <VIcon icon="tabler-user" color="primary" size="small" />
-              </template>
-              <VListItemTitle class="text-sm">
-                Obtém o cliente automaticamente do contexto do fluxo
-              </VListItemTitle>
-            </VListItem>
-            
-            <VListItem>
-              <template #prepend>
-                <VIcon icon="tabler-refresh" color="info" size="small" />
-              </template>
-              <VListItemTitle class="text-sm">
-                Processa cada ação configurada (nome, email, endereço, etc)
-              </VListItemTitle>
-            </VListItem>
-            
-            <VListItem>
-              <template #prepend>
-                <VIcon icon="tabler-cloud-upload" color="success" size="small" />
-              </template>
-              <VListItemTitle class="text-sm">
-                Envia as atualizações para o banco de dados do sistema
-              </VListItemTitle>
-            </VListItem>
-            
-            <VListItem>
-              <template #prepend>
-                <VIcon icon="tabler-check" color="success" size="small" />
-              </template>
-              <VListItemTitle class="text-sm">
-                Registra a operação nos logs do sistema
-              </VListItemTitle>
-            </VListItem>
-          </VList>
-        </VCard>
-      </div>
-    </VCol>
-
-    <VCol cols="12">
-      <VAlert type="info" variant="tonal" class="mb-0">
-        <template #prepend>
-          <VIcon icon="tabler-info-circle" />
-        </template>
-        <div class="text-sm">
-          <strong>Importante:</strong> As variáveis dinâmicas (em verde) são capturadas por blocos anteriores no fluxo.
-          Use <code v-pre>{{nome_variavel}}</code> para inserir valores dinâmicos.
-        </div>
-      </VAlert>
+      <BlockInfoSection
+        :items="[
+          { icon: 'tabler-user-edit', color: 'primary', text: 'Atualiza informações do cadastro do cliente' },
+          { icon: 'tabler-refresh', color: 'info', text: 'Processa cada ação configurada (nome, email, telefone, etc)' },
+          { icon: 'tabler-variable', color: 'success', text: 'Suporta variáveis dinâmicas em todos os campos' }
+        ]"
+        hint="O cliente é obtido automaticamente do contexto do fluxo. Campos vazios não serão atualizados."
+      />
     </VCol>
   </VRow>
 </template>

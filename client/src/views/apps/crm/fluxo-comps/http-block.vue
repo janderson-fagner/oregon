@@ -3,11 +3,17 @@ import { ref, watch, onMounted } from "vue";
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
 import { getAllVariables, copyVariableToClipboard } from "@/utils/dynamicVariables";
+import VariablesSection from "./VariablesSection.vue";
+import BlockInfoSection from "./BlockInfoSection.vue";
 
 const props = defineProps({
   config: {
     type: Object,
     required: true,
+  },
+  flowVariables: {
+    type: Array,
+    default: () => [],
   },
 });
 
@@ -24,7 +30,6 @@ const localConfig = ref({
 });
 
 const variaveisDisponiveis = ref([]);
-const showVariablesHelp = ref(false);
 const showResponseHelp = ref(false);
 
 // Métodos HTTP disponíveis
@@ -135,7 +140,7 @@ watch(
         icon="tabler-info-circle"
         class="mb-4"
       >
-        <VAlertTitle class="mb-1">Requisição HTTP</VAlertTitle>
+        <span class="text-subtitle-2 font-weight-bold">Requisição HTTP</span>
         <div class="text-body-2">
           Use este bloco para fazer chamadas a APIs externas (serviços web). Você
           pode buscar dados, enviar informações e salvar as respostas em variáveis
@@ -330,39 +335,9 @@ watch(
           persistent-hint
         />
 
-        <VBtn
-          size="small"
-          color="info"
-          variant="text"
-          prepend-icon="tabler-help-circle"
-          class="mt-2"
-          @click="showVariablesHelp = !showVariablesHelp"
-        >
-          {{ showVariablesHelp ? "Ocultar" : "Ver" }} Variáveis Disponíveis
-        </VBtn>
-
-        <VExpandTransition>
-          <VCard v-show="showVariablesHelp" class="mt-2" variant="tonal">
-            <VCardText>
-              <div class="text-caption mb-2">
-                <strong>Clique para copiar:</strong>
-              </div>
-              <VChipGroup column>
-                <VChip
-                  v-for="v in variaveisDisponiveis"
-                  :key="v.value"
-                  size="small"
-                  color="primary"
-                  variant="tonal"
-                  @click="copyVariable(v.value)"
-                  style="cursor: pointer"
-                >
-                  {{ v.value }}
-                </VChip>
-              </VChipGroup>
-            </VCardText>
-          </VCard>
-        </VExpandTransition>
+        <div class="text-caption text-medium-emphasis mt-2">
+          Use {{variavel}} para inserir dados dinâmicos no JSON.
+        </div>
       </div>
 
       <!-- Body Form -->
@@ -472,7 +447,7 @@ watch(
           icon="tabler-lightbulb"
           class="mb-4"
         >
-          <VAlertTitle>Como capturar dados da resposta?</VAlertTitle>
+          <span class="text-subtitle-2 font-weight-bold">Como capturar dados da resposta?</span>
           <div class="text-body-2">
             <p class="mb-2">
               <strong>1. Path (Caminho):</strong> Indica onde está o dado na resposta
@@ -577,10 +552,25 @@ watch(
       </VBtn>
     </VCol>
 
+    <!-- Variáveis e Info -->
+    <VCol cols="12">
+      <VariablesSection :flow-variables="props.flowVariables" />
+
+      <BlockInfoSection
+        :items="[
+          { icon: 'tabler-world', color: 'primary', text: 'Faz chamadas a APIs externas (serviços web)' },
+          { icon: 'tabler-variable', color: 'success', text: 'Você pode usar variáveis do fluxo na URL, headers e body' },
+          { icon: 'tabler-download', color: 'info', text: 'Capture dados da resposta e salve como variáveis para usar depois' },
+          { icon: 'tabler-clock', color: 'warning', text: 'Configure o timeout para evitar bloqueios em APIs lentas' },
+        ]"
+        hint="As variáveis de resposta ficam disponíveis nos blocos seguintes do fluxo."
+      />
+    </VCol>
+
     <!-- Exemplos Práticos -->
     <VCol cols="12">
       <VDivider class="my-4" />
-      
+
       <VExpansionPanels>
         <VExpansionPanel>
           <VExpansionPanelTitle>
@@ -600,7 +590,7 @@ watch(
               <!-- Exemplo CEP -->
               <VWindowItem value="cep">
                 <VAlert color="success" variant="tonal" icon="tabler-map-pin">
-                  <VAlertTitle>Consultar CEP (ViaCEP)</VAlertTitle>
+                  <span class="text-subtitle-2 font-weight-bold">Consultar CEP (ViaCEP)</span>
                   <div class="text-body-2">
                     <p class="mb-2">
                       <strong>URL:</strong>
@@ -633,7 +623,7 @@ watch(
               <!-- Exemplo WhatsApp API -->
               <VWindowItem value="whatsapp">
                 <VAlert color="success" variant="tonal" icon="tabler-brand-whatsapp">
-                  <VAlertTitle>Enviar WhatsApp via API Externa</VAlertTitle>
+                  <span class="text-subtitle-2 font-weight-bold">Enviar WhatsApp via API Externa</span>
                   <div class="text-body-2">
                     <p class="mb-2">
                       <strong>URL:</strong>
@@ -659,7 +649,7 @@ watch(
               <!-- Exemplo WooCommerce -->
               <VWindowItem value="woocommerce">
                 <VAlert color="success" variant="tonal" icon="tabler-shopping-cart">
-                  <VAlertTitle>Atualizar Pedido WooCommerce</VAlertTitle>
+                  <span class="text-subtitle-2 font-weight-bold">Atualizar Pedido WooCommerce</span>
                   <div class="text-body-2">
                     <p class="mb-2">
                       <strong>URL:</strong>

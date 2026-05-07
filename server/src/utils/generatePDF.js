@@ -251,7 +251,7 @@ async function createCertificate(data) {
             .text('Certificamos que ', margin, doc.y, { width, continued: true })
             .font(montserratBoldFont).text(capitalizeName(data.name), { continued: true })
             .font(montserratFont).text(
-                `${data.cpf ? `, portadora do ${isCPF}: ${data.cpf}` : ''}, localizada(o) na ${data.endereco
+                `${data.cpf ? `, portador(a) do ${isCPF}: ${data.cpf}` : ''}, localizada(o) na ${data.endereco
                 }, realizou os serviços de `,
                 { width, continued: true }
             )

@@ -62,8 +62,8 @@ function buildFlatContext(ctx) {
         
         // Documentos e dados pessoais
         flat.cliente_cpf = cliente.cli_cpf || '';
-        flat.cliente_data_nascimento = cliente.cli_dataNascimento 
-            ? moment(cliente.cli_dataNascimento).format('DD/MM/YYYY')
+        flat.cliente_data_nascimento = cliente.cli_dataNasc
+            ? moment(cliente.cli_dataNasc).format('DD/MM/YYYY')
             : '';
         flat.cliente_genero = cliente.cli_genero || '';
         
@@ -92,10 +92,21 @@ function buildFlatContext(ctx) {
         flat.cliente_ultimo_agendamento_concluido = cliente.cli_ultimo_agendamento_concluido 
             ? moment(cliente.cli_ultimo_agendamento_concluido).format('DD/MM/YYYY')
             : '';
-        flat.cliente_data_cadastro = cliente.created_at 
+        flat.cliente_data_cadastro = cliente.created_at
             ? moment(cliente.created_at).format('DD/MM/YYYY')
             : '';
-        
+
+        // Datas de última mensagem (com hora para operadores de horas)
+        flat.cliente_ultima_msg_data = cliente.cli_ultima_msg_data
+            ? moment(cliente.cli_ultima_msg_data).format('YYYY-MM-DD HH:mm:ss')
+            : '';
+        flat.cliente_ultima_msg_cliente_data = cliente.cli_ultima_msg_cliente_data
+            ? moment(cliente.cli_ultima_msg_cliente_data).format('YYYY-MM-DD HH:mm:ss')
+            : '';
+        flat.cliente_ultima_msg_sistema_data = cliente.cli_ultima_msg_sistema_data
+            ? moment(cliente.cli_ultima_msg_sistema_data).format('YYYY-MM-DD HH:mm:ss')
+            : '';
+
         // Tags
         if (cliente.cli_tags) {
             try {
@@ -288,16 +299,22 @@ async function replaceVariables(text, context) {
     
     const flat = buildFlatContext(context);
     
-    // Substituir todas as variáveis {{variavel}}
+    // Substituir todas as variáveis {{variavel}} e pipelines {{opção1|opção2|opção3}}
     let result = text.replace(/\{\{([^}]+)\}\}/g, (match, varName) => {
         const trimmed = varName.trim();
-        
+
+        // Pipeline/spin: se contém "|", selecionar aleatoriamente uma das opções
+        if (trimmed.includes('|')) {
+            const options = trimmed.split('|').map(o => o.trim());
+            return options[Math.floor(Math.random() * options.length)];
+        }
+
         // Verificar se existe no contexto flat
         if (flat.hasOwnProperty(trimmed)) {
             const value = flat[trimmed];
             return value !== null && value !== undefined ? String(value) : '';
         }
-        
+
         // Se não encontrar, manter a variável original
         return match;
     });

@@ -9,50 +9,6 @@
           Mensagem enviada ao cliente antes de colocá-lo na fila de atendimento
         </p>
         
-        <!-- Variáveis disponíveis -->
-        <div class="mb-3">
-          <a @click="toggleVariaveisTutorial" class="cursor-pointer text-primary">
-            Ver variáveis disponíveis
-            <VIcon
-              :icon="viewVariaveisTutorial ? 'tabler-chevron-up' : 'tabler-chevron-down'"
-              size="small"
-            />
-          </a>
-
-          <v-fade-transition>
-            <div v-if="viewVariaveisTutorial" class="mt-3">
-              <VCard variant="outlined" class="pa-3">
-                <p class="text-caption mb-3">
-                  Clique em uma variável para copiá-la. Use dentro do texto com
-                  duplas chaves. Ex.:
-                  <span class="font-weight-bold" v-pre>{{ cliente_nome }}</span>
-                </p>
-
-                <div class="d-flex flex-wrap gap-2">
-                  <VChip
-                    v-for="variable in variaveisDisponiveis"
-                    :key="variable.value"
-                    size="small"
-                    :color="
-                      variable.type === 'cliente'
-                        ? 'primary'
-                        : variable.type === 'pedido'
-                        ? 'info'
-                        : 'success'
-                    "
-                    variant="tonal"
-                    class="cursor-pointer"
-                    @click="copyVariable(variable.value)"
-                  >
-                    <VIcon icon="tabler-copy" size="small" class="me-1" />
-                    {{ variable.title }}
-                  </VChip>
-                </div>
-              </VCard>
-            </div>
-          </v-fade-transition>
-        </div>
-        
         <!-- Editor Quill -->
         <div class="inputQP">
           <div id="toolbar-wait-agent-message">
@@ -125,72 +81,17 @@
       </VCol>
     </VRow>
     
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Como funciona</h6>
-      <VCard variant="outlined" class="pa-4">
-        <VList density="compact">
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-message-circle" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Envia mensagem opcional ao cliente
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-lock" color="warning" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              <strong>Bloqueia</strong> todos os fluxos automáticos para este cliente
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-user-check" color="info" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Cliente fica na fila aguardando atendimento humano
-            </VListItemTitle>
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-shield-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Evita loops infinitos e múltiplos disparos de fluxos
-            </VListItemTitle>
-          </VListItem>
-        </VList>
-      </VCard>
-    </div>
+    <VariablesSection :flow-variables="props.flowVariables" />
 
-    <VAlert type="info" variant="tonal" class="mb-4">
-      <template #prepend>
-        <VIcon icon="tabler-info-circle" />
-      </template>
-      <div class="text-sm">
-        <strong>Importante:</strong> Enquanto o cliente estiver neste estado, 
-        <strong>nenhum fluxo automático</strong> será disparado para ele, mesmo que 
-        ele envie mensagens. Para liberar, finalize manualmente o fluxo ou use 
-        um comando específico.
-      </div>
-    </VAlert>
-
-    <VAlert type="warning" variant="tonal">
-      <template #prepend>
-        <VIcon icon="tabler-alert-triangle" />
-      </template>
-      <div class="text-sm">
-        Este bloco <strong>pausa o fluxo</strong> e aguarda intervenção manual. 
-        Certifique-se de ter uma equipe disponível para atender os clientes.
-      </div>
-    </VAlert>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-message-circle', color: 'primary', text: 'Envia mensagem opcional ao cliente' },
+        { icon: 'tabler-lock', color: 'warning', text: 'Bloqueia todos os fluxos automáticos para este cliente' },
+        { icon: 'tabler-user-check', color: 'info', text: 'Cliente fica na fila aguardando atendimento humano' },
+        { icon: 'tabler-shield-check', color: 'success', text: 'Evita loops infinitos e múltiplos disparos de fluxos' },
+      ]"
+      hint="Enquanto o cliente estiver neste estado, nenhum fluxo automático será disparado. Certifique-se de ter uma equipe disponível para atender."
+    />
   </div>
 </template>
 
@@ -199,6 +100,8 @@ import { ref, watch, onMounted } from 'vue';
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
 import { getAllVariables } from '@/utils/dynamicVariables.js';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -207,7 +110,11 @@ const props = defineProps({
     default: () => ({
       message: ''
     })
-  }
+  },
+  flowVariables: {
+    type: Array,
+    default: () => [],
+  },
 });
 
 const emit = defineEmits(['update:config']);
@@ -224,7 +131,6 @@ const variavel = ref(null);
 const variavelFinish = ref(null);
 const refQuillEditor = ref(null);
 const refQuillEditorFinish = ref(null);
-const viewVariaveisTutorial = ref(false);
 
 // Configurações do editor Quill
 const editorOptions = {
@@ -281,45 +187,6 @@ const insertVariableFinish = () => {
 
   insertVariableInline(quill, value);
   variavelFinish.value = null;
-};
-
-// Função para copiar variável
-const copyVariable = (variableValue) => {
-  const variableText = `{{${variableValue}}}`;
-  
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(variableText).then(() => {
-      setAlert(`Variável ${variableText} copiada!`, 'success', 'tabler-copy', 2000);
-    }).catch(() => {
-      fallbackCopyToClipboard(variableText);
-    });
-  } else {
-    fallbackCopyToClipboard(variableText);
-  }
-};
-
-const fallbackCopyToClipboard = (text) => {
-  const textArea = document.createElement('textarea');
-  textArea.value = text;
-  textArea.style.position = 'fixed';
-  textArea.style.left = '-999999px';
-  textArea.style.top = '-999999px';
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-  
-  try {
-    document.execCommand('copy');
-    setAlert(`Variável ${text} copiada!`, 'success', 'tabler-copy', 2000);
-  } catch (err) {
-    setAlert('Erro ao copiar variável', 'error', 'tabler-alert-circle', 2000);
-  }
-  
-  document.body.removeChild(textArea);
-};
-
-const toggleVariaveisTutorial = () => {
-  viewVariaveisTutorial.value = !viewVariaveisTutorial.value;
 };
 
 // Emitir atualização

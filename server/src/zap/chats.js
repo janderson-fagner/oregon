@@ -84,7 +84,7 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
         let waitingRunsMap = {};
         try {
             const waitingRuns = await dbQuery(
-                `SELECT id, chat_id, flow_id, phone, status, created_at FROM FlowRuns
+                `SELECT id, chat_id, flow_id, phone, status, created_at, agent_status, agent_user_id, agent_started_at FROM FlowRuns
                  WHERE waiting_for_response = 1 AND status = 'running'
                  ${empresa_id ? 'AND empresa_id = ?' : ''}`,
                 empresa_id ? [empresa_id] : []
@@ -96,12 +96,52 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
                         flowId: run.flow_id,
                         phone: run.phone,
                         status: run.status,
-                        createdAt: run.created_at
+                        createdAt: run.created_at,
+                        agent_status: run.agent_status || 'waiting',
+                        agent_user_id: run.agent_user_id || null,
+                        agent_started_at: run.agent_started_at || null
                     };
                 }
             }
         } catch (e) {
             console.error('Erro ao buscar FlowRuns aguardando atendente:', e);
+        }
+
+        // Busca bloqueios de fluxo (CLIENTES + FlowBlockedPhones) para marcar na lista
+        let blockedMap = {};
+        try {
+            // Bloqueios por chat_id (FlowBlockedPhones)
+            const blockedPhones = await dbQuery(
+                `SELECT chat_id, phone FROM FlowBlockedPhones ${empresa_id ? 'WHERE empresa_id = ?' : ''}`,
+                empresa_id ? [empresa_id] : []
+            );
+            for (const bp of blockedPhones) {
+                if (bp.chat_id) blockedMap[bp.chat_id] = true;
+            }
+
+            // Bloqueios por cliente (CLIENTES.flows_blocked)
+            const blockedClientes = await dbQuery(
+                `SELECT c.cli_celular, c.cli_celular2 FROM CLIENTES c
+                 WHERE c.flows_blocked = 1 ${empresa_id ? 'AND c.empresa_id = ?' : ''}`,
+                empresa_id ? [empresa_id] : []
+            );
+            // Criar mapa de últimos 8 dígitos dos telefones bloqueados
+            let blockedPhoneSet = new Set();
+            for (const c of blockedClientes) {
+                if (c.cli_celular) blockedPhoneSet.add(c.cli_celular.replace(/\D/g, '').slice(-8));
+                if (c.cli_celular2) blockedPhoneSet.add(c.cli_celular2.replace(/\D/g, '').slice(-8));
+            }
+            // Mapear para chat_ids baseado no número do contato
+            for (const chat of chats) {
+                if (chat.contact && chat.contact.number) {
+                    const last8 = chat.contact.number.replace(/\D/g, '').slice(-8);
+                    if (blockedPhoneSet.has(last8)) {
+                        blockedMap[chat.id._serialized] = true;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Erro ao buscar bloqueios de fluxo:', e);
         }
 
         const mappedChats = chats.map(async chat => {
@@ -122,6 +162,7 @@ async function getAllChats(clientId, limit = 5, page = 1, searchQuery = null, ma
                 } : null,
                 ultimaMensagem: await mapearMsg(chat.lastMessage, false),
                 waitingForAgent: waitingRunsMap[chat.id._serialized] || null,
+                phoneFlowsBlocked: blockedMap[chat.id._serialized] || false,
                 raw: chat
             };
 
@@ -274,7 +315,7 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
         let waitingForAgent = null;
         try {
             const flowRunQuery = await dbQuery(
-                `SELECT id, flow_id, phone, status, created_at FROM FlowRuns
+                `SELECT id, flow_id, phone, status, created_at, agent_status, agent_user_id, agent_started_at FROM FlowRuns
                  WHERE chat_id = ? AND waiting_for_response = 1 AND status = 'running'
                  ORDER BY created_at DESC LIMIT 1`,
                 [chatId]
@@ -286,11 +327,26 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
                     flowId: run.flow_id,
                     phone: run.phone,
                     status: run.status,
-                    createdAt: run.created_at
+                    createdAt: run.created_at,
+                    agent_status: run.agent_status || 'waiting',
+                    agent_user_id: run.agent_user_id || null,
+                    agent_started_at: run.agent_started_at || null
                 };
             }
         } catch (e) {
             console.error('Erro ao buscar FlowRun aguardando atendente:', e);
+        }
+
+        // Verificar bloqueio por telefone (FlowBlockedPhones) - para contatos sem cadastro
+        let phoneFlowsBlocked = false;
+        try {
+            const phoneBlockCheck = await dbQuery(
+                `SELECT id FROM FlowBlockedPhones WHERE chat_id = ? OR RIGHT(REPLACE(phone, ' ', ''), 8) = ? LIMIT 1`,
+                [chatId, numeroSearch]
+            );
+            phoneFlowsBlocked = phoneBlockCheck && phoneBlockCheck.length > 0;
+        } catch (e) {
+            console.error('Erro ao verificar FlowBlockedPhones:', e);
         }
 
         const mappedChat = {
@@ -309,6 +365,7 @@ async function getChatById(clientId, chatId, mapeado = true, limit = 50, empresa
             messagens: messagesComData,
             cliente: cliente,
             waitingForAgent: waitingForAgent,
+            phoneFlowsBlocked: phoneFlowsBlocked,
             limit: limit,
             raw: chat
         };
@@ -412,33 +469,90 @@ async function getAllContacts(clientId) {
 }
 
 /**
- * Busca a label de "aguardando atendimento" no WhatsApp Business
- * Procura por labels cujo nome contenha "aguardando", "atendimento" (case-insensitive)
- * @param {Object} client - Instância do client wwebjs
- * @returns {Promise<Object|null>} Label encontrada ou null
+ * Busca uma label no WhatsApp Business por keywords (case-insensitive).
+ * Nunca lanca - retorna null em erro ou se nao encontrar.
+ *
+ * @param {Object} client - Instancia wwebjs
+ * @param {string[]} keywords - lista de palavras-chave (ordem = prioridade)
+ * @returns {Promise<Object|null>}
  */
-async function findWaitingLabel(client) {
+async function findLabelByKeywords(client, keywords) {
     try {
-        const labels = await client.getLabels();
-        if (!labels || labels.length === 0) return null;
+        if (!client || typeof client?.getLabels !== 'function') return null;
+        const labels = await client.getLabels().catch(() => null);
+        if (!labels || !Array.isArray(labels) || labels.length === 0) return null;
 
-        const keywords = ['aguardando atendimento', 'aguardando', 'atendimento'];
         for (const keyword of keywords) {
-            const found = labels.find(l => l.name.toLowerCase().includes(keyword));
+            const k = (keyword || '').toLowerCase();
+            if (!k) continue;
+            const found = labels.find(l => (l?.name || '').toLowerCase().includes(k));
             if (found) return found;
         }
         return null;
     } catch (error) {
-        console.error('❌ Erro ao buscar labels do WhatsApp:', error.message);
+        console.error('❌ Erro ao buscar labels do WhatsApp:', error?.message);
         return null;
     }
 }
 
 /**
- * Adiciona tag de "aguardando atendimento" no chat do WhatsApp Business
- * @param {string} clientId - ID do client (ex: "atendimento_1")
- * @param {string} chatId - ID do chat WhatsApp
- * @returns {Promise<boolean>} True se adicionada com sucesso
+ * Busca a label de "aguardando atendimento"
+ */
+async function findWaitingLabel(client) {
+    return findLabelByKeywords(client, ['aguardando atendimento', 'aguardando']);
+}
+
+/**
+ * Busca a label de "em atendimento"
+ */
+async function findInAttendanceLabel(client) {
+    return findLabelByKeywords(client, ['em atendimento', 'atendimento']);
+}
+
+/**
+ * Aplica labels ao chat - define o estado final preservando labels externas.
+ * Recebe as labels "do sistema" (aguardando/em atendimento) e decide quais
+ * devem estar presentes no chat. Labels que nao sao do sistema sao preservadas.
+ *
+ * @param {Object} client - wwebjs client
+ * @param {string} chatId
+ * @param {Array<Object>} systemLabels - [{ id, present: boolean }]
+ * @returns {Promise<boolean>}
+ */
+async function applyChatLabels(client, chatId, systemLabels) {
+    try {
+        if (!client || !chatId) return false;
+
+        const currentLabels = await client.getChatLabels(chatId).catch(() => []);
+        const currentIds = (currentLabels || []).map(l => l?.id).filter(Boolean);
+
+        const systemIds = systemLabels.map(s => s?.id).filter(Boolean);
+        // Labels que nao sao do sistema - preservar sempre
+        const externalIds = currentIds.filter(id => !systemIds.includes(id));
+
+        const finalIds = [...externalIds];
+        for (const s of systemLabels) {
+            if (s?.present && s?.id && !finalIds.includes(s.id)) {
+                finalIds.push(s.id);
+            }
+        }
+
+        // Se estado final identico ao atual, nao chamar API
+        const sameSet = finalIds.length === currentIds.length &&
+            finalIds.every(id => currentIds.includes(id));
+        if (sameSet) return true;
+
+        await client.addOrRemoveLabels(finalIds, [chatId]);
+        return true;
+    } catch (error) {
+        console.error('❌ Erro ao aplicar labels no chat:', error?.message);
+        return false;
+    }
+}
+
+/**
+ * Adiciona tag "aguardando atendimento" e remove "em atendimento" (se houver).
+ * Nunca lanca - sempre retorna boolean.
  */
 async function addWaitingForAgentTag(clientId, chatId) {
     try {
@@ -448,75 +562,118 @@ async function addWaitingForAgentTag(clientId, chatId) {
             return false;
         }
 
-        const label = await findWaitingLabel(client);
-        if (!label) {
-            console.log('⚠️ addWaitingForAgentTag: Nenhuma label de "aguardando atendimento" encontrada no WhatsApp');
+        const waiting = await findWaitingLabel(client);
+        const inAttendance = await findInAttendanceLabel(client);
+
+        // Se nao existe label de aguardando, logar e sair (mas nao falhar)
+        if (!waiting?.id) {
+            console.log('⚠️ addWaitingForAgentTag: Label de "aguardando atendimento" nao existe no WhatsApp');
             return false;
         }
 
-        // Buscar labels atuais do chat para preservar e adicionar a nova
-        const currentLabels = await client.getChatLabels(chatId);
-        const currentIds = currentLabels.map(l => l.id);
+        // Evitar conflito: se mesma label foi resolvida para ambos papeis (ex: so existe "atendimento"),
+        // priorizar comportamento de "aguardando" - nao tentar remover a mesma label.
+        const sameLabel = inAttendance?.id && inAttendance.id === waiting.id;
 
-        // Se já tem a label, não precisa adicionar
-        if (currentIds.includes(label.id)) {
-            console.log('ℹ️ Chat já possui a label de aguardando atendimento');
-            return true;
+        const result = await applyChatLabels(client, chatId, [
+            { id: waiting.id, present: true },
+            ...(sameLabel ? [] : [{ id: inAttendance?.id, present: false }])
+        ]);
+
+        if (result) {
+            console.log(`✅ Label "${waiting.name}" aplicada ao chat ${chatId} (aguardando)`);
         }
-
-        // addOrRemoveLabels define o estado final das labels do chat
-        // Precisa incluir as labels atuais + a nova
-        const finalLabelIds = [...currentIds, label.id];
-        await client.addOrRemoveLabels(finalLabelIds, [chatId]);
-
-        console.log(`✅ Label "${label.name}" (${label.id}) adicionada ao chat ${chatId}`);
-        return true;
+        return result;
     } catch (error) {
-        console.error('❌ Erro ao adicionar tag de aguardando atendimento:', error.message);
+        console.error('❌ Erro em addWaitingForAgentTag:', error?.message);
         return false;
     }
 }
 
 /**
- * Remove tag de "aguardando atendimento" do chat do WhatsApp Business
- * @param {string} clientId - ID do client (ex: "atendimento_1")
- * @param {string} chatId - ID do chat WhatsApp
- * @returns {Promise<boolean>} True se removida com sucesso
+ * Adiciona tag "em atendimento" e remove "aguardando atendimento".
+ * Usado quando o usuario clica em "Iniciar Atendimento".
  */
-async function removeWaitingForAgentTag(clientId, chatId) {
+async function addInAttendanceTag(clientId, chatId) {
     try {
         const client = getClientById(clientId);
         if (!client) {
-            console.log('⚠️ removeWaitingForAgentTag: Client não encontrado:', clientId);
+            console.log('⚠️ addInAttendanceTag: Client não encontrado:', clientId);
             return false;
         }
 
-        const label = await findWaitingLabel(client);
-        if (!label) {
-            console.log('⚠️ removeWaitingForAgentTag: Nenhuma label de "aguardando atendimento" encontrada no WhatsApp');
+        const waiting = await findWaitingLabel(client);
+        const inAttendance = await findInAttendanceLabel(client);
+
+        if (!inAttendance?.id) {
+            console.log('⚠️ addInAttendanceTag: Label de "em atendimento" nao existe no WhatsApp');
+            // Mesmo sem label de "em atendimento", remover a de aguardando
+            if (waiting?.id) {
+                await applyChatLabels(client, chatId, [{ id: waiting.id, present: false }]);
+            }
             return false;
         }
 
-        // Buscar labels atuais do chat
-        const currentLabels = await client.getChatLabels(chatId);
-        const currentIds = currentLabels.map(l => l.id);
+        const sameLabel = waiting?.id && waiting.id === inAttendance.id;
 
-        // Se não tem a label, não precisa remover
-        if (!currentIds.includes(label.id)) {
-            console.log('ℹ️ Chat não possui a label de aguardando atendimento');
+        const result = await applyChatLabels(client, chatId, [
+            { id: inAttendance.id, present: true },
+            ...(sameLabel ? [] : [{ id: waiting?.id, present: false }])
+        ]);
+
+        if (result) {
+            console.log(`✅ Label "${inAttendance.name}" aplicada ao chat ${chatId} (em atendimento)`);
+        }
+        return result;
+    } catch (error) {
+        console.error('❌ Erro em addInAttendanceTag:', error?.message);
+        return false;
+    }
+}
+
+/**
+ * Remove AMBAS as labels (aguardando + em atendimento) do chat.
+ * Usado em Finalizar Atendimento.
+ */
+async function removeAttendanceTags(clientId, chatId) {
+    try {
+        const client = getClientById(clientId);
+        if (!client) {
+            console.log('⚠️ removeAttendanceTags: Client não encontrado:', clientId);
+            return false;
+        }
+
+        const waiting = await findWaitingLabel(client);
+        const inAttendance = await findInAttendanceLabel(client);
+
+        const systemLabels = [];
+        if (waiting?.id) systemLabels.push({ id: waiting.id, present: false });
+        if (inAttendance?.id && inAttendance.id !== waiting?.id) {
+            systemLabels.push({ id: inAttendance.id, present: false });
+        }
+
+        if (systemLabels.length === 0) {
+            console.log('ℹ️ removeAttendanceTags: Nenhuma label de atendimento encontrada no WhatsApp');
             return true;
         }
 
-        // Remover a label mantendo as demais
-        const finalLabelIds = currentIds.filter(id => id !== label.id);
-        await client.addOrRemoveLabels(finalLabelIds, [chatId]);
-
-        console.log(`✅ Label "${label.name}" (${label.id}) removida do chat ${chatId}`);
-        return true;
+        const result = await applyChatLabels(client, chatId, systemLabels);
+        if (result) {
+            console.log(`✅ Labels de atendimento removidas do chat ${chatId}`);
+        }
+        return result;
     } catch (error) {
-        console.error('❌ Erro ao remover tag de aguardando atendimento:', error.message);
+        console.error('❌ Erro em removeAttendanceTags:', error?.message);
         return false;
     }
+}
+
+/**
+ * Alias compatibilidade - remove apenas a tag de "aguardando".
+ * Mantido para nao quebrar chamadas antigas. Delega para removeAttendanceTags.
+ */
+async function removeWaitingForAgentTag(clientId, chatId) {
+    return removeAttendanceTags(clientId, chatId);
 }
 
 /**
@@ -620,13 +777,134 @@ async function getChatMessages(clientId, chatId, limit = 50) {
     }
 }
 
+/**
+ * Popular datas de última mensagem para todos os clientes cadastrados
+ * Itera pelos chats do WhatsApp, cruza com CLIENTES e atualiza as datas
+ * @param {string} clientId - ID do client WhatsApp
+ * @param {number} empresa_id - ID da empresa
+ * @returns {Object} - Resultado { total, atualizados, erros }
+ */
+async function popularUltimaMsgClientes(clientId, empresa_id) {
+    const client = getClientById(clientId);
+    if (!client) throw new Error(`Client ${clientId} não encontrado`);
+
+    const connected = await isClientConnected(clientId);
+    if (!connected) throw new Error(`Client ${clientId} não está conectado`);
+
+    console.log('🔄 Iniciando população de datas de última mensagem...');
+
+    // Buscar todos os clientes com telefone
+    const clientes = await dbQuery(
+        `SELECT cli_Id, cli_celular, cli_celular2 FROM CLIENTES
+         WHERE empresa_id = ? AND cli_celular IS NOT NULL AND cli_celular != ''`,
+        [empresa_id]
+    );
+
+    console.log(`📋 ${clientes.length} clientes encontrados no banco`);
+
+    // Buscar todos os chats do WhatsApp (sem paginar)
+    const chatsAll = await client.getChats();
+    const chats = chatsAll.filter(chat =>
+        !chat.isGroup && (chat.id.server === 'c.us' || chat.id.server === 'lid')
+    );
+
+    console.log(`💬 ${chats.length} chats encontrados no WhatsApp`);
+
+    // Criar mapa de phone (últimos 8 dígitos) → chat
+    const chatMap = {};
+    for (const chat of chats) {
+        let numero = chat.id._serialized.replace('@c.us', '').replace('@lid', '');
+        const last8 = numero.replace(/\D/g, '').slice(-8);
+        if (last8.length === 8) {
+            chatMap[last8] = chat;
+        }
+    }
+
+    let atualizados = 0;
+    let erros = 0;
+    let semChat = 0;
+
+    for (const cli of clientes) {
+        try {
+            const phoneClean = (cli.cli_celular || '').replace(/\D/g, '');
+            const last8 = phoneClean.slice(-8);
+            if (!last8 || last8.length < 8) continue;
+
+            const chat = chatMap[last8];
+            if (!chat) {
+                semChat++;
+                continue;
+            }
+
+            // Buscar últimas 10 mensagens desse chat
+            const mensagens = await chat.fetchMessages({ limit: 10 });
+            if (!mensagens || mensagens.length === 0) continue;
+
+            let ultimaMsgData = null;
+            let ultimaMsgClienteData = null;
+            let ultimaMsgSistemaData = null;
+
+            for (const msg of mensagens) {
+                const msgDate = new Date(msg.timestamp * 1000);
+
+                // Última mensagem geral (a mais recente)
+                if (!ultimaMsgData || msgDate > ultimaMsgData) {
+                    ultimaMsgData = msgDate;
+                }
+
+                if (msg.fromMe) {
+                    if (!ultimaMsgSistemaData || msgDate > ultimaMsgSistemaData) {
+                        ultimaMsgSistemaData = msgDate;
+                    }
+                } else {
+                    if (!ultimaMsgClienteData || msgDate > ultimaMsgClienteData) {
+                        ultimaMsgClienteData = msgDate;
+                    }
+                }
+            }
+
+            // Atualizar no banco
+            await dbQuery(
+                `UPDATE CLIENTES SET
+                    cli_ultima_msg_data = COALESCE(?, cli_ultima_msg_data),
+                    cli_ultima_msg_cliente_data = COALESCE(?, cli_ultima_msg_cliente_data),
+                    cli_ultima_msg_sistema_data = COALESCE(?, cli_ultima_msg_sistema_data)
+                 WHERE cli_Id = ?`,
+                [ultimaMsgData, ultimaMsgClienteData, ultimaMsgSistemaData, cli.cli_Id]
+            );
+
+            atualizados++;
+
+            if (atualizados % 50 === 0) {
+                console.log(`⏳ Progresso: ${atualizados}/${clientes.length} atualizados...`);
+            }
+        } catch (err) {
+            erros++;
+        }
+    }
+
+    const resultado = {
+        total: clientes.length,
+        chatsWhatsApp: chats.length,
+        atualizados,
+        semChat,
+        erros
+    };
+
+    console.log('✅ População concluída:', resultado);
+    return resultado;
+}
+
 module.exports = {
     getAllChats,
     getChatById,
     actionsChat,
     getAllContacts,
     addWaitingForAgentTag,
+    addInAttendanceTag,
+    removeAttendanceTags,
     removeWaitingForAgentTag,
-    getChatMessages
+    getChatMessages,
+    popularUltimaMsgClientes
 };
 

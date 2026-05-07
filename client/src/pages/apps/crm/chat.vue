@@ -288,6 +288,75 @@
     selectedChat.value.messagens[chatIndex].ack = msg.ack;
   });
 
+  // Normaliza telefone para comparacao (ultimos 8 digitos)
+  const normalizePhoneKey = (p) => {
+    if (!p) return "";
+    return String(p).replace(/\D/g, "").slice(-8);
+  };
+
+  // Aplica uma atualizacao de estado a um chat (mutacao in-place)
+  const applyChatStateUpdate = (chat, state) => {
+    if (!chat) return;
+
+    // Estado de bloqueio do cliente cadastrado
+    if (state.flows_blocked !== undefined && chat.cliente) {
+      chat.cliente.flows_blocked = state.flows_blocked ? 1 : 0;
+    }
+
+    // Estado de bloqueio por telefone (contato sem cadastro)
+    if (state.phone_blocked !== undefined) {
+      chat.phoneFlowsBlocked = !!state.phone_blocked;
+    }
+
+    // Estado de aguardando/em atendimento
+    if (state.waiting_for_agent === false) {
+      chat.waitingForAgent = null;
+    } else if (
+      state.agent_status === "waiting" ||
+      state.agent_status === "in_attendance"
+    ) {
+      chat.waitingForAgent = {
+        ...(chat.waitingForAgent || {}),
+        runId: state.runId ?? chat.waitingForAgent?.runId ?? null,
+        agent_status: state.agent_status,
+        agent_user_id:
+          state.agent_user_id ?? chat.waitingForAgent?.agent_user_id ?? null,
+      };
+    }
+  };
+
+  socket.on("chat:state-update", (state) => {
+    if (!state) return;
+    console.log("chat:state-update", state);
+
+    const chatIdKey = state.chatId || null;
+    const phoneKey = normalizePhoneKey(state.phone);
+    const clienteIdKey = state.clienteId || null;
+
+    const matchChat = (c) => {
+      if (!c) return false;
+      if (chatIdKey && c.id === chatIdKey) return true;
+      if (clienteIdKey && c.cliente?.cli_Id === clienteIdKey) return true;
+      if (phoneKey) {
+        const phoneA = normalizePhoneKey(
+          c.contato?.numero || c.cliente?.cli_celular || c.id || ""
+        );
+        if (phoneA && phoneA === phoneKey) return true;
+      }
+      return false;
+    };
+
+    // Atualizar chat selecionado
+    if (selectedChat.value && matchChat(selectedChat.value)) {
+      applyChatStateUpdate(selectedChat.value, state);
+    }
+
+    // Atualizar na lista de chats
+    for (const c of allChats.value) {
+      if (matchChat(c)) applyChatStateUpdate(c, state);
+    }
+  });
+
   const handleData = (dataChat, short = true) => {
     const data = moment(dataChat, "DD/MM/YYYY HH:mm:ss");
     const now = moment();
@@ -955,7 +1024,82 @@
 
   const viewDadosCliente = ref(false);
   const loadingFinalizarAtendimento = ref(false);
+  const loadingIniciarAtendimento = ref(false);
   const loadingToggleFlows = ref(false);
+
+  // Estado do atendimento: 'waiting' (aguardando) | 'in_attendance' (em atendimento) | null
+  const agentStatus = computed(() => {
+    return selectedChat.value?.waitingForAgent?.agent_status || null;
+  });
+
+  const iniciarAtendimento = async () => {
+    if (!selectedChat.value) return;
+
+    loadingIniciarAtendimento.value = true;
+
+    try {
+      let res;
+      const existingRunId = selectedChat.value?.waitingForAgent?.runId;
+
+      if (existingRunId) {
+        // Fluxo padrao: ja ha run em espera
+        res = await $api(`/flows/run/${existingRunId}/start-attendance`, {
+          method: "POST",
+        });
+      } else {
+        // Marcacao manual: cria run virtual
+        const chatId = selectedChat.value?.id || null;
+        const phone =
+          selectedChat.value?.contato?.numero ||
+          selectedChat.value?.cliente?.cli_celular ||
+          (chatId ? chatId.replace('@c.us', '').replace('@lid', '') : null);
+
+        res = await $api(`/flows/attendance/start`, {
+          method: "POST",
+          body: {
+            chatId,
+            phone,
+            clienteId: selectedChat.value?.cliente?.cli_Id || null,
+          },
+        });
+      }
+
+      if (res && res.ok) {
+        setAlert("Atendimento iniciado!", "success", "tabler-headset", 3000);
+
+        // Atualizar status local
+        selectedChat.value.waitingForAgent = {
+          ...(selectedChat.value.waitingForAgent || {}),
+          runId: res.runId ?? selectedChat.value?.waitingForAgent?.runId ?? null,
+          agent_status: 'in_attendance',
+          agent_user_id: res.agent_user_id,
+          agent_started_at: res.agent_started_at,
+        };
+
+        // Atualizar na lista de chats
+        const chatIndex = allChats.value.findIndex(c => c.id === selectedChat.value.id);
+        if (chatIndex >= 0) {
+          allChats.value[chatIndex].waitingForAgent = {
+            ...(allChats.value[chatIndex].waitingForAgent || {}),
+            runId: res.runId ?? allChats.value[chatIndex].waitingForAgent?.runId ?? null,
+            agent_status: 'in_attendance',
+            agent_user_id: res.agent_user_id,
+            agent_started_at: res.agent_started_at,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("Error iniciando atendimento:", error);
+      setAlert(
+        error?.response?._data?.message || "Erro ao iniciar atendimento",
+        "error",
+        "tabler-alert-triangle",
+        5000
+      );
+    } finally {
+      loadingIniciarAtendimento.value = false;
+    }
+  };
 
   const finalizarAtendimento = async () => {
     if (!selectedChat.value?.waitingForAgent?.runId) {
@@ -972,10 +1116,10 @@
 
       if (res && res.ok) {
         setAlert("Atendimento finalizado com sucesso!", "success", "tabler-check", 3000);
-        
+
         // Atualizar o chat para remover o badge
         selectedChat.value.waitingForAgent = null;
-        
+
         // Atualizar na lista de chats também
         const chatIndex = allChats.value.findIndex(c => c.id === selectedChat.value.id);
         if (chatIndex >= 0) {
@@ -995,47 +1139,64 @@
     }
   };
 
+  // Verifica se os fluxos estão bloqueados (cliente cadastrado OU contato sem cadastro)
+  const isFlowsBlocked = computed(() => {
+    if (selectedChat.value?.cliente?.flows_blocked) return true;
+    if (selectedChat.value?.phoneFlowsBlocked) return true;
+    return false;
+  });
+
   const toggleFlowsBlock = async () => {
-    if (!selectedChat.value?.cliente?.id) {
-      setAlert("Cliente não encontrado", "error");
-      return;
-    }
+    const hasCliente = !!selectedChat.value?.cliente?.id;
+    const newStatus = !isFlowsBlocked.value;
+    const action = newStatus ? 'bloquear' : 'desbloquear';
 
-    const cliente = selectedChat.value.cliente;
-    const action = cliente.flows_blocked ? 'desbloquear' : 'bloquear';
-    const newStatus = !cliente.flows_blocked;
-
-    if (!confirm(`Tem certeza que deseja ${action} os fluxos para este cliente?`)) {
+    if (!confirm(`Tem certeza que deseja ${action} os fluxos para este contato?`)) {
       return;
     }
 
     loadingToggleFlows.value = true;
 
     try {
-      const res = await $api(`/clientes/block-flows/${cliente.cli_Id}`, {
-        method: 'PUT',
-        body: {
-          blocked: newStatus
-        }
-      });
+      if (hasCliente) {
+        // Cliente cadastrado: usar rota de cliente
+        await $api(`/clientes/block-flows/${selectedChat.value.cliente.cli_Id}`, {
+          method: 'PUT',
+          body: { blocked: newStatus }
+        });
 
-      if (res) {
-        setAlert(
-          `Fluxos ${newStatus ? 'bloqueados' : 'desbloqueados'} com sucesso!`,
-          'success',
-          'tabler-check',
-          3000
-        );
-        
-        // Atualizar o status localmente
+        // Atualizar estado local
         selectedChat.value.cliente.flows_blocked = newStatus ? 1 : 0;
-        
-        // Atualizar na lista de chats também se possível
         const chatIndex = allChats.value.findIndex(c => c.id === selectedChat.value.id);
         if (chatIndex >= 0 && allChats.value[chatIndex].cliente) {
           allChats.value[chatIndex].cliente.flows_blocked = newStatus ? 1 : 0;
         }
+      } else {
+        // Contato sem cadastro: usar rota de bloqueio por telefone
+        const phone = selectedChat.value?.contato?.numero || selectedChat.value?.id?.replace('@c.us', '').replace('@lid', '') || '';
+        await $api(`/flows/block-phone`, {
+          method: 'PUT',
+          body: {
+            phone: phone,
+            chatId: selectedChat.value?.id || null,
+            blocked: newStatus
+          }
+        });
+
+        // Atualizar estado local
+        selectedChat.value.phoneFlowsBlocked = newStatus;
+        const chatIndex = allChats.value.findIndex(c => c.id === selectedChat.value.id);
+        if (chatIndex >= 0) {
+          allChats.value[chatIndex].phoneFlowsBlocked = newStatus;
+        }
       }
+
+      setAlert(
+        `Fluxos ${newStatus ? 'bloqueados' : 'desbloqueados'} com sucesso!`,
+        'success',
+        'tabler-check',
+        3000
+      );
     } catch (error) {
       console.error("Error toggling flows block:", error);
       setAlert(
@@ -1053,6 +1214,7 @@
   onBeforeUnmount(() => {
     socket.off("nova-mensagem");
     socket.off("update-mensagem");
+    socket.off("chat:state-update");
   });
 </script>
 
@@ -1156,13 +1318,31 @@
                     {{ chat.nome }}
                   </p>
                   <VChip
-                    v-if="chat.waitingForAgent"
+                    v-if="chat.waitingForAgent && chat.waitingForAgent.agent_status === 'in_attendance'"
+                    color="info"
+                    size="x-small"
+                    label
+                    class="ml-1"
+                  >
+                    Em atendimento
+                  </VChip>
+                  <VChip
+                    v-else-if="chat.waitingForAgent"
                     color="warning"
                     size="x-small"
                     label
                     class="ml-1"
                   >
                     Aguardando
+                  </VChip>
+                  <VChip
+                    v-else-if="chat.cliente?.flows_blocked || chat.phoneFlowsBlocked"
+                    color="error"
+                    size="x-small"
+                    label
+                    class="ml-1"
+                  >
+                    Bloqueado
                   </VChip>
                   <p class="ml-auto mb-0 text-disabled text-caption">
                     <VIcon icon="tabler-pin-filled" v-if="chat.pinned" />
@@ -1276,6 +1456,36 @@
           </div>
 
           <div class="ml-auto d-flex gap-2">
+            <VChip
+              v-if="agentStatus === 'in_attendance'"
+              color="info"
+              size="small"
+              label
+              style="height: 30px;"
+            >
+              <VIcon icon="tabler-headset" class="mr-1" />
+              Em atendimento
+            </VChip>
+
+            <VBtn
+              v-else
+              color="primary"
+              size="small"
+              variant="flat"
+              @click="iniciarAtendimento"
+              :loading="loadingIniciarAtendimento"
+              rounded="lg"
+              style="height: 30px;"
+            >
+              <VIcon icon="tabler-headset" class="mr-1" />
+              Iniciar
+
+              <VTooltip
+                :text="selectedChat?.waitingForAgent ? 'Iniciar atendimento' : 'Marcar como em atendimento'"
+                activator="parent"
+              />
+            </VBtn>
+
             <VBtn
               v-if="selectedChat?.waitingForAgent"
               color="success"
@@ -1287,12 +1497,13 @@
               style="height: 30px;"
             >
               <VIcon icon="tabler-check" class="mr-1" />
-              Finalizar Atendimento
+              Finalizar
+
+              <VTooltip text="Finalizar atendimento" activator="parent" />
             </VBtn>
 
             <VBtn
-              v-if="selectedChat?.cliente"
-              :color="selectedChat?.cliente?.flows_blocked ? 'error' : 'default'"
+              :color="isFlowsBlocked ? 'error' : 'default'"
               size="small"
               variant="tonal"
               @click="toggleFlowsBlock"
@@ -1300,11 +1511,13 @@
               rounded="lg"
               style="height: 30px;"
             >
-              <VIcon 
-                :icon="selectedChat?.cliente?.flows_blocked ? 'tabler-lock' : 'tabler-lock-open'" 
-                class="mr-1" 
+              <VIcon
+                :icon="isFlowsBlocked ? 'tabler-lock' : 'tabler-lock-open'"
+                class="mr-1"
               />
-              {{ selectedChat?.cliente?.flows_blocked ? 'Fluxos Bloqueados' : 'Bloquear Fluxos' }}
+              {{ isFlowsBlocked ? 'Desbloquear' : 'Bloquear' }}
+
+              <VTooltip :text="isFlowsBlocked ? 'Desbloquear fluxos' : 'Bloquear fluxos'" activator="parent" />
             </VBtn>
           </div>
         </div>

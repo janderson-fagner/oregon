@@ -154,91 +154,32 @@
         </div>
       </div>
 
-      <VDivider class="my-4" />
-
       <!-- Variáveis Disponíveis -->
-      <div class="mb-4">
-        <h6 class="text-h6 mb-2">Variáveis Disponíveis</h6>
-        <p class="text-caption text-medium-emphasis mb-4">
-          Clique em uma variável para copiá-la e usá-la nas mensagens
-        </p>
-        
-        <div class="d-flex flex-wrap gap-2">
-          <VChip
-            v-for="variable in variaveisDisponiveis"
-            :key="variable.value"
-            size="small"
-            :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : variable.type === 'agendamento' ? 'primary' : 'secondary'"
-            variant="tonal"
-            class="cursor-pointer"
-            @click="copyVariableToClipboard(variable.value)"
-          >
-            <VIcon icon="tabler-copy" size="small" class="me-1" />
-            {{ variable.title }}
-          </VChip>
-        </div>
-      </div>
-
-      <VDivider class="my-4" />
+      <VariablesSection :flow-variables="props.flowVariables" />
 
       <!-- Informações -->
-      <VCard variant="outlined" class="pa-4">
-        <h6 class="text-subtitle-2 mb-2">
-          <VIcon icon="tabler-info-circle" class="me-1" />
-          Como funciona
-        </h6>
-        <VList density="compact">
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-caption">
-              Solicita o ID do agendamento ao cliente com mensagem personalizada
-            </VListItemTitle>
-          </VListItem>
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-caption">
-              Extrai números de textos como "#123", "agendamento 123" ou apenas "123"
-            </VListItemTitle>
-          </VListItem>
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-caption">
-              Envia mensagem de busca e aguarda 3 segundos antes de confirmar
-            </VListItemTitle>
-          </VListItem>
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-caption">
-              Se o agendamento for encontrado, atualiza o contexto e envia mensagem de sucesso
-            </VListItemTitle>
-          </VListItem>
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-check" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-caption">
-              Se não encontrar ou exceder tentativas, pode seguir para edge "Agendamento Não Encontrado"
-            </VListItemTitle>
-          </VListItem>
-        </VList>
-      </VCard>
+      <BlockInfoSection
+        title="Como funciona"
+        :items="[
+          { icon: 'tabler-check', color: 'success', text: 'Solicita o ID do agendamento ao cliente com mensagem personalizada' },
+          { icon: 'tabler-check', color: 'success', text: 'Extrai números de textos como #123, agendamento 123 ou apenas 123' },
+          { icon: 'tabler-check', color: 'success', text: 'Envia mensagem de busca e aguarda 3 segundos antes de confirmar' },
+          { icon: 'tabler-check', color: 'success', text: 'Se o agendamento for encontrado, atualiza o contexto e envia mensagem de sucesso' },
+          { icon: 'tabler-check', color: 'success', text: 'Se não encontrar ou exceder tentativas, segue para edge Agendamento Não Encontrado' },
+        ]"
+        hint="O bloco solicita o ID do agendamento, busca no banco de dados e atualiza o contexto do fluxo."
+      />
     </VCol>
   </VRow>
 </template>
 
 <script setup>
 import { ref, watch, onMounted } from 'vue';
-import { getAllVariables, copyVariableToClipboard } from '@/utils/dynamicVariables';
+import { getAllVariables } from '@/utils/dynamicVariables';
 import { QuillEditor } from '@vueup/vue-quill';
 import '@vueup/vue-quill/dist/vue-quill.snow.css';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -253,8 +194,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:config']);
-
-const { setAlert } = useAlert();
 
 const localConfig = ref({
   requestMessage: props.config.requestMessage || '<p>Por favor, me informe o ID do seu agendamento.</p>',

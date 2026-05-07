@@ -541,11 +541,71 @@ router.put('/block-flows/:id', async (req, res) => {
     const empresa_id = req.user.empresa_id;
 
     try {
-        await dbQuery('UPDATE CLIENTES SET flows_blocked = ? WHERE cli_Id = ? AND empresa_id = ?', [blocked, id, empresa_id]);
-        res.status(200).json({ message: 'Fluxos bloqueados com sucesso' });
+        // Atualizar status de bloqueio no cliente
+        await dbQuery(
+            'UPDATE CLIENTES SET flows_blocked = ?, flows_blocked_at = ?, flows_blocked_reason = NULL WHERE cli_Id = ? AND empresa_id = ?',
+            [blocked ? 1 : 0, blocked ? new Date() : null, id, empresa_id]
+        );
+
+        if (!blocked) {
+            // Ao desbloquear: completar TODOS os FlowRuns em espera desse cliente
+            // Primeiro buscar os runs para pegar chat_id e remover tags
+            const waitingRuns = await dbQuery(
+                `SELECT id, chat_id, context_json FROM FlowRuns
+                 WHERE cliente_id = ? AND status = 'running' AND waiting_for_response = 1 AND empresa_id = ?`,
+                [id, empresa_id]
+            );
+
+            await dbQuery(
+                `UPDATE FlowRuns SET status = 'completed', waiting_for_response = 0, updated_at = NOW()
+                 WHERE cliente_id = ? AND status = 'running' AND waiting_for_response = 1 AND empresa_id = ?`,
+                [id, empresa_id]
+            );
+
+            // Também limpar por telefone do cliente
+            const clienteData = await dbQuery('SELECT cli_celular, cli_celular2 FROM CLIENTES WHERE cli_Id = ?', [id]);
+            if (clienteData && clienteData.length > 0) {
+                const phones = [clienteData[0].cli_celular, clienteData[0].cli_celular2].filter(Boolean);
+                for (const phone of phones) {
+                    const cleanPhone = phone.replace(/\D/g, '');
+                    const last8 = cleanPhone.slice(-8);
+
+                    // Completar FlowRuns por telefone
+                    await dbQuery(
+                        `UPDATE FlowRuns SET status = 'completed', waiting_for_response = 0, updated_at = NOW()
+                         WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? AND status = 'running' AND waiting_for_response = 1 AND empresa_id = ?`,
+                        [last8, empresa_id]
+                    );
+
+                    // Limpar da tabela FlowBlockedPhones também
+                    await dbQuery(
+                        `DELETE FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? AND empresa_id = ?`,
+                        [last8, empresa_id]
+                    );
+                }
+            }
+        }
+
+        // Emitir evento socket para atualizar chat em tempo real
+        try {
+            const { emitChatStateUpdate } = require('../utils/chatStateEmitter');
+            const clienteData = await dbQuery('SELECT cli_celular FROM CLIENTES WHERE cli_Id = ? LIMIT 1', [id]);
+            const phoneC = clienteData?.[0]?.cli_celular ? clienteData[0].cli_celular.replace(/\D/g, '') : null;
+
+            emitChatStateUpdate(empresa_id, {
+                clienteId: Number(id),
+                phone: phoneC,
+                flows_blocked: !!blocked,
+                waiting_for_agent: false,
+                agent_status: null,
+                agent_user_id: null,
+                reason: blocked ? 'client_blocked' : 'client_unblocked'
+            });
+        } catch (_) {}
+
+        res.status(200).json({ message: blocked ? 'Fluxos bloqueados com sucesso' : 'Fluxos desbloqueados com sucesso' });
     } catch (error) {
         console.error('Erro ao bloquear fluxos', error);
-
         res.status(500).json({ error: error.message });
     }
 });

@@ -225,6 +225,64 @@ async function createAgendamento(config, context) {
  * @param {Object} context - Contexto do fluxo
  * @returns {Promise<Object>} - Resultado da operação
  */
+/**
+ * Usa IA para interpretar instruções e determinar quais campos atualizar no agendamento
+ * @param {String} instrucoesIA - Instruções em texto livre
+ * @param {Object} agendamentoAtual - Dados atuais do agendamento
+ * @param {Number} empresa_id - ID da empresa
+ * @returns {Object} - Campos a atualizar { statusId, observacoes }
+ */
+async function interpretarAtualizacaoComIA(instrucoesIA, agendamentoAtual, empresa_id) {
+    const { generateGeminiText, getGeminiConfig } = require('../../utils/gemini');
+
+    // Buscar status disponíveis
+    const statusList = await dbQuery(
+        'SELECT ast_id, ast_descricao FROM AGENDAMENTO_STATUS WHERE empresa_id = ? ORDER BY ast_id',
+        [empresa_id || 1]
+    );
+    const statusOptions = statusList.map(s => `${s.ast_id} = ${s.ast_descricao}`).join(', ');
+
+    const prompt = `Você é um assistente que interpreta instruções para atualizar agendamentos.
+
+STATUS DISPONÍVEIS: ${statusOptions}
+STATUS ATUAL DO AGENDAMENTO: ${agendamentoAtual.ast_id}
+
+INSTRUÇÃO: "${instrucoesIA}"
+
+Responda APENAS com um JSON válido contendo os campos a atualizar. Campos possíveis:
+- "statusId": número do novo status (apenas se a instrução pedir mudança de status)
+- "observacoes": texto (apenas se a instrução pedir adicionar observações)
+
+Se a instrução não pedir mudança em algum campo, não inclua ele no JSON.
+Responda SOMENTE o JSON, sem explicações, sem markdown, sem crases.`;
+
+    const config = await getGeminiConfig(empresa_id);
+    const response = await generateGeminiText({
+        instructions: prompt,
+        userText: instrucoesIA,
+        context: { empresa_id },
+        history: []
+    });
+
+    // Extrair JSON da resposta
+    const jsonMatch = (response || '').match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) {
+        flowLog.log('WARN', 'IA não retornou JSON válido para update_agendamento', { response });
+        return {};
+    }
+
+    try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+            statusId: parsed.statusId || null,
+            observacoes: parsed.observacoes || null
+        };
+    } catch (e) {
+        flowLog.log('WARN', 'Erro ao parsear JSON da IA', { response: jsonMatch[0] });
+        return {};
+    }
+}
+
 async function updateAgendamento(config, context) {
     flowLog.actionSuccess('update_agendamento', { step: 'start' });
 
@@ -347,6 +405,25 @@ async function updateAgendamento(config, context) {
         if (config.observacoes) {
             updates.push('age_observacao = ?');
             values.push(await replaceVariables(config.observacoes, context));
+        }
+
+        // Se não há campos para atualizar e useIA está ativo, usar IA para interpretar instruções
+        if (updates.length === 0 && config.useIA && config.instrucoesIA) {
+            flowLog.log('INFO', 'Nenhum campo preenchido manualmente. Usando IA para interpretar instruções...');
+            try {
+                const aiUpdates = await interpretarAtualizacaoComIA(config.instrucoesIA, agendamentoAtual, empresa_id);
+                if (aiUpdates.statusId) {
+                    updates.push('ast_id = ?');
+                    values.push(aiUpdates.statusId);
+                }
+                if (aiUpdates.observacoes) {
+                    updates.push('age_observacao = ?');
+                    values.push(aiUpdates.observacoes);
+                }
+                flowLog.log('INFO', 'IA determinou atualizações', aiUpdates);
+            } catch (aiErr) {
+                flowLog.log('ERROR', 'Erro na interpretação IA', { error: aiErr.message });
+            }
         }
 
         if (updates.length === 0) {

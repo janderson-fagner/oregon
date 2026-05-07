@@ -225,13 +225,13 @@ const mountMenu = () => {
               action: 'view',
               subject: 'crm_chat'
             },
-            {
+           /*  {
               title: 'Link de Atendimento',
               icon: { icon: 'tabler-link' },
               to: 'crm-link-atendimento',
               action: 'view',
               subject: 'crm_chat'
-            },
+            }, */
             {
               title: 'Modelos de Mensagens',
               icon: { icon: 'tabler-layout-2' },

@@ -528,7 +528,21 @@
 
     <script>
         // Configuracao
-        const API_BASE = window.location.origin;
+        let API_BASE = window.location.origin;
+
+        //Verificar se tem query ?isProd=
+        const urlParams = new URLSearchParams(window.location.search);
+        const isProd = urlParams.get('isProd');
+        if(isProd) {
+            API_BASE = API_BASE + '/api';
+        }
+
+        console.log(API_BASE);
+
+        if(!API_BASE.includes('api')) {
+            API_BASE = API_BASE + '/apidev';
+        }
+
         let selectedFlowId = null;
         let currentStatus = 'idle';
         let isFirstMessage = true;

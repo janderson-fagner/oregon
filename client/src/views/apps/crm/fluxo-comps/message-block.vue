@@ -2,7 +2,8 @@
 import modeloDialog from "@/views/apps/crm/modeloDialog.vue";
 import { QuillEditor } from "@vueup/vue-quill";
 import "@vueup/vue-quill/dist/vue-quill.snow.css";
-import { getAllVariables } from "@/utils/dynamicVariables.js";
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   message: {
@@ -43,7 +44,6 @@ const viewModeloDialog = ref(false);
 // Variáveis para o editor
 const variavel = ref(null);
 const refQuillEditor = ref(null);
-const viewVariaveisTutorial = ref(false);
 const variaveisItens = ref([]);
 
 // Variáveis para gravação de áudio
@@ -96,40 +96,6 @@ const editorOptions = {
   },
 };
 
-// Função para copiar variável para clipboard
-const copyVariableToClipboard = (variableValue) => {
-  const variableText = `{{${variableValue}}}`;
-  
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(variableText).then(() => {
-      setAlert(`Variável ${variableText} copiada!`, 'success', 'tabler-copy', 2000);
-    }).catch(() => {
-      fallbackCopyToClipboard(variableText);
-    });
-  } else {
-    fallbackCopyToClipboard(variableText);
-  }
-};
-
-const fallbackCopyToClipboard = (text) => {
-  const textArea = document.createElement('textarea');
-  textArea.value = text;
-  textArea.style.position = 'fixed';
-  textArea.style.left = '-999999px';
-  textArea.style.top = '-999999px';
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-  
-  try {
-    document.execCommand('copy');
-    setAlert(`Variável ${text} copiada!`, 'success', 'tabler-copy', 2000);
-  } catch (err) {
-    setAlert('Erro ao copiar variável', 'error', 'tabler-alert-circle', 2000);
-  }
-  
-  document.body.removeChild(textArea);
-};
 
 // Função para inserir variável no editor
 const insertVariable = () => {
@@ -221,10 +187,6 @@ watch(useTemplate, (newVal) => {
     });
   }
 });
-
-const toggleVariaveisTutorial = () => {
-  viewVariaveisTutorial.value = !viewVariaveisTutorial.value;
-};
 
 // === FUNÇÕES DE GRAVAÇÃO DE ÁUDIO ===
 const initTimer = () => {
@@ -461,101 +423,6 @@ onMounted(async () => {
     <div v-else>
       <p class="mb-1">Escreva o conteúdo da mensagem.</p>
 
-      <!-- Variáveis disponíveis -->
-      <div class="mb-3">
-        <a @click="toggleVariaveisTutorial" class="cursor-pointer">
-          Ver variáveis disponíveis
-          <VIcon
-            :icon="
-              viewVariaveisTutorial
-                ? 'tabler-chevron-up'
-                : 'tabler-chevron-down'
-            "
-          />
-        </a>
-
-        <v-fade-transition>
-          <div v-if="viewVariaveisTutorial" style="font-size: 13px">
-            <p class="mt-2 mb-4">
-              Para usar as variações adicione dentro do texto pelo
-              seletor ou inserindo o nome da variação dentro de duas
-              chaves. Ex.:
-              <span class="font-weight-bold" v-pre>{{
-                cliente_nome
-              }}</span>
-            </p>
-            <VRow class="mb-4">
-              <VCol cols="12" md="4">
-                <strong>Dados do cliente:</strong><br />
-                <span
-                  v-for="variavel in variaveisItens.filter(
-                    (item) => item.type == 'cliente'
-                  )"
-                  :key="variavel.value"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variavel.value)"
-                  v-html="
-                    `<span class='font-weight-bold text-primary' v-pre>${
-                      '{{' + variavel.value + '}}'
-                    }</span> - ${variavel.title} <VIcon icon='tabler-copy' size='small' /><br />`
-                  "
-                />
-              </VCol>
-              <VCol cols="12" md="4">
-                <strong>Dados do pedido:</strong><br />
-                <span
-                  v-for="variavel in variaveisItens.filter(
-                    (item) => item.type == 'pedido'
-                  )"
-                  :key="variavel.value"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variavel.value)"
-                  v-html="
-                    `<span class='font-weight-bold text-primary' v-pre>${
-                      '{{' + variavel.value + '}}'
-                    }</span> - ${variavel.title} <VIcon icon='tabler-copy' size='small' /><br />`
-                  "
-                />
-              </VCol>
-              <VCol cols="12" md="4">
-                <strong>Dados de pagamento:</strong><br />
-                <span
-                  v-for="variavel in variaveisItens.filter(
-                    (item) => item.type == 'pagamento'
-                  )"
-                  :key="variavel.value"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variavel.value)"
-                  v-html="
-                    `<span class='font-weight-bold text-primary' v-pre>${
-                      '{{' + variavel.value + '}}'
-                    }</span> - ${variavel.title} <VIcon icon='tabler-copy' size='small' /><br />`
-                  "
-                />
-              </VCol>
-            </VRow>
-            
-            <!-- Variáveis do Fluxo -->
-            <VRow v-if="flowVariables.length > 0" class="mt-4">
-              <VCol cols="12">
-                <strong>Variáveis do Fluxo:</strong><br />
-                <span
-                  v-for="variavel in flowVariables"
-                  :key="variavel.value"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variavel.value)"
-                  v-html="
-                    `<span class='font-weight-bold text-success' v-pre>${
-                      '{{' + variavel.value + '}}'
-                    }</span> - ${variavel.title || variavel.label || variavel.value} <VIcon icon='tabler-copy' size='small' /><br />`
-                  "
-                />
-              </VCol>
-            </VRow>
-          </div>
-        </v-fade-transition>
-      </div>
-
       <!-- Editor Quill -->
       <div class="inputQP">
         <div id="toolbar-message">
@@ -713,6 +580,21 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <!-- Variáveis Disponíveis -->
+    <VariablesSection :flow-variables="props.flowVariables" />
+
+    <!-- Informações -->
+    <BlockInfoSection
+      title="Como funciona"
+      :items="[
+        { icon: 'tabler-message', color: 'primary', text: 'Envia uma mensagem de texto, áudio ou mídia ao cliente' },
+        { icon: 'tabler-template', color: 'info', text: 'Pode usar modelos de mensagem pré-configurados' },
+        { icon: 'tabler-variable', color: 'success', text: 'Suporta variáveis dinâmicas no conteúdo (Ex: {{cliente_nome}})' },
+        { icon: 'tabler-paperclip', color: 'warning', text: 'Permite anexar arquivos, imagens, vídeos e áudios gravados' },
+      ]"
+      hint="Use o seletor de variáveis na barra de ferramentas do editor para inserir variáveis diretamente no texto."
+    />
   </div>
 
   <modeloDialog

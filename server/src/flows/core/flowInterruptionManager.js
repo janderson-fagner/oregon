@@ -387,7 +387,7 @@ async function analyzeIntention(message, currentRun = null) {
  * @param {Object} params - { phone, chatId, text }
  * @returns {Promise<Object>} - Resultado do processamento
  */
-async function processMessageWithInterruption({ phone, chatId, text }) {
+async function processMessageWithInterruption({ phone, chatId, text, empresa_id = null }) {
     flowLog.log('INFO', '=== PROCESSAMENTO DE MENSAGEM COM INTERRUPÇÃO ===', {
         phone,
         chatId,
@@ -397,17 +397,21 @@ async function processMessageWithInterruption({ phone, chatId, text }) {
     try {
         const phoneToSearch = phone.slice(-8);
 
-        // 1️⃣ Buscar execução atual
+        // 1️⃣ Buscar execução atual (somente com nó válido)
         const currentRunQuery = await dbQuery(`
-            SELECT * FROM FlowRuns 
-            WHERE status = 'running' 
-            AND (phone LIKE ? OR chat_id = ?)
-            ORDER BY id DESC
+            SELECT fr.* FROM FlowRuns fr
+            INNER JOIN FlowNodes fn ON fn.id = fr.current_node_id AND fn.empresa_id = fr.empresa_id
+            WHERE fr.status = 'running'
+            AND (fr.phone LIKE ? OR fr.chat_id = ?)
+            ORDER BY fr.id DESC
             LIMIT 1
         `, [`%${phoneToSearch}%`, chatId]);
 
         const currentRun = currentRunQuery && currentRunQuery.length > 0 ? currentRunQuery[0] : null;
-        
+
+        // Resolver empresa_id: parâmetro > run atual > default null
+        const resolvedEmpresaId = empresa_id || (currentRun ? currentRun.empresa_id : null);
+
         // 2️⃣ Verificar palavras-chave globais (PRIMEIRA PRIORIDADE)
         const globalKeyword = await checkGlobalKeywords(text, currentRun);
 
@@ -419,7 +423,7 @@ async function processMessageWithInterruption({ phone, chatId, text }) {
 
             // Verificar se cliente está bloqueado e desbloquear automaticamente
             const { findClienteByPhoneBlocked } = require('../../utils/clienteHelper');
-            const clienteBlockedResult = await findClienteByPhoneBlocked(phoneToSearch, true);
+            const clienteBlockedResult = await findClienteByPhoneBlocked(phoneToSearch, true, resolvedEmpresaId);
             const clienteBlocked = clienteBlockedResult ? [clienteBlockedResult] : [];
 
             if (clienteBlocked && clienteBlocked.length > 0) {
@@ -429,23 +433,52 @@ async function processMessageWithInterruption({ phone, chatId, text }) {
 
                 await dbQuery(`
                     UPDATE CLIENTES
-                    SET flows_blocked = 0,
+                    SET flows_blocked = 0, flows_blocked_at = NULL, flows_blocked_reason = NULL,
                         updated_at = NOW()
                     WHERE cli_Id = ?
                 `, [clienteBlocked[0].cli_Id]);
 
-                // Remover tag de "aguardando atendimento" do WhatsApp
+                // Completar FlowRuns em espera desse cliente
+                await dbQuery(
+                    `UPDATE FlowRuns SET status = 'completed', waiting_for_response = 0, updated_at = NOW()
+                     WHERE cliente_id = ? AND status = 'running' AND waiting_for_response = 1`,
+                    [clienteBlocked[0].cli_Id]
+                );
+
+                // Remover tags de atendimento do WhatsApp
                 if (chatId) {
                     try {
-                        const { removeWaitingForAgentTag } = require('../../zap/chats');
-                        // Determinar clientId baseado na empresa do cliente
+                        const { removeAttendanceTags } = require('../../zap/chats');
                         const clienteEmpresa = clienteBlocked[0].empresa_id || 1;
-                        await removeWaitingForAgentTag(`atendimento_${clienteEmpresa}`, chatId);
+                        await removeAttendanceTags(`atendimento_${clienteEmpresa}`, chatId).catch(() => {});
                     } catch (tagErr) {
-                        console.log('⚠️ Não foi possível remover tag do WhatsApp:', tagErr.message);
+                        console.log('⚠️ Não foi possível remover tags do WhatsApp:', tagErr.message);
                     }
                 }
+
+                // Emitir evento socket
+                try {
+                    const { emitChatStateUpdate } = require('../../utils/chatStateEmitter');
+                    emitChatStateUpdate(clienteBlocked[0].empresa_id || 1, {
+                        chatId: chatId || null,
+                        phone: phoneToSearch || null,
+                        clienteId: clienteBlocked[0].cli_Id,
+                        agent_status: null,
+                        agent_user_id: null,
+                        waiting_for_agent: false,
+                        flows_blocked: false,
+                        phone_blocked: false,
+                        reason: 'global_keyword_unblock'
+                    });
+                } catch (_) {}
             }
+
+            // Também desbloquear por telefone (FlowBlockedPhones)
+            const cleanPhoneGlobal = phoneToSearch.replace(/\D/g, '').slice(-8);
+            await dbQuery(
+                `DELETE FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? OR chat_id = ?`,
+                [cleanPhoneGlobal, chatId || '']
+            );
 
             // Interromper fluxo atual se existir
             if (currentRun) {
@@ -468,18 +501,35 @@ async function processMessageWithInterruption({ phone, chatId, text }) {
             };
         }
 
-        // 3️⃣ Verificar bloqueio permanente
-        const { findClienteByPhoneBlocked } = require('../../utils/clienteHelper');
-        const clienteBlockedResult = await findClienteByPhoneBlocked(phoneToSearch, true);
+        // 3️⃣ Verificar bloqueio permanente (CLIENTES + FlowBlockedPhones)
+        const { findClienteByPhoneBlocked: findBlockedPermanent } = require('../../utils/clienteHelper');
+        const clienteBlockedResult = await findBlockedPermanent(phoneToSearch, true, resolvedEmpresaId);
         const clienteBlocked = clienteBlockedResult ? [clienteBlockedResult] : [];
 
         if (clienteBlocked && clienteBlocked.length > 0) {
             flowLog.log('WARN', 'Cliente com bloqueio permanente', {
                 clienteId: clienteBlocked[0].cli_Id
             });
-            return { 
-                processed: false, 
+            return {
+                processed: false,
                 reason: 'Cliente com bloqueio permanente',
+                shouldContinue: false
+            };
+        }
+
+        // Verificar bloqueio por telefone (contatos sem cadastro)
+        const cleanPhoneCheck = phoneToSearch.replace(/\D/g, '').slice(-8);
+        const phoneBlocked = await dbQuery(
+            `SELECT id FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ? OR chat_id = ? LIMIT 1`,
+            [cleanPhoneCheck, chatId || '']
+        );
+        if (phoneBlocked && phoneBlocked.length > 0) {
+            flowLog.log('WARN', 'Telefone com bloqueio de fluxos (FlowBlockedPhones)', {
+                phone: phoneToSearch, chatId
+            });
+            return {
+                processed: false,
+                reason: 'Telefone com bloqueio de fluxos',
                 shouldContinue: false
             };
         }

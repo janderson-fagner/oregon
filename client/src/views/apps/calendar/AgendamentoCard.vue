@@ -775,9 +775,12 @@ const remarcarAge = async () => {
       "tabler-check",
       3000
     );
+    const oldAgeId = agendamento.value.age_id;
     agendamento.value = { ...agendamento.value, ...res };
     remarcarView.value = false;
-    emit("updateEvents", agendamento.value?.age_id);
+    // Emite addEvents com o novo age_id E updateEvents pro antigo (ficou status 7)
+    emit("addEvents", res.age_id);
+    emit("updateEvents", oldAgeId);
   } catch (error) {
     console.error("Erro ao remarcar agendamento:", error, error.response);
 
@@ -1192,7 +1195,12 @@ const desatenderAgendamento = async () => {
 
     if (!res) return;
 
-    setAlert("Agendamento desatendido com sucesso!", "success", "tabler-check", 3000);
+    setAlert(
+      "Agendamento desatendido com sucesso!",
+      "success",
+      "tabler-check",
+      3000
+    );
     agendamento.value.ast_id = 2;
     agendamento.value.status = "Confirmado";
     agendamento.value.updated_by = userData.fullName;
@@ -1454,8 +1462,8 @@ const getFontes = async () => {
     method: "GET",
   });
 
-  console.log('resFontes:', resFontes);
-  
+  console.log("resFontes:", resFontes);
+
   if (!resFontes) return;
 
   console.log("Fontes:", resFontes);
@@ -1677,21 +1685,47 @@ await getFontes();
               <VCol cols="12" :md="agendamento.age_type != 'bloqueio' ? 6 : 12">
                 <p class="mb-2 font-weight-bold">Dados do Agendamento</p>
 
-                <p class="mb-1">
-                  <VIcon icon="tabler-list" class="mr-2" />
-                  {{
-                    typesAgendamento.find(
-                      (t) => t.value === agendamento.age_type
-                    )?.emoji ?? ""
-                  }}
-                  {{
-                    typesAgendamento.find(
-                      (t) => t.value === agendamento.age_type
-                    )?.title || "Não identificado"
-                  }}
+                <!--Tipo do Agendamento-->
+                <VMenu
+                  offset-y
+                  max-width="300"
+                  min-width="300"
+                  max-height="300"
+                  transition="scale-transition"
+                  rounded="xl"
+                >
+                  <template v-slot:activator="{ props }">
+                    <p class="mb-2 cursor-pointer" v-bind="props">
+                      <VIcon icon="tabler-list" class="mr-2" />
+                      {{
+                        typesAgendamento.find(
+                          (t) => t.value === agendamento.age_type
+                        )?.emoji ?? ""
+                      }}
+                      {{
+                        typesAgendamento.find(
+                          (t) => t.value === agendamento.age_type
+                        )?.title || "Não identificado"
+                      }}
 
-                  <VTooltip activator="parent" text="Tipo do agendamento" />
-                </p>
+                      <VTooltip activator="parent" location="start">
+                        <p class="mb-0 text-sm">Tipo do Agendamento</p>
+                      </VTooltip>
+                    </p>
+                  </template>
+
+                  <VList>
+                    <VListItem
+                      v-for="(tipo, index) in typesAgendamento"
+                      :key="index"
+                      rounded
+                      @click="agendamento.age_type = tipo.value"
+                    >
+                      {{ tipo.emoji ?? "" }}
+                      {{ tipo.title ?? "" }}
+                    </VListItem>
+                  </VList>
+                </VMenu>
 
                 <p class="mb-1">
                   <VIcon icon="tabler-calendar" class="mr-2" />

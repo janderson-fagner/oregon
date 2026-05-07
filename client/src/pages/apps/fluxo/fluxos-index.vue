@@ -210,6 +210,9 @@ const getTriggerLabel = (triggerType) => {
     novo_pagamento: "Novo Pagamento",
     pagamento_efetuado: "Pagamento Efetuado",
     mensagem_whatsapp: "Mensagem WhatsApp",
+    cron_diario: "Executa Diariamente",
+    cron_minuto: "Executa a cada minuto",
+    cron_hora: "Executa a cada hora",
   };
   return triggers[triggerType] || triggerType;
 };

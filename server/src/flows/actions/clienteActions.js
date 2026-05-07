@@ -90,21 +90,21 @@ async function updateCliente(config, context) {
                     
                 case 'update_birth_date':
                     if (processedValue) {
-                        updates.push('cli_dataNascimento = ?');
+                        updates.push('cli_dataNasc = ?');
                         values.push(processedValue);
                     }
                     break;
-                    
+
                 case 'update_gender':
                     if (processedValue) {
                         updates.push('cli_genero = ?');
                         values.push(processedValue);
                     }
                     break;
-                    
+
                 case 'update_notes':
                     if (processedValue) {
-                        updates.push('cli_observacoes = ?');
+                        updates.push('cli_obs = ?');
                         values.push(processedValue);
                     }
                     break;
@@ -167,7 +167,7 @@ async function updateCliente(config, context) {
             values.push(await replaceVariables(config.cpf, context));
         }
         if (config.dataNascimento && !actions.some(a => a.type === 'update_birth_date')) {
-            updates.push('cli_dataNascimento = ?');
+            updates.push('cli_dataNasc = ?');
             values.push(await replaceVariables(config.dataNascimento, context));
         }
         if (config.genero && !actions.some(a => a.type === 'update_gender')) {
@@ -175,7 +175,7 @@ async function updateCliente(config, context) {
             values.push(config.genero);
         }
         if (config.observacoes && !actions.some(a => a.type === 'update_notes')) {
-            updates.push('cli_observacoes = ?');
+            updates.push('cli_obs = ?');
             values.push(await replaceVariables(config.observacoes, context));
         }
 
@@ -419,7 +419,43 @@ async function blockUnblockClientFlows(config, context) {
         const action = config.action || 'block'; // 'block' ou 'unblock'
         const flowsBlocked = action === 'block' ? 1 : 0;
 
-        await dbQuery(`UPDATE CLIENTES SET flows_blocked = ?, updated_at = NOW() WHERE cli_Id = ? AND ${ew.sql}`, [flowsBlocked, clienteId, ...ew.params]);
+        if (action === 'block') {
+            await dbQuery(
+                `UPDATE CLIENTES SET flows_blocked = 1, flows_blocked_at = NOW(), flows_blocked_reason = ?, updated_at = NOW() WHERE cli_Id = ? AND ${ew.sql}`,
+                [config.reason || 'block_flows_block', clienteId, ...ew.params]
+            );
+        } else {
+            // Desbloquear: limpar CLIENTES
+            await dbQuery(
+                `UPDATE CLIENTES SET flows_blocked = 0, flows_blocked_at = NULL, flows_blocked_reason = NULL, updated_at = NOW() WHERE cli_Id = ? AND ${ew.sql}`,
+                [clienteId, ...ew.params]
+            );
+
+            // Limpar FlowBlockedPhones pelo telefone do cliente
+            const phone = context.phone || context.cliente?.cli_celular || '';
+            const phoneClean = phone.replace(/\D/g, '').slice(-8);
+            if (phoneClean) {
+                await dbQuery(
+                    `DELETE FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ?${empresa_id ? ' AND empresa_id = ?' : ''}`,
+                    empresa_id ? [phoneClean, empresa_id] : [phoneClean]
+                ).catch(() => {});
+            }
+            // Limpar por chat_id se disponível
+            const chatId = context.chatId || context.chat_id || '';
+            if (chatId) {
+                await dbQuery(
+                    `DELETE FROM FlowBlockedPhones WHERE chat_id = ?${empresa_id ? ' AND empresa_id = ?' : ''}`,
+                    empresa_id ? [chatId, empresa_id] : [chatId]
+                ).catch(() => {});
+            }
+
+            // Completar FlowRuns em espera desse cliente
+            await dbQuery(
+                `UPDATE FlowRuns SET status = 'completed', waiting_for_response = 0, updated_at = NOW()
+                 WHERE cliente_id = ? AND status = 'running' AND waiting_for_response = 1`,
+                [clienteId]
+            ).catch(() => {});
+        }
 
         // Atualizar contexto
         if (context.cliente) {

@@ -8,7 +8,7 @@
         icon="tabler-briefcase"
         class="mb-4"
       >
-        <VAlertTitle class="mb-1">Atualizar Negócio</VAlertTitle>
+        <span class="text-subtitle-2 font-weight-bold">Atualizar Negócio</span>
         <div class="text-body-2">
           Use este bloco para atualizar informações de um negócio no funil de vendas.
           Configure quais campos deseja atualizar.
@@ -333,114 +333,26 @@
       </VBtn>
     </VCol>
 
-    <!-- Variáveis Disponíveis -->
     <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <div class="d-flex align-center justify-space-between mb-3">
-        <div>
-          <label class="v-label text-body-2 text-high-emphasis d-block">
-            Variáveis Disponíveis
-          </label>
-          <p class="text-caption text-medium-emphasis mb-0">
-            Clique em uma variável para copiá-la
-          </p>
-        </div>
-        <VBtn
-          size="small"
-          color="info"
-          variant="text"
-          prepend-icon="tabler-chevron-down"
-          @click="showVariablesHelp = !showVariablesHelp"
-        >
-          {{ showVariablesHelp ? 'Ocultar' : 'Exibir' }}
-        </VBtn>
-      </div>
+      <VariablesSection :flow-variables="props.flowVariables" />
 
-      <VExpandTransition>
-        <div v-show="showVariablesHelp">
-          <div class="d-flex flex-wrap gap-2">
-            <VChip
-              v-for="variable in variaveisDisponiveis"
-              :key="variable.value"
-              size="small"
-              :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : 'primary'"
-              variant="tonal"
-              class="cursor-pointer"
-              @click="copyVariable(variable.value)"
-            >
-              <VIcon icon="tabler-copy" size="small" class="me-1" />
-              {{ variable.title }}
-            </VChip>
-          </div>
-          
-          <div class="text-caption mt-2">
-            <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-            <span class="text-success">Verde</span> = Dinâmicas | 
-            <span class="text-info">Azul</span> = Sistema | 
-            <span class="text-primary">Primário</span> = Cliente/Negócio
-          </div>
-        </div>
-      </VExpandTransition>
-    </VCol>
-
-    <!-- Informações Importantes -->
-    <VCol cols="12">
-      <VDivider class="my-4" />
-      
-      <VExpansionPanels>
-        <VExpansionPanel>
-          <VExpansionPanelTitle>
-            <div class="d-flex align-center gap-2">
-              <VIcon icon="tabler-info-circle" size="20" color="info" />
-              <span class="text-sm">Informações Importantes</span>
-            </div>
-          </VExpansionPanelTitle>
-          <VExpansionPanelText>
-            <VAlert color="info" variant="tonal" class="mb-3">
-              <div class="text-body-2">
-                <p class="mb-2">
-                  <strong>✅ O que este bloco faz:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>Atualiza informações de um negócio no funil de vendas</li>
-                  <li>Pode mover negócio entre etapas do funil</li>
-                  <li>Permite marcar negócio como ganho ou perdido</li>
-                  <li>Atualiza valor, origem, datas, tags e mais</li>
-                  <li>Vincula negócio a agendamentos</li>
-                </ul>
-                
-                <p class="mb-2">
-                  <strong>⚠️ Importante:</strong>
-                </p>
-                <ul class="mb-2">
-                  <li>Você pode identificar o negócio por ID ou usar o contexto</li>
-                  <li>Campos vazios não serão atualizados</li>
-                  <li>Suporta variáveis dinâmicas do fluxo</li>
-                  <li>Ao marcar como perdido, é obrigatório informar o motivo</li>
-                </ul>
-
-                <p class="mb-2">
-                  <strong>📝 Exemplos de uso:</strong>
-                </p>
-                <ul class="mb-0">
-                  <li><strong>Mover para próxima etapa:</strong> Avançar negócio após confirmação do cliente</li>
-                  <li><strong>Atualizar valor:</strong> Atualizar valor do negócio conforme proposta</li>
-                  <li><strong>Marcar como ganho:</strong> Após fechamento da venda</li>
-                  <li><strong>Vincular agendamento:</strong> Associar negócio a uma visita agendada</li>
-                </ul>
-              </div>
-            </VAlert>
-          </VExpansionPanelText>
-        </VExpansionPanel>
-      </VExpansionPanels>
+      <BlockInfoSection
+        :items="[
+          { icon: 'tabler-briefcase', color: 'info', text: 'Atualiza informações de um negócio no funil de vendas' },
+          { icon: 'tabler-arrows-exchange', color: 'primary', text: 'Pode mover negócio entre etapas do funil' },
+          { icon: 'tabler-variable', color: 'success', text: 'Suporta variáveis dinâmicas em todos os campos' }
+        ]"
+        hint="Campos vazios não serão atualizados. Ao marcar como perdido, é obrigatório informar o motivo."
+      />
     </VCol>
   </VRow>
 </template>
 
 <script setup>
 import { ref, watch, onMounted } from 'vue';
-import { getAllVariables, copyVariableToClipboard } from '@/utils/dynamicVariables';
+import { getAllVariables } from '@/utils/dynamicVariables';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -455,8 +367,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:config']);
-
-const { setAlert } = useAlert();
 
 const localConfig = ref({
   identificationType: props.config.identificationType || 'context',
@@ -497,7 +407,6 @@ const variaveisDisponiveis = ref([]);
 const etapas = ref([]);
 const tags = ref([]);
 const loadingEtapas = ref(false);
-const showVariablesHelp = ref(false);
 
 // Adicionar nova ação
 const addAction = () => {
@@ -523,11 +432,6 @@ const needsTextField = (type) => {
 // Verificar se ação precisa de campo de data
 const needsDateField = (type) => {
   return type === 'update_data_fechamento_esperada';
-};
-
-// Copiar variável
-const copyVariable = (value) => {
-  copyVariableToClipboard(value, setAlert);
 };
 
 // Inserir variável no input

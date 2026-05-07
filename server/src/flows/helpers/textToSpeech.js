@@ -295,6 +295,60 @@ const NATURAL_VOICE_SETTINGS = {
 };
 
 /**
+ * Converte instrução de voz em português para audio tag do ElevenLabs v3
+ * Audio tags devem ser em inglês, curtas e descritivas
+ * @param {String} instrucao - Instrução em português do banco
+ * @returns {String} - Audio tag formatada para ElevenLabs v3
+ */
+function buildAudioTagFromInstrucao(instrucao) {
+    if (!instrucao) {
+        return '[Santa Catarina Southern Brazilian Portuguese accent, natural warm female voice, moderate pace]';
+    }
+
+    const lower = instrucao.toLowerCase();
+    const tags = [];
+
+    // Detectar sotaque regional
+    if (lower.includes('florianópolis') || lower.includes('floripa') || lower.includes('sul') || lower.includes('catarinense') || lower.includes('santa catarina')) {
+        tags.push('Santa Catarina Southern Brazilian Portuguese accent');
+    } else if (lower.includes('paulista') || lower.includes('são paulo')) {
+        tags.push('São Paulo Brazilian Portuguese accent');
+    } else if (lower.includes('carioca') || lower.includes('rio de janeiro')) {
+        tags.push('Rio de Janeiro Brazilian Portuguese accent');
+    } else if (lower.includes('mineiro') || lower.includes('minas')) {
+        tags.push('Minas Gerais Brazilian Portuguese accent');
+    } else if (lower.includes('nordest') || lower.includes('baiano') || lower.includes('recife')) {
+        tags.push('Northeastern Brazilian Portuguese accent');
+    } else {
+        tags.push('Santa Catarina Southern Brazilian Portuguese accent');
+    }
+
+    // Detectar velocidade (checar padrões compostos ANTES dos simples)
+    if (lower.includes('nem muito rápida nem muito devagar') || lower.includes('nem muito rapida nem muito devagar') || lower.includes('moderada') || lower.includes('velocidade média')) {
+        tags.push('moderate pace');
+    } else if (lower.includes('rápid') || lower.includes('rapida')) {
+        tags.push('fast pace');
+    } else if (lower.includes('devagar') || lower.includes('lent')) {
+        tags.push('slow pace');
+    } else {
+        tags.push('moderate pace');
+    }
+
+    // Detectar estilo
+    if (lower.includes('human') || lower.includes('natural')) {
+        tags.push('natural warm voice');
+    }
+    if (lower.includes('simpátic') || lower.includes('amigável') || lower.includes('friendly')) {
+        tags.push('friendly');
+    }
+    if (lower.includes('profissional')) {
+        tags.push('professional');
+    }
+
+    return `[${tags.join(', ')}]`;
+}
+
+/**
  * Detecta o tom ideal para a mensagem
  */
 function detectMessageTone(text) {
@@ -366,10 +420,32 @@ async function generateElevenLabsTTS(text, voiceId, apiKey, options = {}) {
         
         console.log(`   ✅ Settings finais: stability=${finalSettings.stability}, similarity=${finalSettings.similarity_boost}, style=${finalSettings.style}`);
         
+        // Buscar instrução de voz customizada do banco (ex: sotaque, estilo de fala)
+        const instrucaoVoz = options.instrucaoVoz || '';
+
+        // Montar texto com audio tag de sotaque para eleven_v3
+        // Audio tags controlam o sotaque e estilo de fala por request
+        // IMPORTANTE: audio tags devem ser em inglês e curtas para o ElevenLabs entender
+        let finalText = text;
+        if (modelId === 'eleven_v3') {
+            // Construir audio tag baseada na instrução do banco
+            const audioTag = buildAudioTagFromInstrucao(instrucaoVoz);
+            finalText = `${audioTag} ${text}`;
+            console.log(`   🗣️ Audio tag: ${audioTag}`);
+        }
+
+        // Remover use_speaker_boost para eleven_v3 (não suportado)
+        const settingsForApi = { ...finalSettings };
+        if (modelId === 'eleven_v3') {
+            delete settingsForApi.use_speaker_boost;
+        }
+
         const postData = JSON.stringify({
-            text: text,
+            text: finalText,
             model_id: modelId,
-            voice_settings: finalSettings,
+            voice_settings: settingsForApi,
+            // Forçar idioma português para consistência de sotaque
+            language_code: 'pt',
             // Normalização automática de datas, horários e valores para PT-BR
             apply_text_normalization: 'on'
         });
@@ -439,83 +515,6 @@ async function saveAudioFile(audioBuffer, filename, extension = 'mp3') {
 }
 
 /**
- * 🤖 VALIDAÇÃO E MELHORIA DE TEXTO PARA TTS COM GEMINI FLASH
- *
- * Usa gemini-2.5-flash para:
- * 1. Remover qualquer resumo, instrução interna ou nota de sistema
- * 2. Manter SOMENTE a mensagem conversacional para o cliente
- * 3. Inserir audio tags do ElevenLabs v3 para naturalidade
- * 4. Adaptar o texto para fala natural (contrações, ritmo, entonação)
- *
- * @param {String} text - Texto bruto da resposta do Gemini principal
- * @returns {Promise<String>} - Texto validado e otimizado para TTS
- */
-async function validateTextForTTS(text, empresa_id) {
-    if (!text || text.trim().length < 5) return text;
-
-    try {
-        // Buscar API key do Gemini filtrado por empresa
-        const rows = await dbQuery(`SELECT value FROM Options WHERE type = 'gemini_key' AND empresa_id = ? LIMIT 1`, [parseInt(empresa_id)]);
-        const apiKey = rows && rows.length > 0 ? (parseJSON(rows[0].value) || rows[0].value) : null;
-
-        if (!apiKey) {
-            console.warn('⚠️ validateTextForTTS: API Key do Gemini não encontrada, pulando validação');
-            return text;
-        }
-
-        const genAI = new GoogleGenAI({ apiKey });
-
-        const prompt = `Você é um processador de texto para Text-to-Speech (TTS) via ElevenLabs v3.
-
-ENTRADA (texto bruto de uma IA de atendimento):
-"${text.replace(/"/g, '\\"')}"
-
-REGRAS OBRIGATÓRIAS:
-1. REMOVA completamente qualquer conteúdo que NÃO seja a mensagem direta ao cliente:
-   - Resumos ("Resumo:", "### Resumo")
-   - Notas internas ("Nota:", "Ação do Sistema", "Encaminhando")
-   - Instruções de sistema, análises, headers markdown (###, ##)
-   - Qualquer texto que comece com "Cliente solicitando", "Cliente quer", etc
-2. MANTENHA apenas a fala conversacional dirigida ao cliente
-3. Insira audio tags do ElevenLabs v3 onde for NATURAL (máximo 2-3 por mensagem):
-   - [warmly] para saudações e acolhimento
-   - [cheerfully] para confirmações positivas e boas notícias
-   - [reassuringly] para tranquilizar sobre processos
-   - [softly] para despedidas
-   - [excitedly] para ofertas e novidades
-4. Adapte para fala natural:
-   - Datas por extenso: "15/03" → "quinze de março"
-   - Horários por extenso: "14:30" → "duas e meia da tarde"
-   - Valores por extenso: "R$ 150" → "cento e cinquenta reais"
-   - Use contrações naturais do português falado
-   - Pontuação para ritmo: vírgulas para pausas curtas, reticências para pausas longas
-5. Seja CONCISO: máximo 3-4 frases
-6. SEM emojis, SEM formatação markdown (*negrito*, _itálico_), SEM listas com bullets
-
-RESPONDA APENAS com o texto processado, sem explicações.`;
-
-        const response = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
-
-        const validated = response?.text?.trim();
-
-        if (validated && validated.length > 3) {
-            console.log('✅ Texto validado pelo Gemini Flash para TTS');
-            console.log('   Original:', text.substring(0, 80) + '...');
-            console.log('   Validado:', validated.substring(0, 80) + '...');
-            return validated;
-        }
-
-        return text;
-    } catch (error) {
-        console.error('⚠️ Erro na validação TTS com Gemini Flash:', error.message);
-        return text; // Fallback: usa texto original
-    }
-}
-
-/**
  * 🧹 LIMPEZA INTELIGENTE DE TEXTO PARA TTS
  *
  * Prepara o texto para síntese de voz natural:
@@ -528,20 +527,18 @@ function cleanTextForTTS(text) {
     if (!text) return '';
 
     // SANITIZAÇÃO ROBUSTA DE UNICODE
-    // Converter para buffer e voltar para garantir UTF-8 válido
-    let sanitized = '';
-    try {
-        // Método 1: Usar Buffer para sanitizar
-        const buffer = Buffer.from(text, 'utf8');
-        sanitized = buffer.toString('utf8');
-    } catch (e) {
-        sanitized = text;
-    }
+    // Remover unpaired surrogates e caracteres problemáticos para ElevenLabs
+    let sanitized = text
+        // Remover unpaired surrogates (causa "invalid Unicode" no ElevenLabs)
+        .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+        .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+        // Remover todos os emojis compostos com ZWJ que podem conter surrogates
+        .replace(/(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u200D(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F))*/gu, '');
 
     // ═══════════════════════════════════════════════════════════════════
     // 🎭 PRESERVAR TAGS DE EMOÇÃO PARA ELEVENLABS v3
     // ═══════════════════════════════════════════════════════════════════
-    const emotionTagPattern = /\[(warmly|cheerfully|reassuringly|whispers|giggles|laughs|sighs|sadly|excitedly|nervously|calmly|seriously|playfully|thoughtfully|urgently|gently|firmly|softly|loudly|slowly|quickly)\]/gi;
+    const emotionTagPattern = /\[(warmly|cheerfully|reassuringly|whispers|giggles|laughs|laughs harder|starts laughing|sighs|sadly|excitedly|nervously|calmly|seriously|playfully|thoughtfully|urgently|gently|firmly|softly|loudly|slowly|quickly|curious|sarcastic|mischievously|crying)\]/gi;
     const emotionTags = [];
     let tagMatch;
     let tagIndex = 0;
@@ -581,7 +578,12 @@ function cleanTextForTTS(text) {
         .replace(/[•·]/g, '-');
     
     let cleaned = sanitized
+        // Remover blockquotes markdown (> no início de linhas)
+        .replace(/^>\s?/gm, '')
+        // Remover timestamps no início de linhas (00:00, 00:01, 12:30, etc)
+        .replace(/^\d{1,2}:\d{2}\s*/gm, '')
         // Remover formatação WhatsApp
+        .replace(/\*\*([^*]+)\*\*/g, '$1') // **duplo negrito**
         .replace(/\*([^*]+)\*/g, '$1')    // *negrito*
         .replace(/_([^_]+)_/g, '$1')      // _itálico_
         .replace(/~([^~]+)~/g, '$1')      // ~riscado~
@@ -657,6 +659,22 @@ function cleanTextForTTS(text) {
 }
 
 /**
+ * Remove audio tags do ElevenLabs de um texto.
+ * Usado no fallback quando o TTS falha e a mensagem precisa ser enviada como texto puro.
+ * Ex: "[warmly] Oi Amanda!" → "Oi Amanda!"
+ */
+function stripAudioTags(text) {
+    if (!text) return text;
+    return text
+        // Tags de emoção do ElevenLabs
+        .replace(/\[(warmly|cheerfully|reassuringly|whispers|giggles|laughs|laughs harder|starts laughing|sighs|sadly|excitedly|nervously|calmly|seriously|playfully|thoughtfully|urgently|gently|firmly|softly|loudly|slowly|quickly|curious|sarcastic|mischievously|crying)\]\s*/gi, '')
+        // Tags genéricas entre colchetes que a IA pode gerar (ex: [audio enviado], [áudio], etc)
+        .replace(/\[(?:audio|áudio)\s*[^\]]*\]\s*/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+/**
  * 🎤 FUNÇÃO PRINCIPAL DE TTS
  * Converte texto em áudio natural usando ElevenLabs
  */
@@ -686,11 +704,8 @@ async function textToSpeech(text, options = {}, empresa_id) {
             return { success: false, error: 'API Key do ElevenLabs não configurada' };
         }
         
-        // Limpar texto
-        // Validar e melhorar texto com Gemini Flash antes da limpeza
-        const validatedText = await validateTextForTTS(text, empresa_id);
-
-        const cleanText = cleanTextForTTS(validatedText);
+        // Limpar texto (sem chamada extra ao Gemini - o prompt principal já formata para áudio)
+        const cleanText = cleanTextForTTS(text);
 
         if (!cleanText || cleanText.length < 3) {
             console.log('⚠️ Texto muito curto ou vazio');
@@ -721,6 +736,12 @@ async function textToSpeech(text, options = {}, empresa_id) {
 
         console.log(`🎤 Voz: ${voiceId} (fonte: ${voiceSource})`);
         
+        // Passar instrução de voz do banco para o gerador de áudio
+        // A instrucaoVoz define sotaque e estilo de fala (ex: "sotaque de Florianópolis")
+        if (config.audio.instrucaoVoz && !options.instrucaoVoz) {
+            options.instrucaoVoz = config.audio.instrucaoVoz;
+        }
+
         // Gerar áudio
         const audioBuffer = await generateElevenLabsTTS(cleanText, voiceId, config.apiKey, options);
         
@@ -865,6 +886,7 @@ module.exports = {
     textToSpeech,
     shouldUseTTS,
     cleanTextForTTS,
+    stripAudioTags,
     formatTextForSpeech,
     numberToWords,
     valorPorExtenso,

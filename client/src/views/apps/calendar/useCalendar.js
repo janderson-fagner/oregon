@@ -350,16 +350,22 @@ export const useCalendar = (event, isEventHandlerSidebarActive, isLeftSidebarOpe
   }
 
   // 👉 Add event
-  const addEvent = async _event => {
+  const addEvent = async (_event, openSidebar = true) => {
     refetchEvents()
-    event.value = await extractEventDataFromEventApi2(_event)
-    isEventHandlerSidebarActive.value = true
+    if (openSidebar) {
+      event.value = await extractEventDataFromEventApi2(_event)
+      isEventHandlerSidebarActive.value = true
+    }
   }
 
 
-  // 👉 Update event
+  // 👉 Update event - sempre força refetch para garantir dados frescos
   const updateEvent = async eventId => {
-    await updateEventInCalendar(eventId)
+    try {
+      await updateEventInCalendar(eventId)
+    } catch (e) {
+      // Evento pode não existir no cache do FullCalendar, não é erro
+    }
     refetchEvents()
   }
 
@@ -486,7 +492,7 @@ export const useCalendar = (event, isEventHandlerSidebarActive, isLeftSidebarOpe
 
     socket.on("addEvent", (data) => {
       console.log('Evento adicionado:', data)
-      addEvent(data)
+      addEvent(data, false)
     })
 
     socket.on("removeEvent", (data) => {

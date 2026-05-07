@@ -294,6 +294,10 @@ const checkAssinaturasOverdue = async () => {
 const initCronJobs = () => {
   console.log('Iniciando cron jobs');
 
+  if(process.env.NODE_ENV === 'dev'){
+    return;
+  }
+
   // Cron único para processar lembretes a cada minuto
   cron.schedule('* * * * *', processLembretes);
 

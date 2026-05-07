@@ -18,38 +18,10 @@ export const loadVariaveisFromAPI = async () => {
     }
 
     console.log('Variáveis:', response);
-    
-    const data = response;
-    
-    // Adicionar variáveis do sistema
-    const variaveisSistema = [
-      { 
-        title: "Data Atual", 
-        value: "data_atual", 
-        type: 'sistema', 
-        desc: "Data atual do sistema" 
-      },
-      { 
-        title: "Hora Atual", 
-        value: "hora_atual", 
-        type: 'sistema', 
-        desc: "Hora atual do sistema" 
-      },
-      { 
-        title: "Dia da Semana", 
-        value: "dia_semana", 
-        type: 'sistema', 
-        desc: "Dia da semana atual" 
-      },
-      { 
-        title: "Mês Atual", 
-        value: "mes_atual", 
-        type: 'sistema', 
-        desc: "Mês atual" 
-      }
-    ];
 
-    variaveisCache.value = [...data, ...variaveisSistema];
+    const data = response;
+
+    variaveisCache.value = data;
     return variaveisCache.value;
   } catch (error) {
     console.error('Erro ao carregar variáveis:', error, error.response);
@@ -209,11 +181,167 @@ const getVariaveisPadrao = () => [
     type: 'sistema', 
     desc: "Dia da semana atual" 
   },
-  { 
-    title: "Mês Atual", 
-    value: "mes_atual", 
-    type: 'sistema', 
-    desc: "Mês atual" 
+  {
+    title: "Mês Atual",
+    value: "mes_atual",
+    type: 'sistema',
+    desc: "Mês atual"
+  },
+  {
+    title: "Ano Atual",
+    value: "ano_atual",
+    type: 'sistema',
+    desc: "Ano atual"
+  },
+
+  // Variáveis adicionais de Cliente (missing from original fallback)
+  {
+    title: "Telefone do Cliente",
+    value: "cliente_telefone",
+    type: 'cliente',
+    desc: "Telefone do cliente"
+  },
+  {
+    title: "CPF do Cliente",
+    value: "cliente_cpf",
+    type: 'cliente',
+    desc: "CPF do cliente"
+  },
+  {
+    title: "Data de Nascimento",
+    value: "cliente_data_nascimento",
+    type: 'cliente',
+    desc: "Data de nascimento do cliente"
+  },
+  {
+    title: "Endereço do Cliente",
+    value: "cliente_endereco",
+    type: 'cliente',
+    desc: "Endereço completo do cliente"
+  },
+  {
+    title: "Tags do Cliente",
+    value: "cliente_tags",
+    type: 'cliente',
+    desc: "Tags do cliente separadas por vírgula"
+  },
+  {
+    title: "ID do Cliente",
+    value: "cliente_id",
+    type: 'cliente',
+    desc: "ID único do cliente no sistema"
+  },
+  {
+    title: "Último Agendamento Concluído",
+    value: "cliente_ultimo_agendamento_concluido",
+    type: 'cliente',
+    desc: "Data do último agendamento concluído do cliente"
+  },
+  {
+    title: "Último Agendamento Cancelado",
+    value: "cliente_ultimo_agendamento_cancelado",
+    type: 'cliente',
+    desc: "Data do último agendamento cancelado do cliente"
+  },
+  {
+    title: "Último Agendamento",
+    value: "cliente_ultimo_agendamento",
+    type: 'cliente',
+    desc: "Data do último agendamento do cliente"
+  },
+  {
+    title: "Agendamentos Concluídos",
+    value: "cliente_qtd_agendamentos_concluidos",
+    type: 'cliente',
+    desc: "Número total de agendamentos concluídos do cliente"
+  },
+  {
+    title: "Agendamentos Cancelados",
+    value: "cliente_qtd_agendamentos_cancelados",
+    type: 'cliente',
+    desc: "Número total de agendamentos cancelados do cliente"
+  },
+
+  // Variáveis adicionais de Agendamento
+  {
+    title: "ID do Agendamento",
+    value: "agendamento_id",
+    type: 'agendamento',
+    desc: "ID do agendamento"
+  },
+  {
+    title: "Hora Início do Agendamento",
+    value: "agendamento_hora_inicio",
+    type: 'agendamento',
+    desc: "Hora de início do agendamento"
+  },
+  {
+    title: "Hora Fim do Agendamento",
+    value: "agendamento_hora_fim",
+    type: 'agendamento',
+    desc: "Hora de término do agendamento"
+  },
+  {
+    title: "Data Final do Agendamento",
+    value: "agendamento_data_final",
+    type: 'agendamento',
+    desc: "Data do término do agendamento"
+  },
+  {
+    title: "Hora Final do Agendamento",
+    value: "agendamento_hora_final",
+    type: 'agendamento',
+    desc: "Hora do término do agendamento"
+  },
+  {
+    title: "Serviço do Agendamento",
+    value: "agendamento_servico",
+    type: 'agendamento',
+    desc: "Serviços do agendamento separados por vírgula"
+  },
+  {
+    title: "Endereço do Agendamento",
+    value: "agendamento_endereco",
+    type: 'agendamento',
+    desc: "Endereço completo do agendamento"
+  },
+
+  // Variáveis de Negócio (CRM)
+  {
+    title: "ID do Negócio",
+    value: "negocio_id",
+    type: 'negocio',
+    desc: "ID do negócio no CRM"
+  },
+  {
+    title: "Título do Negócio",
+    value: "negocio_titulo",
+    type: 'negocio',
+    desc: "Título do negócio"
+  },
+  {
+    title: "Valor do Negócio",
+    value: "negocio_valor",
+    type: 'negocio',
+    desc: "Valor do negócio"
+  },
+  {
+    title: "Status do Negócio",
+    value: "negocio_status",
+    type: 'negocio',
+    desc: "Status atual do negócio"
+  },
+  {
+    title: "Origem do Negócio",
+    value: "negocio_origem",
+    type: 'negocio',
+    desc: "Origem/canal do negócio"
+  },
+  {
+    title: "Etapa do Funil",
+    value: "negocio_etapa_nome",
+    type: 'negocio',
+    desc: "Nome da etapa atual no funil"
   }
 ];
 

@@ -72,6 +72,15 @@ const selectedDay = ref(new Date().getDate());
 const handleUpdateEvent = (event) => {
   console.log("Evento atualizado, emitindo evento para o servidor", event);
   socket.emit("updateEvent", event);
+  // Força refetch local imediato para quem fez a ação
+  refetchEvents();
+};
+
+const handleAddEvent = (eventId) => {
+  console.log("Evento adicionado, emitindo evento para o servidor", eventId);
+  socket.emit("addEvent", eventId);
+  // Força refetch local imediato
+  refetchEvents();
 };
 
 const funcionarios = ref([]);
@@ -705,12 +714,12 @@ const handleViewChange = async (view) => {
     @update:isDrawerOpen="isEventHandlerSidebarActive = $event"
     :agendamentoData="event"
     @updateEvents="handleUpdateEvent"
-    @addEvents="addEvent"
+    @addEvents="handleAddEvent"
     @removeEvents="removeEvent"
   />
 
   <NewAgendamento
-    @newEvent="addEvent"
+    @newEvent="(e) => { addEvent(e); socket.emit('addEvent', e); }"
     :isDrawerOpen="openNewEvent"
     @update:isDrawerOpen="openNewEvent = $event"
     v-if="can('create', 'agendamento')"

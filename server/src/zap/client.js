@@ -5,6 +5,7 @@
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const path = require('path');
+const { execSync } = require('child_process');
 const dbQuery = require('../utils/dbHelper');
 const { emitToEmpresa } = require('../socket');
 
@@ -82,18 +83,45 @@ async function updateClientStatus(clientId, status, additionalData = {}) {
 }
 
 /**
+ * Mata processos Chrome órfãos que estejam usando o userDataDir de uma sessão
+ * Isso acontece quando o PM2 reinicia ou o processo crasha sem limpar o Chrome
+ * @param {string} clientId - ID do client
+ */
+function killOrphanChrome(clientId) {
+    const sessionDir = path.join(SESSION_PATH, `session-${clientId}`);
+    try {
+        // Busca PIDs de processos chrome usando esse userDataDir
+        const pids = execSync(
+            `ps aux | grep '[c]hrome.*${sessionDir}' | awk '{print $2}'`,
+            { encoding: 'utf-8', timeout: 5000 }
+        ).trim();
+
+        if (pids) {
+            const pidList = pids.split('\n').filter(Boolean);
+            console.log(`🔪 Matando ${pidList.length} processo(s) Chrome órfão(s) para ${clientId}: [${pidList.join(', ')}]`);
+            execSync(`kill -9 ${pidList.join(' ')}`, { timeout: 5000 });
+        }
+    } catch (e) {
+        // Sem processos encontrados ou erro ao matar - segue normalmente
+    }
+}
+
+/**
  * Inicializa um client do WhatsApp
  * @param {string} clientId - ID único do client
  * @returns {Promise<Object>} Client inicializado
  */
 async function initClient(clientId) {
-    try {
-        // Verifica se já está inicializando
-        if (clientsInitializing.get(clientId)) {
-            console.log(`⚠️ Client ${clientId} já está sendo inicializado...`);
-            return { success: false, message: 'Client já está sendo inicializado' };
-        }
+    // Guard de concorrencia ANTES de qualquer await - evita race onde 2 chamadas
+    // simultaneas (auto-init + rota /connect, p.ex.) passam pelo check ao mesmo tempo
+    if (clientsInitializing.get(clientId)) {
+        console.log(`⚠️ Client ${clientId} já está sendo inicializado (race detectado, ignorando segunda chamada)`);
+        return { success: false, message: 'Client já está sendo inicializado' };
+    }
+    clientsInitializing.set(clientId, true);
+    console.log(`🔒 [initClient] Guard ativado para ${clientId}`);
 
+    try {
         // Verifica se já existe e está funcional
         if (clients.has(clientId)) {
             const existingClient = clients.get(clientId);
@@ -101,6 +129,7 @@ async function initClient(clientId) {
                 const state = await existingClient.getState();
                 if (state === 'CONNECTED') {
                     console.log(`⚠️ Client ${clientId} já está inicializado e conectado`);
+                    clientsInitializing.delete(clientId);
                     return { success: false, message: 'Client já está inicializado e conectado' };
                 }
                 // Client existe mas não está conectado - destruir e reconectar
@@ -115,7 +144,8 @@ async function initClient(clientId) {
             }
         }
 
-        clientsInitializing.set(clientId, true);
+        // Mata processos Chrome órfãos antes de inicializar (ex: após crash ou restart do PM2)
+        killOrphanChrome(clientId);
 
         // Verifica se o client existe no banco
         let clientData = await dbQuery('SELECT * FROM Clients WHERE id = ?', [clientId]);
@@ -172,6 +202,17 @@ async function initClient(clientId) {
                 }
             } catch (error) {
                 console.log('Não foi possível obter informações do número');
+            }
+
+            // Popular datas de última mensagem dos clientes (60s após conectar)
+            if (clientId.startsWith('atendimento_')) {
+                setTimeout(() => {
+                    console.log(`🔄 [${clientId}] Iniciando população de última mensagem dos clientes...`);
+                    const { popularUltimaMsgClientes } = require('./chats');
+                    popularUltimaMsgClientes(clientId, empresaId)
+                        .then(resultado => console.log(`✅ [${clientId}] População concluída:`, resultado))
+                        .catch(err => console.error(`⚠️ [${clientId}] Erro na população de última mensagem:`, err.message));
+                }, 60000);
             }
         });
 

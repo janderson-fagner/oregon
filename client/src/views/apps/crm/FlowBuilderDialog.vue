@@ -80,6 +80,7 @@ const flow = ref({
   status: "ativo",
   trigger_type: null,
   webhook_key: "",
+  cron_time: null,
   trigger_conditions: [],
   priority: 50,
   interruptible: true,
@@ -835,7 +836,49 @@ const funis = ref([]);
 const fontesClientes = ref([]);
 const searchQuery = ref("");
 
-const operatorItens = [
+// Operadores de data para gatilhos
+const triggerDateOperators = [
+  { title: "📅 É hoje", value: "is_today" },
+  { title: "📅 É amanhã", value: "is_tomorrow" },
+  { title: "📅 Foi ontem", value: "is_yesterday" },
+  { title: '─── Períodos futuros ───', value: '_sep_future', disabled: true },
+  { title: "📅 Nos próximos X dias", value: "within_days" },
+  { title: "📅 Nos próximos X meses", value: "within_months" },
+  { title: "📅 É nesta semana", value: "is_this_week" },
+  { title: "📅 É na próxima semana", value: "is_next_week" },
+  { title: "📅 É neste mês", value: "is_this_month" },
+  { title: "📅 É no próximo mês", value: "is_next_month" },
+  { title: "📅 É neste ano", value: "is_this_year" },
+  { title: "📅 Daqui a exatamente X dias", value: "exactly_days_from_now" },
+  { title: "📅 Daqui a exatamente X meses", value: "exactly_months_from_now" },
+  { title: "📅 Daqui a exatamente X anos", value: "exactly_years_from_now" },
+  { title: "📅 É data futura", value: "is_future_date" },
+  { title: '─── Períodos passados ───', value: '_sep_past', disabled: true },
+  { title: "📅 Nos últimos X dias", value: "within_past_days" },
+  { title: "📅 Nos últimos X meses", value: "within_past_months" },
+  { title: "📅 Há exatamente X dias", value: "exactly_days_ago" },
+  { title: "📅 Há exatamente X meses", value: "exactly_months_ago" },
+  { title: "📅 Há exatamente X anos", value: "exactly_years_ago" },
+  { title: "📅 Foi na semana passada", value: "is_last_week" },
+  { title: "📅 Foi no mês passado", value: "is_last_month" },
+  { title: "📅 Foi no ano passado", value: "is_last_year" },
+  { title: "📅 É data passada", value: "is_past_date" },
+  { title: '─── Horas ───', value: '_sep_hours', disabled: true },
+  { title: "🕐 Nas próximas X horas", value: "within_hours" },
+  { title: "🕐 Nas últimas X horas", value: "within_past_hours" },
+  { title: "🕐 Há exatamente X horas", value: "exactly_hours_ago" },
+  { title: "🕐 Daqui a exatamente X horas", value: "exactly_hours_from_now" },
+  { title: '─── A mais de (tempo passado) ───', value: '_sep_morethan', disabled: true },
+  { title: "🕐 A mais de X horas atrás", value: "more_than_hours_ago" },
+  { title: "📅 A mais de X dias atrás", value: "more_than_days_ago" },
+  { title: "📅 A mais de X meses atrás", value: "more_than_months_ago" },
+  { title: '─── Comparação de data ───', value: '_sep_compare', disabled: true },
+  { title: "📅 Antes da data", value: "date_before" },
+  { title: "📅 Depois da data", value: "date_after" },
+];
+
+// Operadores genéricos para gatilhos
+const genericOperatorItens = [
   { title: "Igual a", value: "eq" },
   { title: "Diferente de", value: "neq" },
   { title: "Contém", value: "contains" },
@@ -848,6 +891,56 @@ const operatorItens = [
   { title: "Não está vazio", value: "not_empty" },
   { title: "Regex", value: "regex" },
 ];
+
+// Operadores que não precisam de valor
+const triggerNoValueOperators = [
+  'is_today', 'is_tomorrow', 'is_yesterday',
+  'is_this_week', 'is_last_week', 'is_next_week',
+  'is_this_month', 'is_last_month', 'is_next_month',
+  'is_this_year', 'is_last_year',
+  'is_future_date', 'is_past_date',
+  'empty', 'not_empty'
+];
+
+const triggerNumericDateOps = [
+  'within_days', 'within_past_days', 'within_months', 'within_past_months',
+  'exactly_days_ago', 'exactly_months_ago', 'exactly_years_ago',
+  'exactly_days_from_now', 'exactly_months_from_now', 'exactly_years_from_now',
+  'within_hours', 'within_past_hours', 'exactly_hours_ago', 'exactly_hours_from_now',
+  'more_than_hours_ago', 'more_than_days_ago', 'more_than_months_ago'
+];
+const triggerDateValueOps = ['date_before', 'date_after'];
+
+const getTriggerOperators = (condition) => {
+  const field = condition?.field || '';
+  const isDateField = field.includes('data') || field.includes('cadastro') || field.includes('agendamento_data') || field.includes('ultimo_agendamento');
+  if (isDateField) {
+    return [...triggerDateOperators, { title: '─── Outros ───', value: '_sep_generic', disabled: true }, ...genericOperatorItens];
+  }
+  return genericOperatorItens;
+};
+
+const getTriggerValuePlaceholder = (operator) => {
+  if (triggerNumericDateOps.includes(operator)) return 'Quantidade';
+  if (triggerDateValueOps.includes(operator)) return 'Selecione a data';
+  return 'Insira o valor';
+};
+
+const getTriggerValueLabel = (operator) => {
+  if (['within_hours', 'within_past_hours', 'exactly_hours_ago', 'exactly_hours_from_now', 'more_than_hours_ago'].includes(operator)) return 'Horas';
+  if (['within_days', 'within_past_days', 'exactly_days_ago', 'exactly_days_from_now', 'more_than_days_ago'].includes(operator)) return 'Dias';
+  if (['within_months', 'within_past_months', 'exactly_months_ago', 'exactly_months_from_now', 'more_than_months_ago'].includes(operator)) return 'Meses';
+  if (['exactly_years_ago', 'exactly_years_from_now'].includes(operator)) return 'Anos';
+  if (triggerDateValueOps.includes(operator)) return 'Data';
+  return 'Valor';
+};
+
+const getTriggerValueInputType = (operator, field) => {
+  if (triggerNumericDateOps.includes(operator)) return 'number';
+  if (triggerDateValueOps.includes(operator)) return 'date';
+  if (field?.includes('data')) return 'date';
+  return 'text';
+};
 
 const addTriggerCondition = () => {
   const newCondition = {
@@ -1281,6 +1374,9 @@ const loadConditionalData = async () => {
     { title: "Última Mensagem do Cliente", value: "ultima_mensagem_cliente" },
     { title: "Última Mensagem do Sistema", value: "ultima_mensagem_sistema" },
     { title: "Contagem de Mensagens", value: "contagem_mensagens" },
+    { title: "Data Última Mensagem", value: "cliente_ultima_msg_data" },
+    { title: "Data Última Msg do Cliente", value: "cliente_ultima_msg_cliente_data" },
+    { title: "Data Última Msg do Sistema", value: "cliente_ultima_msg_sistema_data" },
 
     // Campos de segmentação
     { title: "Tags", value: "tags" },
@@ -1349,6 +1445,7 @@ const limparFlow = () => {
     status: "ativo",
     trigger_type: null,
     webhook_key: "",
+    cron_time: null,
     trigger_conditions: [],
     priority: 50,
     interruptible: true,
@@ -1412,6 +1509,19 @@ const save = async () => {
       body.trigger_conditions.forEach((condition) => {
         delete condition.itensValueSelect;
       });
+    }
+
+    // Validação de triggers cron
+    if (['cron_minuto', 'cron_diario', 'cron_hora'].includes(body.trigger_type)) {
+      if (!Array.isArray(body.trigger_conditions) || body.trigger_conditions.length === 0) {
+        setAlert('Triggers do tipo Cron requerem pelo menos 1 condição configurada.', 'error', 'tabler-alert-triangle', 5000);
+        loading.value = false;
+        return;
+      }
+      // Default cron_time para cron_diario
+      if (body.trigger_type === 'cron_diario' && !body.cron_time) {
+        body.cron_time = '08:00';
+      }
     }
 
     // 🛡️ Tratar configurações avançadas antes de salvar
@@ -2018,6 +2128,18 @@ const getAllVariables = () => {
                           value: 'mensagem_whatsapp',
                           title: 'Mensagem WhatsApp',
                         },
+                        {
+                          value: 'cron_minuto',
+                          title: 'Executar a cada minuto',
+                        },
+                        {
+                          value: 'cron_hora',
+                          title: 'Executar a cada hora',
+                        },
+                        {
+                          value: 'cron_diario',
+                          title: 'Executar diariamente',
+                        },
                       ]"
                       label="Trigger Principal"
                       placeholder="Selecione"
@@ -2055,6 +2177,54 @@ const getAllVariables = () => {
                       :hint="`${urlApi}/flows/webhook/${flow.webhook_key}`"
                     />
                   </VCol>
+
+                  <VCol cols="12" v-if="flow.trigger_type === 'cron_diario'">
+                    <AppTextField
+                      v-model="flow.cron_time"
+                      type="time"
+                      label="Horário de execução"
+                      hint="Horário que o cron diário será executado"
+                      persistent-hint
+                    />
+                  </VCol>
+
+                  <VRow v-if="['cron_minuto', 'cron_hora'].includes(flow.trigger_type)" class="mx-0 mb-2">
+                    <VCol cols="12" md="6">
+                      <AppTextField
+                        v-model="flow.cron_time_start"
+                        type="time"
+                        label="Horário inicial"
+                        hint="Início do horário de execução (ex: 08:00)"
+                        persistent-hint
+                        placeholder="08:00"
+                      />
+                    </VCol>
+                    <VCol cols="12" md="6">
+                      <AppTextField
+                        v-model="flow.cron_time_end"
+                        type="time"
+                        label="Horário final"
+                        hint="Fim do horário de execução (ex: 18:00)"
+                        persistent-hint
+                        placeholder="18:00"
+                      />
+                    </VCol>
+                    <VCol cols="12">
+                      <VAlert type="info" variant="tonal" density="compact" class="mt-1">
+                        <span class="text-body-2">
+                          Defina o horário comercial para limitar a execução. Se não preencher, o fluxo executará 24 horas.
+                        </span>
+                      </VAlert>
+                    </VCol>
+                  </VRow>
+
+                  <VAlert
+                    v-if="['cron_minuto', 'cron_diario', 'cron_hora'].includes(flow.trigger_type)"
+                    type="warning" variant="tonal" class="mb-3 mx-3"
+                  >
+                    <VAlertTitle>Condições obrigatórias</VAlertTitle>
+                    <span class="text-body-2">Triggers Cron requerem pelo menos 1 condição configurada. Sem condições, o fluxo não será executado.</span>
+                  </VAlert>
 
                   <!-- Condicionais do Gatilho -->
                   <VCol cols="12">
@@ -2114,23 +2284,21 @@ const getAllVariables = () => {
                       <VCol cols="12" md="6">
                         <AppSelect
                           v-model="condition.operator"
-                          :items="operatorItens"
+                          :items="getTriggerOperators(condition)"
                           label="Operador"
                           required
                           placeholder="Selecione o operador"
                         />
                       </VCol>
 
-                      <VCol cols="12" md="6">
+                      <VCol cols="12" md="6" v-if="!triggerNoValueOperators.includes(condition.operator)">
                         <AppTextField
                           v-model="condition.value"
                           required
                           :rules="[requiredValidator]"
-                          placeholder="Insira o valor"
-                          label="Valor"
-                          :type="
-                            condition.field?.includes('data') ? 'date' : 'text'
-                          "
+                          :placeholder="getTriggerValuePlaceholder(condition.operator)"
+                          :label="getTriggerValueLabel(condition.operator)"
+                          :type="getTriggerValueInputType(condition.operator, condition.field)"
                           v-if="
                             !condition.valueIsSelect &&
                             !condition.valueIsDinheiro

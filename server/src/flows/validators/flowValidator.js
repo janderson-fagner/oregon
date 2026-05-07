@@ -288,6 +288,12 @@ function validateCompleteFlow(flowData) {
         }
     }
     
+    // Validar triggers cron
+    const cronValidation = validateCronTrigger(flowData.flow);
+    if (!cronValidation.valid) {
+        allErrors.push(...cronValidation.errors);
+    }
+
     // Validar conexões
     const connectionValidation = validateNodeConnections(flowData.nodes, flowData.edges);
     if (!connectionValidation.valid) {
@@ -302,11 +308,31 @@ function validateCompleteFlow(flowData) {
     };
 }
 
+/**
+ * Valida triggers do tipo cron
+ * @param {Object} flow - Dados do fluxo
+ * @returns {Object} - { valid: boolean, errors: Array }
+ */
+function validateCronTrigger(flow) {
+    const errors = [];
+    if (['cron_minuto', 'cron_diario', 'cron_hora'].includes(flow.trigger_type)) {
+        let conditions = flow.trigger_conditions;
+        if (typeof conditions === 'string') {
+            try { conditions = JSON.parse(conditions); } catch(e) { conditions = []; }
+        }
+        if (!Array.isArray(conditions) || conditions.length === 0) {
+            errors.push('Triggers do tipo Cron requerem pelo menos 1 condição configurada');
+        }
+    }
+    return { valid: errors.length === 0, errors };
+}
+
 module.exports = {
     validateFlow,
     validateNode,
     validateNodeConnections,
     validateStartNode,
-    validateCompleteFlow
+    validateCompleteFlow,
+    validateCronTrigger
 };
 

@@ -22,56 +22,20 @@
       </VCol>
     </VRow>
 
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Como funciona</h6>
-      <VCard variant="outlined" class="pa-4">
-        <VList density="compact">
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-clock" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Pausa a execução do fluxo pelo tempo configurado
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Pausa a execução do fluxo pelo tempo configurado" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-hourglass" color="info" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Útil para aguardar entre mensagens ou ações
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Útil para aguardar entre mensagens ou ações" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-arrow-right" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Após o tempo, continua automaticamente para o próximo bloco
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Após o tempo, continua automaticamente para o próximo bloco" />
-          </VListItem>
-        </VList>
-      </VCard>
-    </div>
-
-    <div class="text-caption text-medium-emphasis">
-      <VIcon icon="tabler-info-circle" class="me-1" />
-      O delay é executado de forma assíncrona e não bloqueia outras execuções de fluxo
-    </div>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-clock', color: 'primary', text: 'Pausa a execução do fluxo pelo tempo configurado' },
+        { icon: 'tabler-hourglass', color: 'info', text: 'Útil para aguardar entre mensagens ou ações' },
+        { icon: 'tabler-arrow-right', color: 'success', text: 'Após o tempo, continua automaticamente para o próximo bloco' }
+      ]"
+      hint="O delay é executado de forma assíncrona e não bloqueia outras execuções de fluxo"
+    />
   </div>
 </template>
 
 <script setup>
+import BlockInfoSection from './BlockInfoSection.vue';
+
 const props = defineProps({
   config: {
     type: Object,

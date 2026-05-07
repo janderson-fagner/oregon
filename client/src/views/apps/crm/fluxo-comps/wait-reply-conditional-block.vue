@@ -133,22 +133,22 @@
         </AppSelect>
         </VCol>
         <VCol cols="12" md="6">
-          <AppSelect 
-            v-model="condition.operator" 
-            :items="operatorItens" 
-            label="Operador" 
-            required 
+          <AppSelect
+            v-model="condition.operator"
+            :items="getOperatorsForCondition(condition)"
+            label="Operador"
+            required
             placeholder="Selecione o operador"
           />
         </VCol>
-        <VCol cols="12" md="6">
+        <VCol cols="12" md="6" v-if="!noValueOperators.includes(condition.operator)">
           <AppTextField
             v-model="condition.value"
             required
             :rules="[requiredValidator]"
-            placeholder="Insira o valor"
-            label="Valor"
-            :type="condition.field?.includes('data') ? 'date' : 'text'"
+            :placeholder="getValuePlaceholder(condition.operator)"
+            :label="getValueLabel(condition.operator)"
+            :type="getValueInputType(condition.operator, condition.field)"
             v-if="!condition.valueIsSelect && !condition.valueIsDinheiro"
           />
           <AppSelect
@@ -203,101 +203,25 @@
       </div>
     </div>
 
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Como funciona</h6>
-      <VCard variant="outlined" class="pa-4">
-        <VList density="compact">
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-message-circle" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Aguarda uma resposta do usuário
-            </VListItemTitle>
+    <VariablesSection :flow-variables="props.flowVariables" />
 
-            <VTooltip activator="parent" text="Aguarda uma resposta do usuário" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-settings" color="info" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Captura variáveis configuradas manualmente
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Captura variáveis configuradas manualmente" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-equal" color="secondary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Avalia as condições configuradas
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Avalia as condições configuradas" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-arrow-right" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Continua o fluxo baseado no resultado das condições (SIM/NÃO)
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Continua o fluxo baseado no resultado das condições (SIM/NÃO)" />
-          </VListItem>
-        </VList>
-      </VCard>
-    </div>
-
-    <!-- Variáveis Disponíveis -->
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Variáveis Disponíveis</h6>
-      <p class="text-caption text-medium-emphasis mb-4">
-        Clique em uma variável para copiá-la e usá-la nas condições
-      </p>
-      
-      <div class="d-flex flex-wrap gap-2">
-        <VChip
-          v-for="variable in fieldItens"
-          :key="variable.value"
-          size="small"
-          :color="variable.type === 'dinamica' ? 'success' : variable.type === 'sistema' ? 'info' : 'primary'"
-          variant="tonal"
-          class="cursor-pointer"
-          @click="copyVariable(variable.value)"
-        >
-          <VIcon icon="tabler-copy" size="small" class="me-1" />
-          {{ variable.title }}
-        </VChip>
-      </div>
-      
-      <div class="text-caption mt-2">
-        <VIcon icon="tabler-info-circle" class="me-1" size="small" />
-        <span class="text-success">Verde</span> = Dinâmicas | 
-        <span class="text-info">Azul</span> = Sistema | 
-        <span class="text-primary">Primário</span> = Cliente/Agendamento
-      </div>
-    </div>
-
-    <div class="text-caption text-medium-emphasis">
-      <VIcon icon="tabler-info-circle" class="me-1" />
-      As variáveis capturadas poderão ser usadas em blocos subsequentes como <span v-pre>{{ nome_cliente }}, {{ telefone_cliente }}</span>, etc.
-    </div>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-message-circle', color: 'primary', text: 'Aguarda uma resposta do usuário' },
+        { icon: 'tabler-settings', color: 'info', text: 'Captura variáveis configuradas manualmente' },
+        { icon: 'tabler-equal', color: 'secondary', text: 'Avalia as condições configuradas' },
+        { icon: 'tabler-arrow-right', color: 'primary', text: 'Continua o fluxo baseado no resultado das condições (SIM/NÃO)' }
+      ]"
+      hint="As variáveis capturadas poderão ser usadas em blocos subsequentes como {{nome_cliente}}, etc."
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { getAllVariables, copyVariableToClipboard } from '@/utils/dynamicVariables.js';
+import { getAllVariables } from '@/utils/dynamicVariables.js';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -311,8 +235,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update:config']);
-
-const { setAlert } = useAlert();
 
 const timeTypes = [
   { title: 'Segundos', value: 'seconds' },
@@ -328,7 +250,50 @@ const funis = ref([]);
 const fontesClientes = ref([]);
 const searchQuery = ref('');
 
-const operatorItens = [
+// Operadores de data (relativos)
+const dateOperators = [
+  { title: "📅 É hoje", value: "is_today" },
+  { title: "📅 É amanhã", value: "is_tomorrow" },
+  { title: "📅 Foi ontem", value: "is_yesterday" },
+  { title: '─── Períodos futuros ───', value: '_sep_future', disabled: true },
+  { title: "📅 Nos próximos X dias", value: "within_days" },
+  { title: "📅 Nos próximos X meses", value: "within_months" },
+  { title: "📅 É nesta semana", value: "is_this_week" },
+  { title: "📅 É na próxima semana", value: "is_next_week" },
+  { title: "📅 É neste mês", value: "is_this_month" },
+  { title: "📅 É no próximo mês", value: "is_next_month" },
+  { title: "📅 É neste ano", value: "is_this_year" },
+  { title: "📅 Daqui a exatamente X dias", value: "exactly_days_from_now" },
+  { title: "📅 Daqui a exatamente X meses", value: "exactly_months_from_now" },
+  { title: "📅 Daqui a exatamente X anos", value: "exactly_years_from_now" },
+  { title: "📅 É data futura", value: "is_future_date" },
+  { title: '─── Períodos passados ───', value: '_sep_past', disabled: true },
+  { title: "📅 Nos últimos X dias", value: "within_past_days" },
+  { title: "📅 Nos últimos X meses", value: "within_past_months" },
+  { title: "📅 Há exatamente X dias", value: "exactly_days_ago" },
+  { title: "📅 Há exatamente X meses", value: "exactly_months_ago" },
+  { title: "📅 Há exatamente X anos", value: "exactly_years_ago" },
+  { title: "📅 Foi na semana passada", value: "is_last_week" },
+  { title: "📅 Foi no mês passado", value: "is_last_month" },
+  { title: "📅 Foi no ano passado", value: "is_last_year" },
+  { title: "📅 É data passada", value: "is_past_date" },
+  { title: '─── Comparação de data ───', value: '_sep_compare', disabled: true },
+  { title: '─── Horas ───', value: '_sep_hours', disabled: true },
+  { title: "🕐 Nas próximas X horas", value: "within_hours" },
+  { title: "🕐 Nas últimas X horas", value: "within_past_hours" },
+  { title: "🕐 Há exatamente X horas", value: "exactly_hours_ago" },
+  { title: "🕐 Daqui a exatamente X horas", value: "exactly_hours_from_now" },
+  { title: '─── A mais de (tempo passado) ───', value: '_sep_morethan', disabled: true },
+  { title: "🕐 A mais de X horas atrás", value: "more_than_hours_ago" },
+  { title: "📅 A mais de X dias atrás", value: "more_than_days_ago" },
+  { title: "📅 A mais de X meses atrás", value: "more_than_months_ago" },
+  { title: '─── Comparação de data ───', value: '_sep_compare', disabled: true },
+  { title: "📅 Antes da data", value: "date_before" },
+  { title: "📅 Depois da data", value: "date_after" },
+];
+
+// Operadores genéricos
+const genericOperators = [
   { title: 'Igual', value: 'equals' },
   { title: 'Diferente', value: 'not_equals' },
   { title: 'Contém', value: 'contains' },
@@ -342,9 +307,54 @@ const operatorItens = [
   { title: 'Regex', value: 'regex' }
 ];
 
-// Função para copiar variável
-const copyVariable = (variableValue) => {
-  copyVariableToClipboard(variableValue, setAlert);
+// Operadores que não precisam de valor
+const noValueOperators = [
+  'is_today', 'is_tomorrow', 'is_yesterday',
+  'is_this_week', 'is_last_week', 'is_next_week',
+  'is_this_month', 'is_last_month', 'is_next_month',
+  'is_this_year', 'is_last_year',
+  'is_future_date', 'is_past_date',
+  'empty', 'not_empty'
+];
+
+const numericDateOperators = [
+  'within_days', 'within_past_days', 'within_months', 'within_past_months',
+  'exactly_days_ago', 'exactly_months_ago', 'exactly_years_ago',
+  'exactly_days_from_now', 'exactly_months_from_now', 'exactly_years_from_now',
+  'within_hours', 'within_past_hours', 'exactly_hours_ago', 'exactly_hours_from_now',
+  'more_than_hours_ago', 'more_than_days_ago', 'more_than_months_ago'
+];
+const dateValueOperators = ['date_before', 'date_after'];
+
+const getValuePlaceholder = (operator) => {
+  if (numericDateOperators.includes(operator)) return 'Quantidade';
+  if (dateValueOperators.includes(operator)) return 'Selecione a data';
+  return 'Insira o valor';
+};
+
+const getValueLabel = (operator) => {
+  if (['within_hours', 'within_past_hours', 'exactly_hours_ago', 'exactly_hours_from_now', 'more_than_hours_ago'].includes(operator)) return 'Horas';
+  if (['within_days', 'within_past_days', 'exactly_days_ago', 'exactly_days_from_now', 'more_than_days_ago'].includes(operator)) return 'Dias';
+  if (['within_months', 'within_past_months', 'exactly_months_ago', 'exactly_months_from_now', 'more_than_months_ago'].includes(operator)) return 'Meses';
+  if (['exactly_years_ago', 'exactly_years_from_now'].includes(operator)) return 'Anos';
+  if (dateValueOperators.includes(operator)) return 'Data';
+  return 'Valor';
+};
+
+const getValueInputType = (operator, field) => {
+  if (numericDateOperators.includes(operator)) return 'number';
+  if (dateValueOperators.includes(operator)) return 'date';
+  if (field?.includes('data')) return 'date';
+  return 'text';
+};
+
+const getOperatorsForCondition = (condition) => {
+  const field = condition?.field || '';
+  const isDateField = field.includes('data') || field.includes('cadastro') || field.includes('agendamento_data') || field.includes('ultimo_agendamento');
+  if (isDateField) {
+    return [...dateOperators, { title: '─── Outros ───', value: '_sep_generic', disabled: true }, ...genericOperators];
+  }
+  return genericOperators;
 };
 
 const addVariable = () => {

@@ -757,7 +757,22 @@ async function startFlowInSimulation(flow, phone, text, clientId, initialContext
                 // Cliente não encontrado, criar um novo
                 cliente = await createOrUpdateCliente(phone, null, {}, TEST_EMPRESA_ID);
             }
-            console.log('✅ Cliente para simulação:', cliente?.cli_Id, cliente?.cli_nome);
+            // Enriquecer cliente com último agendamento (para condições de data)
+            if (cliente && cliente.cli_Id) {
+                try {
+                    const stats = await dbQuery(`
+                        SELECT MAX(a.age_data) as cli_ultimo_agendamento,
+                               COUNT(a.age_id) as cli_qtd_agendamentos
+                        FROM AGENDAMENTO a
+                        WHERE a.cli_id = ? AND a.empresa_id = ? AND a.age_ativo = 1
+                    `, [cliente.cli_Id, TEST_EMPRESA_ID]);
+                    if (stats && stats[0]) {
+                        cliente.cli_ultimo_agendamento = stats[0].cli_ultimo_agendamento;
+                        cliente.cli_qtd_agendamentos = stats[0].cli_qtd_agendamentos;
+                    }
+                } catch (e) { /* silently continue */ }
+            }
+            console.log('✅ Cliente para simulação:', cliente?.cli_Id, cliente?.cli_nome, 'último agendamento:', cliente?.cli_ultimo_agendamento);
         } catch (clienteError) {
             console.error('⚠️ Erro ao buscar/criar cliente para simulação:', clienteError.message);
             cliente = {
@@ -767,17 +782,40 @@ async function startFlowInSimulation(flow, phone, text, clientId, initialContext
             };
         }
 
+        // Buscar próximo agendamento do cliente (para fluxos de confirmação/lembrete)
+        let agendamento = null;
+        if (cliente && cliente.cli_Id) {
+            try {
+                const agendamentos = await dbQuery(`
+                    SELECT a.*, u.fullName as funcionario_nome,
+                           ast.ast_descricao as age_status_nome
+                    FROM AGENDAMENTO a
+                    LEFT JOIN User u ON a.fun_id = u.id
+                    LEFT JOIN AGENDAMENTO_STATUS ast ON a.ast_id = ast.ast_id
+                    WHERE a.cli_id = ? AND a.empresa_id = ? AND a.age_ativo = 1
+                    AND a.age_data >= CURDATE()
+                    ORDER BY a.age_data ASC, a.age_horaInicio ASC
+                    LIMIT 1
+                `, [cliente.cli_Id, TEST_EMPRESA_ID]);
+                if (agendamentos && agendamentos[0]) {
+                    agendamento = agendamentos[0];
+                    console.log('📅 Agendamento encontrado:', agendamento.age_id, 'data:', agendamento.age_data, 'profissional:', agendamento.funcionario_nome);
+                }
+            } catch (e) { console.error('⚠️ Erro ao buscar agendamento:', e.message); }
+        }
+
         // Criar contexto de simulação
         const context = {
             ...initialContext,
             isSimulation: true,
             simulatedResponses: [],
-            history: [], // NOVO: histórico de conversa para a IA
+            history: [],
             flowId: flow.id,
             phone,
             clientId,
             chatId: `simulation_${phone}_${Date.now()}`,
-            cliente, // Adiciona cliente ao contexto
+            cliente,
+            agendamento: agendamento || undefined,
             mensagem: {
                 text: text || '',
                 timestamp: moment().format('YYYY-MM-DD HH:mm:ss')
@@ -1133,7 +1171,13 @@ async function advanceInSimulation(runId, context) {
             // Selecionar próximo nó
             let nextEdge;
             if (result.output === 'true' || result.output === 'false') {
-                nextEdge = nextEdges.find(e => e.label?.toLowerCase() === result.output.toLowerCase());
+                // Suporta labels "true"/"false" E "SIM"/"NÃO"
+                const isTrue = result.output === 'true';
+                nextEdge = nextEdges.find(e => {
+                    const label = (e.label || '').toLowerCase().trim();
+                    if (isTrue) return label === 'true' || label === 'sim';
+                    return label === 'false' || label === 'não' || label === 'nao';
+                });
                 if (!nextEdge) nextEdge = nextEdges[0];
             } else if (result.output && result.output.startsWith('option_')) {
                 const optionIndex = parseInt(result.output.replace('option_', ''));
@@ -1258,11 +1302,28 @@ async function execActionInSimulation(node, context) {
                 // Em simulação, não aguarda de verdade
                 return { output: 'continue' };
 
+            case 'update_agendamento': {
+                // Executa ação real para testar atualização de agendamento
+                const { execAction } = require('../flows/core/flowEngine');
+                try {
+                    const realResult = await execAction({ type, config, label: node.label }, context);
+                    context.simulatedResponses = context.simulatedResponses || [];
+                    context.simulatedResponses.push({
+                        type: 'action',
+                        content: `[AÇÃO REAL] ${type}: ${JSON.stringify(realResult)}`,
+                        timestamp: new Date().toISOString()
+                    });
+                    return realResult || { output: 'continue' };
+                } catch (err) {
+                    console.error(`❌ Erro ao executar ${type} real:`, err.message);
+                    return { output: 'continue' };
+                }
+            }
+
             case 'update_cliente':
             case 'create_negocio':
             case 'update_negocio':
             case 'create_agendamento':
-            case 'update_agendamento':
                 // Em simulação, registra mas não executa de verdade
                 context.simulatedResponses = context.simulatedResponses || [];
                 context.simulatedResponses.push({

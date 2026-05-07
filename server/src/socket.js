@@ -92,6 +92,14 @@ function setupSocket(server) {
             io.to(empresaRoom).emit('updateEvent', data);
         });
 
+        socket.on('addEvent', (data) => {
+            io.to(empresaRoom).emit('addEvent', data);
+        });
+
+        socket.on('removeEvent', (data) => {
+            io.to(empresaRoom).emit('removeEvent', data);
+        });
+
         // Erros do socket
         socket.on('error', (error) => {
             console.error('[Socket] Erro:', error);

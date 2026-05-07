@@ -52,6 +52,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 router.get("/agendamentos", async (req, res) => {
+  // Impede qualquer cache do browser para garantir dados sempre frescos
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   try {
     let {
       start = null,
@@ -249,6 +253,9 @@ router.get("/agendamentos", async (req, res) => {
 });
 
 router.get("/agendamento/single/:id", async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   try {
     const { id } = req.params;
     const empresa_id = req.user.empresa_id;
@@ -314,6 +321,9 @@ router.get("/agendamento/single/:id", async (req, res) => {
 });
 
 router.get("/agendamento/:id", async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   try {
     const { id } = req.params;
     const empresa_id = req.user.empresa_id;
@@ -1235,6 +1245,7 @@ router.post("/update", async (req, res) => {
 
     let {
       age_id,
+      age_type,
       age_observacao,
       age_metragem = null,
       servicos,
@@ -1377,6 +1388,7 @@ router.post("/update", async (req, res) => {
     age_valor = valor.toFixed(2);
 
     let objUpdate = {
+      age_type,
       age_fonte,
       age_observacao,
       age_metragem: age_metragem ? JSON.stringify(age_metragem) : null,

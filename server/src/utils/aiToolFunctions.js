@@ -394,22 +394,21 @@ const toolDefinitions = [
     },
     {
         name: "encaminharParaAtendente",
-        description: "Encaminha a conversa para um atendente humano. Use apenas internamente - NUNCA diga ao cliente que está encaminhando.",
+        description: "Direciona a conversa para o especialista da area (apos qualificar o cliente). Chame esta funcao sem argumentos. Ao mesmo tempo em que chamar, diga ao cliente algo como 'Um especialista nosso ja vai entrar em contato com voce em breve 😊'. NUNCA diga 'vou passar para outro atendente', 'estou te transferindo' ou 'vou verificar e te retorno'.",
+        parameters: {
+            type: "object",
+            properties: {}
+        }
+    },
+    {
+        name: "permanecerEmSilencio",
+        description: "Use QUANDO a mensagem do cliente NAO exige resposta (ex: 'ok', 'obrigado', 'tchau', 'até amanhã', 'blz', reacao com emoji, confirmacao simples apos conversa encerrada). Melhor ficar quieto do que entrar em loop de despedidas. Ao chamar, NAO escreva texto nenhum - apenas a ferramenta. O sistema nao enviara resposta ao cliente.",
         parameters: {
             type: "object",
             properties: {
-                mensagem: {
+                motivo: {
                     type: "string",
-                    description: "Mensagem interna sobre o motivo do encaminhamento"
-                },
-                departamento: {
-                    type: "string",
-                    description: "Departamento para encaminhar (opcional)"
-                },
-                prioridade: {
-                    type: "string",
-                    enum: ["baixa", "normal", "alta", "urgente"],
-                    description: "Prioridade do atendimento"
+                    description: "Motivo breve interno (ex: 'despedida natural', 'agradecimento final', 'reacao emoji apenas')"
                 }
             }
         }
@@ -1160,10 +1159,15 @@ async function executeToolFunction(functionName, args, context = {}) {
                         console.log(`✅ ========== AGENDAMENTO #${resultado.agendamentoId || resultado.agendamento_id} CRIADO! ==========\n`);
                         
                         // Criar negócio automaticamente se não existir
-                        const clienteId = context.cliente.cli_Id || context.cliente.id;
-                        const clienteNome = context.cliente.cli_nome || 'Cliente';
-                        
+                        const clienteId = context.cliente?.cli_Id || context.cliente?.id || null;
+                        const clienteNome = context.cliente?.cli_nome || 'Cliente';
+
+                        if (!clienteId) {
+                            console.warn('⚠️ Agendamento criado mas cliente sem cli_Id, pulando criação de negócio');
+                        }
+
                         try {
+                            if (!clienteId) throw new Error('skip');
                             const { criarNegocioAutomatico } = require('./negocioHelper');
                             const negocioExistente = await dbQuery(
                                 `SELECT id FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' AND ${ew.sql} LIMIT 1`,
@@ -1277,9 +1281,18 @@ async function executeToolFunction(functionName, args, context = {}) {
                     return { error: 'Contexto com cliente necessário para criar negócio', success: false };
                 }
                 
-                const clienteId = context.cliente.cli_Id || context.cliente.id;
-                const clienteNome = context.cliente.cli_nome || 'Cliente';
-                
+                const clienteId = context.cliente?.cli_Id || context.cliente?.id || null;
+                const clienteNome = context.cliente?.cli_nome || 'Cliente';
+
+                if (!clienteId) {
+                    console.warn('⚠️ criarNegocio: cliente sem cli_Id, não é possível criar negócio');
+                    return {
+                        success: false,
+                        error: 'Cliente não cadastrado no sistema. Cadastre o cliente primeiro antes de criar um negócio.',
+                        message: 'Para criar um negócio, o cliente precisa estar cadastrado.'
+                    };
+                }
+
                 // Verificar se já existe negócio ativo para este cliente
                 const negocioExistente = await dbQuery(
                     `SELECT id, title, status FROM Negocios WHERE cli_Id = ? AND status = 'Pendente' AND ${ew.sql} ORDER BY created_at DESC LIMIT 1`,
@@ -1505,22 +1518,53 @@ async function executeToolFunction(functionName, args, context = {}) {
 
             case 'bloquearClienteFluxos': {
                 console.log(`🔒 ${args.bloquear ? 'Bloqueando' : 'Desbloqueando'} cliente de fluxos...`);
-                
+
                 if (!context || !context.cliente) {
                     return { error: 'Contexto com cliente necessário', success: false };
                 }
-                
+
                 const clienteId = context.cliente.cli_Id || context.cliente.id;
-                
+
                 try {
-                    await dbQuery(`
-                        UPDATE CLIENTES
-                        SET flows_blocked = ?, flows_blocked_at = ${args.bloquear ? 'NOW()' : 'NULL'}
-                        WHERE cli_Id = ? AND ${ew.sql}
-                    `, [args.bloquear ? 1 : 0, clienteId, ...ew.params]);
-                    
+                    if (args.bloquear) {
+                        await dbQuery(`
+                            UPDATE CLIENTES
+                            SET flows_blocked = 1, flows_blocked_at = NOW(), flows_blocked_reason = 'ia_bloqueio'
+                            WHERE cli_Id = ? AND ${ew.sql}
+                        `, [clienteId, ...ew.params]);
+                    } else {
+                        // Desbloquear: limpar CLIENTES
+                        await dbQuery(`
+                            UPDATE CLIENTES
+                            SET flows_blocked = 0, flows_blocked_at = NULL, flows_blocked_reason = NULL
+                            WHERE cli_Id = ? AND ${ew.sql}
+                        `, [clienteId, ...ew.params]);
+
+                        // Limpar FlowBlockedPhones
+                        const phoneUnblock = (context.phone || context.cliente?.cli_celular || '').replace(/\D/g, '').slice(-8);
+                        if (phoneUnblock) {
+                            await dbQuery(
+                                `DELETE FROM FlowBlockedPhones WHERE RIGHT(REPLACE(phone, ' ', ''), 8) = ?${empresa_id ? ' AND empresa_id = ?' : ''}`,
+                                empresa_id ? [phoneUnblock, empresa_id] : [phoneUnblock]
+                            ).catch(() => {});
+                        }
+                        if (context.chatId) {
+                            await dbQuery(
+                                `DELETE FROM FlowBlockedPhones WHERE chat_id = ?${empresa_id ? ' AND empresa_id = ?' : ''}`,
+                                empresa_id ? [context.chatId, empresa_id] : [context.chatId]
+                            ).catch(() => {});
+                        }
+
+                        // Completar FlowRuns em espera
+                        await dbQuery(
+                            `UPDATE FlowRuns SET status = 'completed', waiting_for_response = 0, updated_at = NOW()
+                             WHERE cliente_id = ? AND status = 'running' AND waiting_for_response = 1`,
+                            [clienteId]
+                        ).catch(() => {});
+                    }
+
                     console.log(`✅ Cliente ${args.bloquear ? 'bloqueado' : 'desbloqueado'}`);
-                    
+
                     return {
                         success: true,
                         blocked: args.bloquear,
@@ -1541,8 +1585,7 @@ async function executeToolFunction(functionName, args, context = {}) {
                     return { error: 'Contexto necessário para encaminhar', success: false };
                 }
                 
-                // args.mensagem é INTERNA (motivo do encaminhamento) - NUNCA enviar ao cliente
-                const mensagemInterna = args.mensagem || 'Encaminhado para atendimento humano';
+                const mensagemInterna = 'Encaminhado para atendimento humano';
                 const clienteId = context.cliente.cli_Id || context.cliente.id;
 
                 try {
@@ -1555,7 +1598,17 @@ async function executeToolFunction(functionName, args, context = {}) {
                         SET flows_blocked = 1, flows_blocked_at = NOW(), flows_blocked_reason = 'wait_for_agent'
                         WHERE cli_Id = ? AND ${ew.sql}
                     `, [clienteId, ...ew.params]);
-                    
+
+                    // Bloquear também por telefone (FlowBlockedPhones - para contatos sem cadastro)
+                    const phoneBlock = context.phone || context.cliente?.cli_celular || '';
+                    if (phoneBlock) {
+                        await dbQuery(
+                            `INSERT IGNORE INTO FlowBlockedPhones (phone, chat_id, blocked_at, blocked_reason, empresa_id)
+                             VALUES (?, ?, NOW(), 'wait_for_agent', ?)`,
+                            [phoneBlock, context.chatId || '', empresa_id]
+                        ).catch(() => {});
+                    }
+
                     // Registrar encaminhamento
                     // FlowForwardLog: flow_run_id, flow_id, node_id, contact_phone, forwarded_to_phone, forwarded_to_label, message_content, status
                     const phone = context.cliente?.cli_celular || context.phone || '';
@@ -1568,9 +1621,9 @@ async function executeToolFunction(functionName, args, context = {}) {
                         context.flowId || 0,
                         context.nodeId || 0,
                         phone,
-                        args.departamento || 'atendente',
-                        `IA encaminhou - ${args.prioridade || 'normal'}`,
-                        args.mensagem || 'Encaminhado para atendimento humano',
+                        'atendente',
+                        'IA encaminhou',
+                        'Encaminhado para atendimento humano',
                         empresa_id
                     ]);
                     
@@ -1586,6 +1639,21 @@ async function executeToolFunction(functionName, args, context = {}) {
                         }
                     }
 
+                    // Emitir evento socket para atualizar chat em tempo real
+                    try {
+                        const { emitChatStateUpdate } = require('./chatStateEmitter');
+                        emitChatStateUpdate(empresa_id, {
+                            chatId: context.chatId || null,
+                            phone: context.phone || context.cliente?.cli_celular || null,
+                            clienteId: clienteId,
+                            runId: context.flowRunId || null,
+                            agent_status: 'waiting',
+                            waiting_for_agent: true,
+                            flows_blocked: true,
+                            reason: 'forwarded_by_ai'
+                        });
+                    } catch (_) {}
+
                     return {
                         success: true,
                         wait_for_agent: true,
@@ -1598,6 +1666,18 @@ async function executeToolFunction(functionName, args, context = {}) {
                     console.error('❌ Erro ao encaminhar:', error);
                     return { error: error.message, success: false };
                 }
+            }
+
+            case 'permanecerEmSilencio': {
+                const motivo = args.motivo || 'nao especificado';
+                console.log(`🤫 IA escolheu nao responder. Motivo: ${motivo}`);
+                return {
+                    success: true,
+                    silent: true,
+                    skip_response: true,
+                    motivo,
+                    contextUpdates: { skip_response: true }
+                };
             }
 
             case 'redirecionarFluxo': {
@@ -1819,8 +1899,8 @@ async function executeToolFunction(functionName, args, context = {}) {
                     (s.nome || '').toLowerCase().includes(termoBuscaImg)
                 );
 
-                if (!servicoImg || !servicoImg.regrasPrecificacao) {
-                    return { success: false, error: 'Serviço não encontrado', servicoNome: nomeServico };
+                if (!servicoImg || !Array.isArray(servicoImg.regrasPrecificacao) || servicoImg.regrasPrecificacao.length === 0) {
+                    return { success: false, error: 'Serviço não encontrado ou sem regras de precificação', servicoNome: nomeServico };
                 }
 
                 // Mapear condição para índice de regra (escala de preço)
@@ -1865,6 +1945,15 @@ async function executeToolFunction(functionName, args, context = {}) {
                 }
 
                 const regraSugerida = servicoImg.regrasPrecificacao[indiceRegra];
+
+                if (!regraSugerida) {
+                    return {
+                        success: false,
+                        error: 'Não foi possível mapear regra de precificação',
+                        servicoNome: nomeServico,
+                        condicao: condicaoObservada
+                    };
+                }
 
                 console.log(`✅ Regra sugerida: ${regraSugerida.titulo} - R$ ${regraSugerida.preco}`);
 
@@ -2293,23 +2382,26 @@ function getToolDefinitions(capabilities = null) {
     if (!capabilities || capabilities.length === 0) {
         return toolDefinitions;
     }
-    
+
     // Filtrar por capacidades
     const capabilityMap = {
         'agendamentos': ['buscarDisponibilidades', 'verificarHorarioDisponivel', 'consultarAgendamentosCliente', 'criarAgendamento', 'atualizarAgendamento', 'cancelarAgendamento', 'buscarServicoPorNome', 'analisarImagemCliente', 'calcularOrcamentoIA'],
         'crm': ['criarNegocio', 'atualizarNegocio', 'atualizarCliente', 'marcarNegocioGanho', 'marcarNegocioPerdido'],
-        'fluxo': ['aguardarResposta', 'agendarAcaoFutura', 'bloquearClienteFluxos', 'encaminharParaAtendente', 'redirecionarFluxo'],
+        'fluxo': ['aguardarResposta', 'agendarAcaoFutura', 'bloquearClienteFluxos', 'encaminharParaAtendente', 'permanecerEmSilencio', 'redirecionarFluxo'],
         'comunicacao': ['enviarMensagem', 'enviarEmail'],
         'localizacao': ['geocodificarEndereco', 'calcularDistancia', 'resumirDisponibilidadeComMaps', 'buscarEnderecoPorLocal', 'calcularTaxaDeslocamento']
     };
-    
-    const allowedFunctions = new Set();
+
+    // Ferramentas sempre disponiveis (fundamentais para qualidade de atendimento)
+    const alwaysAvailable = new Set(['permanecerEmSilencio', 'encaminharParaAtendente']);
+
+    const allowedFunctions = new Set(alwaysAvailable);
     for (const cap of capabilities) {
         if (capabilityMap[cap]) {
             capabilityMap[cap].forEach(fn => allowedFunctions.add(fn));
         }
     }
-    
+
     return toolDefinitions.filter(tool => allowedFunctions.has(tool.name));
 }
 

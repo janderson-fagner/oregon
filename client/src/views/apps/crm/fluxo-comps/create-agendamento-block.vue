@@ -2,10 +2,10 @@
   <div>
     <!-- Aviso Principal -->
     <VAlert type="info" variant="tonal" class="mb-4">
-      <VAlertTitle>
-        <VIcon icon="tabler-robot" class="me-2" />
+      <span class="text-subtitle-2 font-weight-bold d-flex align-center">
+        <VIcon icon="tabler-robot" class="me-2" size="18" />
         Criação de Agendamento com IA
-      </VAlertTitle>
+      </span>
       <p class="mb-0">
         A IA coletará automaticamente todas as informações necessárias (serviço, data, horário, endereço) 
         e criará o agendamento de forma inteligente, verificando disponibilidade e precificação.
@@ -50,73 +50,21 @@
       </VCardText>
     </VCard>
 
-    <!-- Como a IA Funciona -->
-    <VExpansionPanels>
-      <VExpansionPanel>
-        <VExpansionPanelTitle>
-          <div class="d-flex align-center">
-            <VIcon icon="tabler-help-circle" class="me-2" color="info" />
-            <span>Como funciona?</span>
-          </div>
-        </VExpansionPanelTitle>
-        <VExpansionPanelText>
-          <div class="text-body-2">
-            <p class="font-weight-bold">A IA seguirá este fluxo automaticamente:</p>
-            
-            <ol class="pl-4">
-              <li class="mb-2">
-                <strong>Identificar intenção:</strong> Entende que o cliente quer agendar um serviço
-              </li>
-              <li class="mb-2">
-                <strong>Coletar informações:</strong>
-                <ul class="pl-4">
-                  <li>Qual serviço o cliente deseja</li>
-                  <li>Data e horário preferidos</li>
-                  <li>Endereço de atendimento</li>
-                  <li>Detalhes adicionais (tamanho, tipo, etc)</li>
-                </ul>
-              </li>
-              <li class="mb-2">
-                <strong>Verificar disponibilidade:</strong> Consulta horários livres dos funcionários
-              </li>
-              <li class="mb-2">
-                <strong>Calcular preço:</strong> Baseado nas regras de precificação configuradas
-              </li>
-              <li class="mb-2">
-                <strong>Confirmar detalhes:</strong> Recapitula tudo com o cliente
-              </li>
-              <li class="mb-2">
-                <strong>Criar agendamento:</strong> Após confirmação do cliente
-              </li>
-            </ol>
-
-            <VAlert type="success" variant="tonal" density="compact" class="mt-3">
-              <p class="text-caption mb-0">
-                <VIcon icon="tabler-check" size="14" class="me-1" />
-                A IA usa as configurações definidas em "Configurações > GPT AI" para:
-                <br>• Regras de precificação por serviço
-                <br>• Disponibilidade de funcionários
-                <br>• Datas bloqueadas (feriados)
-                <br>• Comportamento e tom de voz
-              </p>
-            </VAlert>
-          </div>
-        </VExpansionPanelText>
-      </VExpansionPanel>
-    </VExpansionPanels>
-
-    <!-- Contexto Adicional -->
-    <VDivider class="my-4" />
-    
-    <div class="text-caption text-medium-emphasis">
-      <VIcon icon="tabler-info-circle" class="me-1" size="14" />
-      Este bloco criará um novo agendamento para o cliente atual no fluxo, utilizando o contexto 
-      completo do cliente (histórico, preferências, endereços cadastrados).
-    </div>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-robot', color: 'primary', text: 'A IA coleta automaticamente todas as informações necessárias' },
+        { icon: 'tabler-calendar-plus', color: 'success', text: 'Verifica disponibilidade e cria o agendamento' },
+        { icon: 'tabler-calculator', color: 'info', text: 'Calcula preço baseado nas regras de precificação configuradas' },
+        { icon: 'tabler-settings', color: 'secondary', text: 'Usa as configurações definidas em Configurações > GPT AI' }
+      ]"
+      hint="Este bloco criará um novo agendamento para o cliente atual no fluxo, utilizando o contexto completo do cliente."
+    />
   </div>
 </template>
 
 <script setup>
+import BlockInfoSection from './BlockInfoSection.vue';
+
 const props = defineProps({
   config: {
     type: Object,

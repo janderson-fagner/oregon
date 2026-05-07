@@ -35,8 +35,9 @@ export const getAllVariables = async () => {
     const messageVars = [  // Variáveis de mensagens
       { title: "Última mensagem", value: "ultima_mensagem", type: 'mensagem', desc: "Última mensagem enviada/recebida" },
       { title: "Última mensagem do cliente", value: "ultima_mensagem_cliente", type: 'mensagem', desc: "Última mensagem enviada pelo cliente" },
-      { title: "Última mensagem do sistema", value: "ultima_mensagem_sistema", type: 'mensagem', desc: "Última mensagem enviada pelo sistema" },
-      { title: "Contagem de mensagens", value: "contagem_mensagens", type: 'mensagem', desc: "Quantidade total de mensagens" },
+      { title: "Data última mensagem", value: "cliente_ultima_msg_data", type: 'mensagem', desc: "Data da última mensagem (qualquer)" },
+      { title: "Data última msg do cliente", value: "cliente_ultima_msg_cliente_data", type: 'mensagem', desc: "Data da última mensagem enviada pelo cliente" },
+      { title: "Data última msg do sistema", value: "cliente_ultima_msg_sistema_data", type: 'mensagem', desc: "Data da última mensagem enviada pelo sistema" },
     ];
 
     return [...staticVars, ...dynamicVariables.value, ...messageVars];

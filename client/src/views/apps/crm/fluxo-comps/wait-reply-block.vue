@@ -89,73 +89,33 @@
       </VRow>
     </div>
 
-    <VDivider class="my-4" />
-    
-    <div class="mb-4">
-      <h6 class="text-h6 mb-2">Como funciona</h6>
-      <VCard variant="outlined" class="pa-4">
-        <VList density="compact">
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-message-circle" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Aguarda uma resposta do usuário
-            </VListItemTitle>
+    <VariablesSection :flow-variables="props.flowVariables || []" />
 
-            <VTooltip activator="parent" text="Aguarda uma resposta do usuário" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-settings" color="info" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Captura variáveis configuradas manualmente
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Captura variáveis configuradas manualmente" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-variable" color="success" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Armazena as variáveis no contexto do fluxo
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Armazena as variáveis no contexto do fluxo" />
-          </VListItem>
-          
-          <VListItem>
-            <template #prepend>
-              <VIcon icon="tabler-arrow-right" color="primary" size="small" />
-            </template>
-            <VListItemTitle class="text-sm">
-              Continua o fluxo com as variáveis disponíveis
-            </VListItemTitle>
-
-            <VTooltip activator="parent" text="Continua o fluxo com as variáveis disponíveis" />
-          </VListItem>
-        </VList>
-      </VCard>
-    </div>
-
-    <div class="text-caption text-medium-emphasis">
-      <VIcon icon="tabler-info-circle" class="me-1" />
-      As variáveis capturadas poderão ser usadas em blocos subsequentes como <span v-pre>{{ nome_cliente }}, {{ telefone_cliente }}</span>, etc.
-    </div>
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-message-circle', color: 'primary', text: 'Aguarda uma resposta do usuário' },
+        { icon: 'tabler-settings', color: 'info', text: 'Captura variáveis configuradas manualmente' },
+        { icon: 'tabler-variable', color: 'success', text: 'Armazena as variáveis no contexto do fluxo' },
+        { icon: 'tabler-arrow-right', color: 'primary', text: 'Continua o fluxo com as variáveis disponíveis' }
+      ]"
+      hint="As variáveis capturadas poderão ser usadas em blocos subsequentes como {{nome_cliente}}, etc."
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
     type: Object,
     required: true
+  },
+  flowVariables: {
+    type: Array,
+    default: () => []
   }
 });
 

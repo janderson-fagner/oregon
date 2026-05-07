@@ -1184,6 +1184,39 @@ const variaveisItens = [
     { title: "Observações do Agendamento", value: "agendamento_observacoes", type: 'agendamento', desc: "Observações do agendamento" },
     { title: "Valor do Agendamento", value: "agendamento_valor", type: 'agendamento', desc: "Valor total do agendamento" },
     { title: "Endereço do Agendamento", value: "agendamento_endereco", type: 'agendamento', desc: "Endereço completo do agendamento" },
+
+    // Variáveis adicionais de Cliente
+    { title: "Celular do cliente", value: "cliente_celular", type: 'cliente', desc: "Celular do cliente (alias de telefone)" },
+    { title: "CPF do cliente", value: "cliente_cpf", type: 'cliente', desc: "CPF do cliente" },
+    { title: "Data de nascimento", value: "cliente_data_nascimento", type: 'cliente', desc: "Data de nascimento do cliente" },
+    { title: "Bairro do cliente", value: "cliente_bairro", type: 'cliente', desc: "Bairro do cliente (primeiro endereço)" },
+    { title: "Endereço do cliente", value: "cliente_endereco", type: 'cliente', desc: "Endereço completo do cliente" },
+    { title: "Gênero do cliente", value: "cliente_genero", type: 'cliente', desc: "Gênero do cliente" },
+    { title: "Valor total gasto", value: "cliente_valor_gasto", type: 'cliente', desc: "Valor total gasto pelo cliente" },
+    { title: "Data de cadastro", value: "cliente_data_cadastro", type: 'cliente', desc: "Data de cadastro do cliente" },
+    { title: "Tags do cliente", value: "cliente_tags", type: 'cliente', desc: "Tags do cliente separadas por vírgula" },
+    { title: "ID do cliente", value: "cliente_id", type: 'cliente', desc: "ID único do cliente no sistema" },
+
+    // Variáveis adicionais de Agendamento
+    { title: "ID do Agendamento", value: "agendamento_id", type: 'agendamento', desc: "ID do agendamento" },
+    { title: "Hora início do Agendamento", value: "agendamento_hora_inicio", type: 'agendamento', desc: "Hora de início do agendamento" },
+    { title: "Hora fim do Agendamento", value: "agendamento_hora_fim", type: 'agendamento', desc: "Hora de término do agendamento" },
+    { title: "Serviços do Agendamento", value: "agendamento_servicos", type: 'agendamento', desc: "Serviços do agendamento (alias)" },
+
+    // Variáveis de Negócio (CRM)
+    { title: "ID do Negócio", value: "negocio_id", type: 'negocio', desc: "ID do negócio no CRM" },
+    { title: "Título do Negócio", value: "negocio_titulo", type: 'negocio', desc: "Título do negócio" },
+    { title: "Valor do Negócio", value: "negocio_valor", type: 'negocio', desc: "Valor do negócio" },
+    { title: "Status do Negócio", value: "negocio_status", type: 'negocio', desc: "Status atual do negócio" },
+    { title: "Origem do Negócio", value: "negocio_origem", type: 'negocio', desc: "Origem/canal do negócio" },
+    { title: "Etapa do Funil", value: "negocio_etapa_nome", type: 'negocio', desc: "Nome da etapa atual no funil" },
+
+    // Variáveis do Sistema
+    { title: "Data atual", value: "data_atual", type: 'sistema', desc: "Data atual do sistema (DD/MM/YYYY)" },
+    { title: "Hora atual", value: "hora_atual", type: 'sistema', desc: "Hora atual do sistema (HH:mm)" },
+    { title: "Dia da semana", value: "dia_semana", type: 'sistema', desc: "Dia da semana atual" },
+    { title: "Mês atual", value: "mes_atual", type: 'sistema', desc: "Mês atual" },
+    { title: "Ano atual", value: "ano_atual", type: 'sistema', desc: "Ano atual" },
 ];
 
 const formatEndereco = (endereco) => {

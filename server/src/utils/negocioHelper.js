@@ -214,6 +214,11 @@ async function criarNegocioAutomatico({ clienteId, titulo, valor = 0, origem = '
     console.log('\n💼 === CRIANDO NEGÓCIO AUTOMATICAMENTE ===');
     console.log('📊 Dados:', { clienteId, titulo, valor, origem });
 
+    if (!clienteId) {
+        console.error('❌ criarNegocioAutomatico: clienteId é obrigatório');
+        return { success: false, error: 'clienteId não fornecido' };
+    }
+
     const ew = empresaWhere(empresa_id);
 
     try {

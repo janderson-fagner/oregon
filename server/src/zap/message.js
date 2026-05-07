@@ -135,6 +135,8 @@ async function mapearMsg(msg, save = true) {
  * @returns {Promise<string>} Caminho do arquivo convertido
  */
 function convertWebmToOgg(inputPath) {
+    if(!inputPath) return null;
+
     const outputPath = inputPath.replace(/\.webm$/i, '.ogg');
 
     //Antes de converter, verifica se o arquivo existe, se já existe, retorna o caminho do arquivo existente
@@ -159,6 +161,7 @@ function convertWebmToOgg(inputPath) {
  * @returns {Promise<string>} Caminho do arquivo convertido
  */
 function convertWavToOgg(inputPath) {
+    if(!inputPath) return null;
     const outputPath = inputPath.replace(/\.wav$/i, '.ogg');
 
     //Antes de converter, verifica se o arquivo existe, se já existe, retorna o caminho do arquivo existente
@@ -183,6 +186,7 @@ function convertWavToOgg(inputPath) {
  * @returns {Promise<string>} Caminho do arquivo convertido
  */
 function convertMp3ToOgg(inputPath) {
+    if(!inputPath) return null;
     const outputPath = inputPath.replace(/\.mp3$/i, '.ogg');
 
     //Antes de converter, verifica se o arquivo existe, se já existe, retorna o caminho do arquivo existente
@@ -208,6 +212,7 @@ function convertMp3ToOgg(inputPath) {
  * @returns {string} Mensagem formatada
  */
 function formatMessage(message) {
+    if(!message || message.trim() === '') return '';
     return message.replace(/<p><br><\/p>/gi, '\n')
     .replace(/<\/p\s*>/gi, '\n')
     .replace(/<p[^>]*>/gi, '')

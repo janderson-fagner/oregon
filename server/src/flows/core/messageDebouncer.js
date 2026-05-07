@@ -6,9 +6,10 @@
  * Também enfileira mensagens recebidas durante o processamento.
  */
 
-const DEBOUNCE_MS = 2000;           // 2 segundos de debounce
+const DEBOUNCE_MS = 60000;           // 1 minuto (60s) de debounce
 const STALE_THRESHOLD_MS = 600000;  // 10 minutos para considerar stale
 const CLEANUP_INTERVAL_MS = 300000; // Limpeza a cada 5 minutos
+const DUPLICATE_WINDOW_MS = 5000;   // Janela para considerar mensagem duplicada (mesmo texto+midia em <5s)
 
 /**
  * Map<phoneKey, {
@@ -39,7 +40,10 @@ function setProcessor(fn) {
  */
 function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = null, mediaType = null, empresa_id = null }) {
     const phoneKey = (phone || '').replace(/\D/g, '');
-    if (!phoneKey) return;
+    if (!phoneKey) {
+        console.log(`[Debouncer] ⚠️ queueMessage chamado sem phone valido (phone="${phone}") - ignorando`);
+        return;
+    }
 
     const now = Date.now();
     const msgEntry = { text: text || '', mediaPath, mediaType, timestamp: now };
@@ -61,10 +65,42 @@ function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = n
     // Atualizar params com os mais recentes
     state.params = { clientId, phone, chatId, empresa_id };
 
+    // ─────────────────────────────────────────────────────────────────
+    // DEDUPE DEFENSIVO POR CONTEUDO + JANELA TEMPORAL
+    // Protege contra duplicacao residual (listeners acumulados, retries,
+    // emissoes duplicadas do whatsapp-web.js que nao tem id estavel).
+    // Considera duplicada: mesmo texto + mesma midia em janela <5s.
+    // ─────────────────────────────────────────────────────────────────
+    const dupSignature = `${msgEntry.text}::${msgEntry.mediaPath || ''}`;
+
+    // Verifica buffer atual
+    const dupInBuffer = state.messages.find(m =>
+        `${m.text}::${m.mediaPath || ''}` === dupSignature &&
+        (now - m.timestamp) < DUPLICATE_WINDOW_MS
+    );
+    if (dupInBuffer) {
+        console.log(`[Debouncer] 🚫 ${phoneKey}: Mensagem DUPLICADA descartada (mesma signature em <${DUPLICATE_WINDOW_MS}ms) | text="${(msgEntry.text || '').slice(0, 60)}" buffer=${state.messages.length} processing=${state.isProcessing}`);
+        return;
+    }
+    // Verifica fila pendente tambem
+    const dupInPending = state.pendingQueue.find(m =>
+        `${m.text}::${m.mediaPath || ''}` === dupSignature &&
+        (now - m.timestamp) < DUPLICATE_WINDOW_MS
+    );
+    if (dupInPending) {
+        console.log(`[Debouncer] 🚫 ${phoneKey}: Mensagem DUPLICADA descartada da fila pendente | text="${(msgEntry.text || '').slice(0, 60)}" pending=${state.pendingQueue.length}`);
+        return;
+    }
+    // Verifica ultima processada (caso a duplicada chegue logo depois do flush)
+    if (state.lastProcessedSignature === dupSignature && state.lastProcessedAt && (now - state.lastProcessedAt) < DUPLICATE_WINDOW_MS) {
+        console.log(`[Debouncer] 🚫 ${phoneKey}: Mensagem DUPLICADA descartada (mesma signature da ultima processada ha <${DUPLICATE_WINDOW_MS}ms) | text="${(msgEntry.text || '').slice(0, 60)}"`);
+        return;
+    }
+
     // Se está processando, colocar na fila de pendentes
     if (state.isProcessing) {
         state.pendingQueue.push(msgEntry);
-        console.log(`[Debouncer] ${phoneKey}: Mensagem enfileirada (processamento em andamento). Pendentes: ${state.pendingQueue.length}`);
+        console.log(`[Debouncer] ${phoneKey}: Mensagem enfileirada (processamento em andamento). Pendentes: ${state.pendingQueue.length} | text="${(msgEntry.text || '').slice(0, 60)}"`);
         return;
     }
 
@@ -80,7 +116,7 @@ function queueMessage({ phone, chatId, text, clientId = 'default', mediaPath = n
         _flushMessages(phoneKey);
     }, DEBOUNCE_MS);
 
-    console.log(`[Debouncer] ${phoneKey}: Mensagem bufferizada. Buffer: ${state.messages.length}. Timer resetado para ${DEBOUNCE_MS}ms`);
+    console.log(`[Debouncer] ${phoneKey}: Mensagem bufferizada. Buffer: ${state.messages.length}. Timer resetado para ${DEBOUNCE_MS}ms | text="${(msgEntry.text || '').slice(0, 60)}" media=${mediaType || 'none'} clientId=${clientId}`);
 }
 
 /**
@@ -117,8 +153,13 @@ async function _flushMessages(phoneKey) {
 
     const msgCount = bufferedMessages.length;
     if (msgCount > 1) {
-        console.log(`[Debouncer] ${phoneKey}: Consolidando ${msgCount} mensagens em uma única chamada`);
+        console.log(`[Debouncer] ${phoneKey}: Consolidando ${msgCount} mensagens em uma única chamada | combinedText="${(combinedText || '').slice(0, 100)}"`);
+    } else {
+        console.log(`[Debouncer] ${phoneKey}: Flush de 1 mensagem | text="${(combinedText || '').slice(0, 100)}"`);
     }
+
+    // Salva signature da mensagem que sera processada para dedupe pos-flush
+    state.lastProcessedSignature = `${combinedText}::${lastMediaPath || ''}`;
 
     try {
         if (!_processor) {
@@ -136,20 +177,23 @@ async function _flushMessages(phoneKey) {
             empresa_id: state.params.empresa_id
         });
     } catch (error) {
-        console.error(`[Debouncer] ${phoneKey}: Erro no processamento:`, error.message);
+        console.error(`[Debouncer] ${phoneKey}: Erro no processamento:`, error.message, error.stack);
     } finally {
         state.isProcessing = false;
+        state.lastProcessedAt = Date.now();
 
-        // Se há mensagens pendentes, mover para buffer e reiniciar debounce
+        // Se há mensagens pendentes, mover para buffer e processar com debounce curto
+        // (o debounce curto aqui é intencional — as mensagens já esperaram durante o processamento)
         if (state.pendingQueue.length > 0) {
             state.messages = [...state.pendingQueue];
             state.pendingQueue = [];
 
-            console.log(`[Debouncer] ${phoneKey}: ${state.messages.length} mensagens pendentes movidas para buffer. Reiniciando debounce.`);
+            console.log(`[Debouncer] ${phoneKey}: ${state.messages.length} mensagens pendentes movidas para buffer. Processando com debounce curto (3s).`);
 
+            // Debounce curto para pendentes — elas já esperaram o processamento inteiro
             state.debounceTimer = setTimeout(() => {
                 _flushMessages(phoneKey);
-            }, DEBOUNCE_MS);
+            }, 3000);
         }
     }
 }

@@ -119,43 +119,6 @@
         Mensagem exibida antes da lista de serviços
       </p>
 
-      <!-- Variáveis disponíveis -->
-      <div class="mb-3">
-        <a @click="viewVariaveisTutorial = !viewVariaveisTutorial" class="cursor-pointer text-primary">
-          Ver variáveis disponíveis
-          <VIcon
-            :icon="viewVariaveisTutorial ? 'tabler-chevron-up' : 'tabler-chevron-down'"
-            size="small"
-          />
-        </a>
-
-        <v-fade-transition>
-          <div v-if="viewVariaveisTutorial" class="mt-3">
-            <VCard variant="outlined" class="pa-3">
-              <p class="text-caption mb-3">
-                Clique para copiar. Use com duplas chaves: 
-                <span class="font-weight-bold" v-pre>{{ cliente_nome }}</span>
-              </p>
-
-              <div class="d-flex flex-wrap gap-2">
-                <VChip
-                  v-for="variable in variaveisItens"
-                  :key="variable.value"
-                  size="small"
-                  :color="variable.type === 'cliente' ? 'primary' : variable.type === 'sistema' ? 'info' : 'success'"
-                  variant="tonal"
-                  class="cursor-pointer"
-                  @click="copyVariableToClipboard(variable.value)"
-                >
-                  <VIcon icon="tabler-copy" size="small" class="me-1" />
-                  {{ variable.title }}
-                </VChip>
-              </div>
-            </VCard>
-          </div>
-        </v-fade-transition>
-      </div>
-
       <!-- Editor Quill -->
       <div class="inputQP">
         <div id="toolbar-service-message">
@@ -307,47 +270,17 @@
       </div>
     </VCard>
 
-    <!-- Informações -->
-    <VCard variant="outlined" class="pa-4 mt-4">
-      <h6 class="text-subtitle-2 mb-2">
-        <VIcon icon="tabler-info-circle" class="me-1" />
-        Como funciona
-      </h6>
-      <VList density="compact">
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Os serviços serão listados automaticamente do banco de dados
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Cliente pode responder com o número ou nome do serviço
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Serviço selecionado fica disponível como variável no fluxo
-          </VListItemTitle>
-        </VListItem>
-        <VListItem>
-          <template #prepend>
-            <VIcon icon="tabler-check" color="success" size="small" />
-          </template>
-          <VListItemTitle class="text-caption">
-            Suporta paginação automática para muitos serviços
-          </VListItemTitle>
-        </VListItem>
-      </VList>
-    </VCard>
+    <VariablesSection :flow-variables="props.flowVariables" />
+
+    <BlockInfoSection
+      :items="[
+        { icon: 'tabler-check', color: 'success', text: 'Os serviços serão listados automaticamente do banco de dados' },
+        { icon: 'tabler-check', color: 'success', text: 'Cliente pode responder com o número ou nome do serviço' },
+        { icon: 'tabler-check', color: 'success', text: 'Serviço selecionado fica disponível como variável no fluxo' },
+        { icon: 'tabler-check', color: 'success', text: 'Suporta paginação automática para muitos serviços' },
+      ]"
+      hint="Configure filtros e ordenação para controlar quais serviços são exibidos."
+    />
   </div>
 </template>
 
@@ -356,6 +289,8 @@ import { ref, watch, onMounted, computed } from 'vue';
 import { QuillEditor } from '@vueup/vue-quill';
 import '@vueup/vue-quill/dist/vue-quill.snow.css';
 import { getAllVariables, copyVariableToClipboard as copyVarUtil } from '@/utils/dynamicVariables.js';
+import VariablesSection from './VariablesSection.vue';
+import BlockInfoSection from './BlockInfoSection.vue';
 
 const props = defineProps({
   config: {
@@ -375,7 +310,11 @@ const props = defineProps({
       saveToContext: true,
       contextVariableName: 'servico_selecionado'
     })
-  }
+  },
+  flowVariables: {
+    type: Array,
+    default: () => [],
+  },
 });
 
 const emit = defineEmits(['update:config']);
@@ -415,7 +354,6 @@ const loadingServicos = ref(false);
 const variaveisItens = ref([]);
 const variavel = ref(null);
 const refQuillEditor = ref(null);
-const viewVariaveisTutorial = ref(false);
 
 // Configurações dos editores Quill
 const editorOptions = {

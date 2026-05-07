@@ -968,7 +968,7 @@ async function buscarEnderecoPorLocal(local, cidadeEstado = 'Curitiba, PR', empr
 
         // Chamar Gemini diretamente com grounding do Maps
         const response = await genAI.models.generateContent({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3.1-pro-preview',
             contents: prompt,
             config: {
                 tools: [{ googleMaps: {} }]

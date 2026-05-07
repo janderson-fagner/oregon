@@ -67,6 +67,10 @@ session-zap/
 #core dumps
 core.[0-9]*
 
+#claude
+.claude
+CLAUDE.md
+
 # Dependency directories
 src/node_modules/
 node_modules/
