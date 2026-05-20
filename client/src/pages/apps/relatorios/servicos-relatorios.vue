@@ -236,6 +236,160 @@ const tecnicosFiltrados = computed(() => {
   return result;
 });
 
+// ==========================
+// Matriz Serviço × Origem (pivotada)
+// ==========================
+const filtroOrigem = ref({
+  nomeServico: "",
+  fontes: [],
+});
+const modoExibicaoOrigem = ref("qtd"); // 'qtd' | 'cobrado' | 'recebido'
+
+const servicosPorFonteRaw = computed(
+  () => relatorios.value?.servicosPorFonte || []
+);
+
+// Lista única de origens, ordenada por uso total decrescente
+const fontesUnicas = computed(() => {
+  const totais = {};
+  for (const sf of servicosPorFonteRaw.value) {
+    totais[sf.fonte] = (totais[sf.fonte] || 0) + sf.quantidade;
+  }
+  return Object.entries(totais)
+    .sort((a, b) => b[1] - a[1])
+    .map(([fonte]) => fonte);
+});
+
+// Pivotar: agrupa por serviço, expõe porFonte e totalLinha
+const matrizOrigem = computed(() => {
+  const map = {};
+  for (const sf of servicosPorFonteRaw.value) {
+    if (!map[sf.ser_id]) {
+      map[sf.ser_id] = {
+        ser_id: sf.ser_id,
+        ser_nome: sf.ser_nome,
+        porFonte: {},
+        totalLinha: { qtd: 0, cobrado: 0, recebido: 0 },
+      };
+    }
+    map[sf.ser_id].porFonte[sf.fonte] = {
+      qtd: sf.quantidade,
+      cobrado: sf.valorTotal,
+      recebido: sf.valorRecebido,
+    };
+    map[sf.ser_id].totalLinha.qtd += sf.quantidade;
+    map[sf.ser_id].totalLinha.cobrado += sf.valorTotal;
+    map[sf.ser_id].totalLinha.recebido += sf.valorRecebido;
+  }
+  return Object.values(map).sort(
+    (a, b) => b.totalLinha.qtd - a.totalLinha.qtd
+  );
+});
+
+const matrizFiltrada = computed(() => {
+  let result = matrizOrigem.value;
+  if (filtroOrigem.value.nomeServico) {
+    const q = filtroOrigem.value.nomeServico.toLowerCase();
+    result = result.filter((s) => s.ser_nome.toLowerCase().includes(q));
+  }
+  return result;
+});
+
+const fontesUnicasFiltradas = computed(() => {
+  if (!filtroOrigem.value.fontes?.length) return fontesUnicas.value;
+  return fontesUnicas.value.filter((f) =>
+    filtroOrigem.value.fontes.includes(f)
+  );
+});
+
+const totalPorColuna = computed(() => {
+  const totals = {};
+  for (const s of matrizFiltrada.value) {
+    for (const f of fontesUnicasFiltradas.value) {
+      const c = s.porFonte[f];
+      if (!c) continue;
+      if (!totals[f]) totals[f] = { qtd: 0, cobrado: 0, recebido: 0 };
+      totals[f].qtd += c.qtd;
+      totals[f].cobrado += c.cobrado;
+      totals[f].recebido += c.recebido;
+    }
+  }
+  return totals;
+});
+
+const totalGeralMatriz = computed(() => {
+  return matrizFiltrada.value.reduce(
+    (acc, s) => {
+      // Considera só as colunas filtradas
+      for (const f of fontesUnicasFiltradas.value) {
+        const c = s.porFonte[f];
+        if (!c) continue;
+        acc.qtd += c.qtd;
+        acc.cobrado += c.cobrado;
+        acc.recebido += c.recebido;
+      }
+      return acc;
+    },
+    { qtd: 0, cobrado: 0, recebido: 0 }
+  );
+});
+
+// Total da LINHA respeitando filtro de colunas
+const totalLinhaFiltrado = (servico) => {
+  return fontesUnicasFiltradas.value.reduce(
+    (acc, f) => {
+      const c = servico.porFonte[f];
+      if (!c) return acc;
+      acc.qtd += c.qtd;
+      acc.cobrado += c.cobrado;
+      acc.recebido += c.recebido;
+      return acc;
+    },
+    { qtd: 0, cobrado: 0, recebido: 0 }
+  );
+};
+
+const formatCellOrigem = (cell) => {
+  if (!cell) return "—";
+  if (modoExibicaoOrigem.value === "qtd") return cell.qtd || "—";
+  if (modoExibicaoOrigem.value === "cobrado") return formatValor(cell.cobrado);
+  return formatValor(cell.recebido);
+};
+
+// Para colorir a intensidade da célula (heatmap leve)
+const maxValorCelula = computed(() => {
+  let max = 0;
+  for (const s of matrizFiltrada.value) {
+    for (const f of fontesUnicasFiltradas.value) {
+      const c = s.porFonte[f];
+      if (!c) continue;
+      const v =
+        modoExibicaoOrigem.value === "qtd"
+          ? c.qtd
+          : modoExibicaoOrigem.value === "cobrado"
+          ? c.cobrado
+          : c.recebido;
+      if (v > max) max = v;
+    }
+  }
+  return max;
+});
+
+const intensidadeCelula = (cell) => {
+  if (!cell || !maxValorCelula.value) return 0;
+  const v =
+    modoExibicaoOrigem.value === "qtd"
+      ? cell.qtd
+      : modoExibicaoOrigem.value === "cobrado"
+      ? cell.cobrado
+      : cell.recebido;
+  return v / maxValorCelula.value;
+};
+
+const limparFiltrosOrigem = () => {
+  filtroOrigem.value = { nomeServico: "", fontes: [] };
+};
+
 // Limpar filtros
 const limparFiltrosServicos = () => {
   filtroServicos.value = {
@@ -1065,8 +1219,11 @@ const setPeriodo = (tipo) => {
     </VCol>
   </VRow>
 
-  <!-- Cruzamento Serviço × Origem -->
-  <VRow class="mb-6" v-if="relatorios && relatorios.servicosPorFonte && relatorios.servicosPorFonte.length > 0">
+  <!-- Cruzamento Serviço × Origem (matriz pivotada) -->
+  <VRow
+    class="mb-6"
+    v-if="relatorios && servicosPorFonteRaw.length > 0"
+  >
     <VCol cols="12">
       <VCard>
         <VCardText>
@@ -1074,7 +1231,9 @@ const setPeriodo = (tipo) => {
             <div>
               <h5 class="text-h5 mb-1">Serviço × Origem</h5>
               <p class="text-sm text-disabled mb-0">
-                De onde vem cada categoria de serviço
+                Cruzamento de cada serviço com a fonte do atendimento ·
+                {{ matrizFiltrada.length }} serviços ×
+                {{ fontesUnicasFiltradas.length }} origens
               </p>
             </div>
             <VAvatar color="info" variant="tonal" rounded size="42">
@@ -1082,34 +1241,132 @@ const setPeriodo = (tipo) => {
             </VAvatar>
           </div>
 
-          <div style="max-height: 480px; overflow-y: auto;">
-            <VTable density="compact" hover>
-              <thead style="position: sticky; top: 0; background: rgb(var(--v-theme-surface)); z-index: 1;">
+          <!-- Filtros -->
+          <VRow class="mb-4" align="center">
+            <VCol cols="12" sm="4">
+              <AppTextField
+                v-model="filtroOrigem.nomeServico"
+                placeholder="Buscar serviço"
+                density="compact"
+                clearable
+              >
+                <template #prepend-inner>
+                  <VIcon icon="tabler-search" size="20" />
+                </template>
+              </AppTextField>
+            </VCol>
+            <VCol cols="12" sm="4">
+              <AppSelect
+                v-model="filtroOrigem.fontes"
+                :items="fontesUnicas"
+                multiple
+                chips
+                closable-chips
+                placeholder="Filtrar origens (todas)"
+                density="compact"
+                clearable
+              />
+            </VCol>
+            <VCol cols="12" sm="3">
+              <VBtnToggle
+                v-model="modoExibicaoOrigem"
+                mandatory
+                density="compact"
+                color="primary"
+                variant="outlined"
+              >
+                <VBtn value="qtd" size="small">Atend.</VBtn>
+                <VBtn value="cobrado" size="small">Cobrado</VBtn>
+                <VBtn value="recebido" size="small">Recebido</VBtn>
+              </VBtnToggle>
+            </VCol>
+            <VCol cols="12" sm="1" class="text-end">
+              <IconBtn
+                v-if="filtroOrigem.nomeServico || filtroOrigem.fontes.length"
+                @click="limparFiltrosOrigem"
+                title="Limpar filtros"
+              >
+                <VIcon icon="tabler-x" />
+              </IconBtn>
+            </VCol>
+          </VRow>
+
+          <!-- Matriz -->
+          <div
+            v-if="matrizFiltrada.length"
+            style="overflow: auto; max-height: 520px; border: 1px solid rgba(var(--v-border-color), 0.12); border-radius: 4px;"
+          >
+            <table class="origin-matrix">
+              <thead>
                 <tr>
-                  <th>Serviço</th>
-                  <th>Origem</th>
-                  <th class="text-end">Atendimentos</th>
-                  <th class="text-end">Cobrado</th>
-                  <th class="text-end">Recebido</th>
+                  <th class="cell-servico cell-sticky-left cell-sticky-top">
+                    Serviço
+                  </th>
+                  <th
+                    v-for="f in fontesUnicasFiltradas"
+                    :key="f"
+                    class="cell-sticky-top text-end"
+                  >
+                    {{ f }}
+                  </th>
+                  <th class="cell-sticky-top cell-total text-end">Total</th>
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  v-for="sf in relatorios.servicosPorFonte"
-                  :key="`${sf.ser_id}_${sf.fonte}`"
-                >
-                  <td>{{ sf.ser_nome }}</td>
-                  <td>
-                    <VChip size="x-small" color="primary" variant="tonal">{{ sf.fonte }}</VChip>
+                <tr v-for="s in matrizFiltrada" :key="s.ser_id">
+                  <td class="cell-servico cell-sticky-left">
+                    {{ s.ser_nome }}
                   </td>
-                  <td class="text-end">{{ sf.quantidade }}</td>
-                  <td class="text-end">{{ formatValor(sf.valorTotal) }}</td>
-                  <td class="text-end font-weight-bold text-success">
-                    {{ formatValor(sf.valorRecebido) }}
+                  <td
+                    v-for="f in fontesUnicasFiltradas"
+                    :key="f"
+                    class="text-end cell-value"
+                    :style="{
+                      backgroundColor: s.porFonte[f]
+                        ? `rgba(var(--v-theme-info), ${
+                            0.06 + intensidadeCelula(s.porFonte[f]) * 0.35
+                          })`
+                        : 'transparent',
+                    }"
+                  >
+                    <span v-if="s.porFonte[f]" class="font-weight-medium">
+                      {{ formatCellOrigem(s.porFonte[f]) }}
+                    </span>
+                    <span v-else class="text-disabled">—</span>
+                  </td>
+                  <td class="text-end cell-total font-weight-bold">
+                    {{ formatCellOrigem(totalLinhaFiltrado(s)) }}
+                  </td>
+                </tr>
+                <tr class="row-total">
+                  <td class="cell-servico cell-sticky-left font-weight-bold">
+                    Total
+                  </td>
+                  <td
+                    v-for="f in fontesUnicasFiltradas"
+                    :key="f"
+                    class="text-end font-weight-bold"
+                  >
+                    {{ formatCellOrigem(totalPorColuna[f]) }}
+                  </td>
+                  <td class="text-end cell-total font-weight-bold text-success">
+                    {{ formatCellOrigem(totalGeralMatriz) }}
                   </td>
                 </tr>
               </tbody>
-            </VTable>
+            </table>
+          </div>
+
+          <div v-else class="text-center py-8">
+            <VIcon
+              icon="tabler-arrows-split"
+              size="48"
+              color="disabled"
+              class="mb-2"
+            />
+            <p class="text-disabled mb-0">
+              Nenhum serviço encontrado com os filtros aplicados
+            </p>
           </div>
         </VCardText>
       </VCard>
@@ -1138,5 +1395,73 @@ const setPeriodo = (tipo) => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Matriz Serviço × Origem */
+.origin-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+}
+
+.origin-matrix th,
+.origin-matrix td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.08);
+  white-space: nowrap;
+}
+
+.origin-matrix thead th {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgb(var(--v-theme-surface));
+  border-bottom: 2px solid rgba(var(--v-border-color), 0.18);
+}
+
+.origin-matrix tbody tr:hover td {
+  background-color: rgba(var(--v-theme-primary), 0.04);
+}
+
+.cell-sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgb(var(--v-theme-surface));
+}
+
+.cell-sticky-left {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: rgb(var(--v-theme-surface));
+  border-right: 1px solid rgba(var(--v-border-color), 0.18);
+}
+
+.cell-sticky-left.cell-sticky-top {
+  z-index: 3;
+}
+
+.cell-servico {
+  min-width: 220px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.cell-total {
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-left: 2px solid rgba(var(--v-theme-primary), 0.3);
+}
+
+.cell-value {
+  min-width: 90px;
+  transition: background-color 0.15s;
+}
+
+.row-total td {
+  background: rgba(var(--v-theme-primary), 0.08) !important;
+  border-top: 2px solid rgba(var(--v-theme-primary), 0.3);
 }
 </style>
