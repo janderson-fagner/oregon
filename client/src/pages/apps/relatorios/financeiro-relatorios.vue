@@ -392,6 +392,14 @@ const setPeriodo = (tipo) => {
             {{ formatValor(resumo.totalReceitaFutura) }}
           </h3>
           <p class="text-sm mb-0">Receita Futura</p>
+          <p
+            v-if="resumo.totalReceitaFuturaRealista !== undefined"
+            class="text-xs text-disabled mt-1 mb-0"
+            :title="`Estimativa descontando ${resumo.taxaCancelamentoHistorica}% de cancelamento histórico (últimos 90 dias)`"
+          >
+            Realista: {{ formatValor(resumo.totalReceitaFuturaRealista) }}
+            <span class="text-warning">(−{{ resumo.taxaCancelamentoHistorica }}%)</span>
+          </p>
 
           <div class="d-flex flex-column mt-3 text-sm">
             <p class="mb-0">
@@ -565,6 +573,57 @@ const setPeriodo = (tipo) => {
   <VRow class="mb-6" v-if="relatorios && topClientes.length > 0">
     <VCol cols="12">
       <GraficoTopClientes :topClientes="topClientes" />
+    </VCol>
+  </VRow>
+
+  <!-- Pagamentos em Aberto -->
+  <VRow
+    class="mb-6"
+    v-if="relatorios && relatorios.pagamentosEmAberto && relatorios.pagamentosEmAberto.length > 0"
+  >
+    <VCol cols="12">
+      <VCard>
+        <VCardText>
+          <div class="d-flex justify-space-between align-center mb-4">
+            <div>
+              <h5 class="text-h5 mb-1">Pagamentos em Aberto</h5>
+              <p class="text-sm text-disabled mb-0">
+                Atendimentos realizados no período sem o valor totalmente pago
+              </p>
+            </div>
+            <VAvatar color="warning" variant="tonal" rounded size="42">
+              <VIcon icon="tabler-cash-off" size="28" />
+            </VAvatar>
+          </div>
+
+          <div style="max-height: 420px; overflow-y: auto;">
+            <VTable density="compact" hover>
+              <thead style="position: sticky; top: 0; background: rgb(var(--v-theme-surface)); z-index: 1;">
+                <tr>
+                  <th>Agendamento</th>
+                  <th>Cliente</th>
+                  <th>Data</th>
+                  <th class="text-end">Cobrado</th>
+                  <th class="text-end">Recebido</th>
+                  <th class="text-end">Em Aberto</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in relatorios.pagamentosEmAberto" :key="p.age_id">
+                  <td>#{{ p.age_id }}</td>
+                  <td>{{ p.cli_nome }}</td>
+                  <td>{{ new Date(p.age_data).toLocaleDateString('pt-BR') }}</td>
+                  <td class="text-end">{{ formatValor(p.valorCobrado) }}</td>
+                  <td class="text-end text-success">{{ formatValor(p.valorRecebido) }}</td>
+                  <td class="text-end font-weight-bold text-warning">
+                    {{ formatValor(p.valorEmAberto) }}
+                  </td>
+                </tr>
+              </tbody>
+            </VTable>
+          </div>
+        </VCardText>
+      </VCard>
     </VCol>
   </VRow>
 

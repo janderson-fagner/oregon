@@ -20,12 +20,12 @@ const dbQuery = require('../utils/dbHelper');
 const { empresaWhere } = require('../utils/dbHelper');
 
 const statusNomes = [
-    { ast_id: 3, ast_descricao: 'Atendido' },
-    { ast_id: 6, ast_descricao: 'Cancelado' },
-    { ast_id: 7, ast_descricao: 'Remarcado' },
     { ast_id: 1, ast_descricao: 'Agendado' },
     { ast_id: 2, ast_descricao: 'Confirmado' },
-    { ast_id: 3, ast_descricao: 'Atendido' }
+    { ast_id: 3, ast_descricao: 'Atendido' },
+    { ast_id: 4, ast_descricao: 'Pago' },
+    { ast_id: 6, ast_descricao: 'Cancelado' },
+    { ast_id: 7, ast_descricao: 'Remarcado' }
 ]
 
 router.get('/get/financeiro', async (req, res) => {
@@ -49,12 +49,13 @@ router.get('/get/financeiro', async (req, res) => {
                 AGENDAMENTO.age_data,
                 AGENDAMENTO.age_valor,
                 AGENDAMENTO.age_desconto,
+                AGENDAMENTO.age_fonte,
                 AGENDAMENTO.cli_id,
                 AGENDAMENTO.ast_id,
                 CLIENTES.cli_nome
             FROM PAGAMENTO
             JOIN AGENDAMENTO ON PAGAMENTO.age_id = AGENDAMENTO.age_id
-            JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
+            LEFT JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
             WHERE AGENDAMENTO.ast_id = 3
             AND AGENDAMENTO.age_ativo = 1
             AND PAGAMENTO.empresa_id = ${empresa_id}
@@ -134,9 +135,16 @@ router.get('/get/financeiro', async (req, res) => {
         const despesas = await dbQuery(queryDespesas);
         const comissoes = await dbQuery(queryComissoes);
 
+        // Cache de FORMAS_PAGAMENTO (evita N+1 queries dentro do loop de pagamentos)
+        const formasPagamentoRows = await dbQuery('SELECT fpg_id, fpg_descricao FROM FORMAS_PAGAMENTO WHERE empresa_id = ?', [empresa_id]);
+        const formasPagamentoCache = {};
+        for (const fp of formasPagamentoRows) formasPagamentoCache[fp.fpg_id] = fp.fpg_descricao;
+
         // ==========================
         // 2. PROCESSAR PAGAMENTOS (RECEITAS)
         // ==========================
+        // Importante: gráfico de evolução é agrupado pela age_data (mesma data do filtro),
+        // garantindo que a soma das colunas do gráfico bata com o total recebido do período.
 
         let totalReceitaBruta = 0;
         let totalReceitaRecebida = 0;
@@ -146,7 +154,8 @@ router.get('/get/financeiro', async (req, res) => {
 
         const formasPagamentoMap = {};
         const receitaPorDia = {};
-        const topClientes = {};
+        const topClientes = {}; // key = cli_id, value = { cli_id, cli_nome, valor }
+        const receitaPorFonte = {}; // key normalizada, value = { fonte, valor }
 
         // Mapa para evitar contagem duplicada do mesmo agendamento
         const agendamentoMap = {};
@@ -175,8 +184,7 @@ router.get('/get/financeiro', async (req, res) => {
                     valorPagoPagamento += parseFloat(pag.pgt_valor || 0);
                 }
 
-                const forma = await dbQuery(`SELECT * FROM FORMAS_PAGAMENTO WHERE fpg_id = ? AND empresa_id = ?`, [pag.fpg_id, empresa_id]);
-                const formaDesc = forma.length > 0 ? forma[0].fpg_descricao : 'Dinheiro';
+                const formaDesc = formasPagamentoCache[pag.fpg_id] || 'Dinheiro';
                 fpg_names.push(formaDesc);
 
                 if (pagamento.pgt_data) {
@@ -190,12 +198,30 @@ router.get('/get/financeiro', async (req, res) => {
             if (pagamento.pgt_data) {
                 agendamentoMap[ageId].valorPago += valorPagoPagamento;
 
-                // Agrupar por dia (data do pagamento)
-                const dia = moment(pagamento.pgt_data).format('YYYY-MM-DD');
+                // Agrupar por age_data (consistente com o filtro do período) — garante que a soma do gráfico = total recebido
+                const dia = moment(pagamento.age_data).format('YYYY-MM-DD');
                 receitaPorDia[dia] = (receitaPorDia[dia] || 0) + valorPagoPagamento;
 
-                // Top clientes
-                topClientes[pagamento.cli_nome] = (topClientes[pagamento.cli_nome] || 0) + valorPagoPagamento;
+                // Top clientes — agrupado por cli_id (evita duplicar clientes com mesmo nome)
+                if (pagamento.cli_id) {
+                    if (!topClientes[pagamento.cli_id]) {
+                        topClientes[pagamento.cli_id] = {
+                            cli_id: pagamento.cli_id,
+                            cli_nome: pagamento.cli_nome || 'Sem nome',
+                            valor: 0
+                        };
+                    }
+                    topClientes[pagamento.cli_id].valor += valorPagoPagamento;
+                }
+
+                // Receita por fonte — chave normalizada (case/space-insensitive)
+                const fonteOriginal = (pagamento.age_fonte || '').trim();
+                const fonteExibicao = fonteOriginal || 'Outros';
+                const fonteKey = fonteOriginal.toLowerCase() || '__outros__';
+                if (!receitaPorFonte[fonteKey]) {
+                    receitaPorFonte[fonteKey] = { fonte: fonteExibicao, valor: 0 };
+                }
+                receitaPorFonte[fonteKey].valor += valorPagoPagamento;
             }
         }
 
@@ -212,7 +238,8 @@ router.get('/get/financeiro', async (req, res) => {
             }
         }
 
-        // Consolidacao por agendamento (evita duplicidade)
+        // Consolidacao por agendamento (evita duplicidade) + monta lista de pagamentos em aberto
+        const pagamentosEmAberto = [];
         for (const agendamento of Object.values(agendamentoMap)) {
             totalReceitaBruta += agendamento.valorAgendamento;
             totalReceitaRecebida += agendamento.valorPago;
@@ -226,12 +253,49 @@ router.get('/get/financeiro', async (req, res) => {
                 quantidadePagamentosRecebidos++;
             } else {
                 quantidadePagamentosPendentes++;
+                pagamentosEmAberto.push({
+                    age_id: agendamento.age_id,
+                    cli_nome: agendamento.cli_nome || 'Sem nome',
+                    age_data: agendamento.age_data,
+                    valorCobrado: parseFloat(agendamento.valorAgendamento.toFixed(2)),
+                    valorRecebido: parseFloat(agendamento.valorPago.toFixed(2)),
+                    valorEmAberto: parseFloat(pendente.toFixed(2))
+                });
             }
         }
+        pagamentosEmAberto.sort((a, b) => b.valorEmAberto - a.valorEmAberto);
 
         // ==========================
         // 2.1. PROCESSAR AGENDAMENTOS FUTUROS (RECEITA FUTURA)
         // ==========================
+        //
+        // Receita futura realista: aplica taxa de cancelamento histórica (últimos 90 dias)
+        // sobre Agendado/Confirmado, gerando um intervalo Otimista (cheio) → Realista (descontado).
+
+        // Calcular taxa de cancelamento histórica (últimos 90 dias, anteriores ao período do relatório)
+        let taxaCancelamentoHistorica = 0;
+        try {
+            const refDate = dataDe ? moment(dataDe) : moment();
+            const desde = refDate.clone().subtract(90, 'days').format('YYYY-MM-DD');
+            const ate = refDate.clone().subtract(1, 'days').format('YYYY-MM-DD');
+            const totaisHist = await dbQuery(`
+                SELECT
+                  SUM(CASE WHEN ast_id = 3 THEN 1 ELSE 0 END) AS atendidos,
+                  SUM(CASE WHEN ast_id = 6 THEN 1 ELSE 0 END) AS cancelados
+                FROM AGENDAMENTO
+                WHERE empresa_id = ? AND age_ativo = 1
+                  AND age_data BETWEEN ? AND ?
+                  AND (age_type IS NULL OR age_type != 'bloqueio')
+            `, [empresa_id, desde, ate]);
+            const atendidosH = parseInt(totaisHist[0]?.atendidos || 0, 10);
+            const canceladosH = parseInt(totaisHist[0]?.cancelados || 0, 10);
+            const totalDecididos = atendidosH + canceladosH;
+            if (totalDecididos > 0) {
+                taxaCancelamentoHistorica = canceladosH / totalDecididos;
+            }
+        } catch (e) {
+            console.error('Erro ao calcular taxa de cancelamento historica:', e);
+        }
 
         let totalReceitaFutura = 0;
         let quantidadeAgendamentosFuturos = 0;
@@ -249,6 +313,10 @@ router.get('/get/financeiro', async (req, res) => {
                 quantidadeConfirmados++;
             }
         }
+
+        const totalReceitaFuturaRealista = parseFloat(
+            (totalReceitaFutura * (1 - taxaCancelamentoHistorica)).toFixed(2)
+        );
 
         // ==========================
         // 3. PROCESSAR DESPESAS
@@ -272,7 +340,8 @@ router.get('/get/financeiro', async (req, res) => {
                 totalDespesasPagas += valor;
                 quantidadeDespesasPagas++;
 
-                const dia = moment(despesa.des_paga_data || despesa.des_data).format('YYYY-MM-DD');
+                // Agrupar por des_data (consistente com o filtro do período) — garante soma do gráfico = total
+                const dia = moment(despesa.des_data).format('YYYY-MM-DD');
                 despesasPorDia[dia] = (despesasPorDia[dia] || 0) + valor;
 
                 // Agrupar por forma de pagamento
@@ -283,15 +352,17 @@ router.get('/get/financeiro', async (req, res) => {
                 quantidadeDespesasPendentes++;
             }
 
-            // Agrupar por tipo
-            const tipo = despesa.des_tipo || 'Outros';
-            if (!despesasPorTipo[tipo]) {
-                despesasPorTipo[tipo] = { quantidade: 0, valor: 0, valorPago: 0 };
+            // Agrupar por tipo (chave normalizada — consolida variações como "Gasolina" vs "gasolina")
+            const tipoOriginal = (despesa.des_tipo || '').trim();
+            const tipoExibicao = tipoOriginal || 'Outros';
+            const tipoKey = tipoOriginal.toLowerCase() || '__outros__';
+            if (!despesasPorTipo[tipoKey]) {
+                despesasPorTipo[tipoKey] = { tipo: tipoExibicao, quantidade: 0, valor: 0, valorPago: 0 };
             }
-            despesasPorTipo[tipo].quantidade++;
-            despesasPorTipo[tipo].valor += valor;
+            despesasPorTipo[tipoKey].quantidade++;
+            despesasPorTipo[tipoKey].valor += valor;
             if (despesa.des_pago) {
-                despesasPorTipo[tipo].valorPago += valor;
+                despesasPorTipo[tipoKey].valorPago += valor;
             }
         }
 
@@ -315,7 +386,8 @@ router.get('/get/financeiro', async (req, res) => {
                 totalComissoesPagas += valor;
                 quantidadeComissoesPagas++;
 
-                const dia = moment(comissao.com_paga_data || comissao.age_data).format('YYYY-MM-DD');
+                // Agrupar por age_data (consistente com o filtro do período)
+                const dia = moment(comissao.age_data).format('YYYY-MM-DD');
                 comissoesPorDia[dia] = (comissoesPorDia[dia] || 0) + valor;
             } else {
                 totalComissoesPendentes += valor;
@@ -331,8 +403,10 @@ router.get('/get/financeiro', async (req, res) => {
         totalReceitaBruta = parseFloat(totalReceitaBruta.toFixed(2));
         totalReceitaRecebida = parseFloat(totalReceitaRecebida.toFixed(2));
         totalReceitaPendente = parseFloat(totalReceitaPendente.toFixed(2));
+        totalDespesas = parseFloat(totalDespesas.toFixed(2));
         totalDespesasPagas = parseFloat(totalDespesasPagas.toFixed(2));
         totalDespesasPendentes = parseFloat(totalDespesasPendentes.toFixed(2));
+        totalComissoes = parseFloat(totalComissoes.toFixed(2));
         totalComissoesPagas = parseFloat(totalComissoesPagas.toFixed(2));
         totalComissoesPendentes = parseFloat(totalComissoesPendentes.toFixed(2));
 
@@ -377,10 +451,13 @@ router.get('/get/financeiro', async (req, res) => {
         // 7. TOP CLIENTES
         // ==========================
 
-        const topClientesArray = Object.keys(topClientes)
-            .map(nome => ({ nome, valor: topClientes[nome] }))
+        const topClientesArray = Object.values(topClientes)
+            .map(c => ({ cli_id: c.cli_id, nome: c.cli_nome, valor: c.valor }))
             .sort((a, b) => b.valor - a.valor)
             .slice(0, 10);
+
+        const receitaPorFonteArray = Object.values(receitaPorFonte)
+            .sort((a, b) => b.valor - a.valor);
 
         // ==========================
         // 8. FORMAS DE PAGAMENTO
@@ -395,13 +472,7 @@ router.get('/get/financeiro', async (req, res) => {
         // 9. TIPOS DE DESPESAS
         // ==========================
 
-        const tiposDespesasArray = Object.keys(despesasPorTipo)
-            .map(tipo => ({
-                tipo,
-                quantidade: despesasPorTipo[tipo].quantidade,
-                valor: despesasPorTipo[tipo].valor,
-                valorPago: despesasPorTipo[tipo].valorPago
-            }))
+        const tiposDespesasArray = Object.values(despesasPorTipo)
             .filter(item => item.tipo && item.tipo !== 'null')
             .sort((a, b) => b.valor - a.valor);
 
@@ -433,6 +504,7 @@ router.get('/get/financeiro', async (req, res) => {
 
         const ultimasDespesas = despesas
             .filter(d => d.des_pago)
+            .sort((a, b) => new Date(b.des_paga_data || b.des_data) - new Date(a.des_paga_data || a.des_data))
             .slice(0, 10)
             .map(d => ({
                 des_id: d.des_id,
@@ -454,6 +526,8 @@ router.get('/get/financeiro', async (req, res) => {
                 totalReceitaRecebida,
                 totalReceitaPendente,
                 totalReceitaFutura,
+                totalReceitaFuturaRealista,
+                taxaCancelamentoHistorica: parseFloat((taxaCancelamentoHistorica * 100).toFixed(2)),
                 totalDespesas,
                 totalDespesasPagas,
                 totalDespesasPendentes,
@@ -493,6 +567,9 @@ router.get('/get/financeiro', async (req, res) => {
             // Top Clientes
             topClientes: topClientesArray,
 
+            // Receita por Fonte (de onde vem o dinheiro)
+            receitaPorFonte: receitaPorFonteArray,
+
             // Formas de Pagamento (Recebimentos)
             formasPagamento: formasPagamentoArray,
 
@@ -505,6 +582,9 @@ router.get('/get/financeiro', async (req, res) => {
             // Ultimos Registros
             ultimosRecebimentos,
             ultimasDespesas,
+
+            // Pagamentos em aberto (agendamentos atendidos cujo pagamento ainda nao foi quitado)
+            pagamentosEmAberto,
 
             // Dados Completos (para referencia)
             dadosCompletos: {
@@ -538,6 +618,8 @@ router.get('/get/comissoes', async (req, res) => {
         // 1. BUSCAR COMISSOES
         // ==========================
 
+        // Filtro por AGENDAMENTO.age_data (consistente com o relatorio financeiro)
+        // LEFT JOIN CLIENTES garante que comissões cujo cliente foi excluído ainda apareçam.
         let query = `SELECT
                         COMISSOES.*,
                         User.fullName,
@@ -548,20 +630,18 @@ router.get('/get/comissoes', async (req, res) => {
                     FROM COMISSOES
                     JOIN User ON COMISSOES.fun_id = User.id
                     JOIN AGENDAMENTO ON COMISSOES.age_id = AGENDAMENTO.age_id
-                    JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_id
+                    LEFT JOIN CLIENTES ON AGENDAMENTO.cli_id = CLIENTES.cli_Id
                     WHERE 1 = 1 AND COMISSOES.empresa_id = ${empresa_id}`;
 
         if (dataDe) {
-            const formattedDataDe = new Date(dataDe).toISOString().split('T')[0];
-            query += ` AND DATE(COMISSOES.created_at) >= '${formattedDataDe}'`;
+            query += ` AND AGENDAMENTO.age_data >= '${dataDe}'`;
         }
 
         if (dataAte) {
-            const formattedDataAte = new Date(dataAte).toISOString().split('T')[0];
-            query += ` AND DATE(COMISSOES.created_at) <= '${formattedDataAte}'`;
+            query += ` AND AGENDAMENTO.age_data <= '${dataAte}'`;
         }
 
-        query += ` ORDER BY COMISSOES.created_at DESC`;
+        query += ` ORDER BY AGENDAMENTO.age_data DESC`;
 
         const comissoes = await dbQuery(query);
         const funcionarios = await dbQuery('SELECT * FROM User WHERE (role = "tecnico" OR role = "tecnico-senior") AND empresa_id = ?', [empresa_id]);
@@ -622,8 +702,8 @@ router.get('/get/comissoes', async (req, res) => {
                 comissoesPorFuncionario[comissao.fullName].valorPago += valor;
                 comissoesPorFuncionario[comissao.fullName].valorPagoQtd++;
 
-                // Agrupar por dia usando created_at ou com_paga_data
-                const dia = moment(comissao.com_paga_data || comissao.created_at).format('YYYY-MM-DD');
+                // Agrupar por age_data (consistente com filtro do período)
+                const dia = moment(comissao.age_data).format('YYYY-MM-DD');
                 comissoesPorDia[dia] = (comissoesPorDia[dia] || 0) + valor;
 
                 // Formas de pagamento
@@ -836,59 +916,90 @@ router.get('/get/servicos', async (req, res) => {
         const statusAgendamentos = await dbQuery('SELECT * FROM AGENDAMENTO_STATUS');
 
         // ==========================
-        // 1.5 BUSCAR PAGAMENTOS EFETIVOS POR AGENDAMENTO (mesma logica do financeiro)
+        // 1.5 BUSCAR PAGAMENTOS EFETIVOS POR AGENDAMENTO (usado para calcular valorRecebido)
         // ==========================
 
         const pagamentosPorAgendamento = {};
-
-        // Buscar todos os pagamentos dos agendamentos de uma vez
-        const queryPagamentosEfetivos = `
-            SELECT age_id, pgt_json
-            FROM PAGAMENTO
-            WHERE age_id IN (${ageIds.join(',')})
-            AND pgt_data IS NOT NULL
-            AND empresa_id = ${empresa_id}
-        `;
-
-        const pagamentosEfetivos = await dbQuery(queryPagamentosEfetivos);
-
-        for (const pgt of pagamentosEfetivos) {
-            const pgtJson = pgt.pgt_json ? JSON.parse(pgt.pgt_json) : [];
-            let valorPago = 0;
-            for (const item of pgtJson) {
-                valorPago += parseFloat(item.pgt_valor || 0);
+        if (ageIds.length > 0) {
+            const pagamentosEfetivos = await dbQuery(`
+                SELECT age_id, pgt_json FROM PAGAMENTO
+                WHERE age_id IN (${ageIds.join(',')}) AND pgt_data IS NOT NULL AND empresa_id = ?
+            `, [empresa_id]);
+            for (const pgt of pagamentosEfetivos) {
+                const pgtJson = pgt.pgt_json ? JSON.parse(pgt.pgt_json) : [];
+                let valorPago = 0;
+                for (const item of pgtJson) valorPago += parseFloat(item.pgt_valor || 0);
+                pagamentosPorAgendamento[pgt.age_id] = (pagamentosPorAgendamento[pgt.age_id] || 0) + valorPago;
             }
-
-            pagamentosPorAgendamento[pgt.age_id] = (pagamentosPorAgendamento[pgt.age_id] || 0) + valorPago;
         }
 
         // ==========================
         // 2. AGREGAR DADOS POR SERVICO (PAI + SUBS + LEGACY)
         // ==========================
+        // Regras (definidas pelo cliente):
+        //  - "quantidade" em servicosPai, servicosPorData, servicosPorFuncionario
+        //     = numero de ATENDIMENTOS DISTINTOS (nao soma de itens). Usar Sets de age_id.
+        //  - "quantidade" em subservicosDetalhados = soma de itens (qty do AXS).
+        //  - "valorTotal" = valor CADASTRADO no agendamento (ser_valor * qty do AXS).
+        //  - "valorRecebido" = parcela do valor pago (pgt_json) atribuida ao servico,
+        //     proporcional ao peso do servico no valor cobrado do agendamento.
+        //     SUM(valorRecebido) por todos os servicos = total recebido (bate com Financeiro).
+        // ==========================
+
+        // Pre-cache de nomes de SERVICOS_NEW pais para evitar N+1 queries dentro do loop
+        const paiIdsNecessarios = new Set();
+        for (const agendamento of agendamentos) {
+            for (const servico of (agendamento.servicos || [])) {
+                if (servico.isSub && servico.ser_pai_id) paiIdsNecessarios.add(servico.ser_pai_id);
+            }
+        }
+        const servicosNewMap = {};
+        if (paiIdsNecessarios.size > 0) {
+            const rows = await dbQuery(
+                `SELECT ser_id, ser_nome FROM SERVICOS_NEW WHERE ser_id IN (${[...paiIdsNecessarios].join(',')}) AND empresa_id = ?`,
+                [empresa_id]
+            );
+            for (const r of rows) servicosNewMap[r.ser_id] = r.ser_nome;
+        }
 
         let servicosPaiMap = {}; // Servicos PAI (com subs somados)
         let subsDetalhados = {}; // Subservicos detalhados
         let servicosPorData = {}; // Para evolucao temporal
         let servicosPorFuncionario = {}; // Para tabela de tecnicos
+        let servicosPorFonte = {}; // Pai+Fonte cruzados: "Estofados via Instagram"
+        let fontesGerais = {};   // Resumo por fonte (no relatorio de servicos)
 
-        let totalServicosRealizados = 0; // Quantidade: todos os status
-        let totalValorGerado = 0; // Valor: apenas atendidos com pagamentos efetivos
+        let totalValorGerado = 0; // Valor COBRADO (cadastro do servico no agendamento)
+        let totalValorRecebido = 0; // Valor RECEBIDO (pagamento proporcional)
+
+        // Sets para contagem de atendimentos DISTINTOS por agrupador
+        const ageIdsPorPai = {};                  // ser_pai_key -> Set(age_id)
+        const ageIdsPorData = {};                 // ageData -> Set(age_id)
+        const ageIdsPorFuncionario = {};          // funId -> Set(age_id)
+        const ageIdsPorFuncionarioServico = {};   // `${funId}_${ser_pai_key}` -> Set(age_id)
+        const ageIdsPorServicoFonte = {};         // `${ser_pai_key}__${fonteKey}` -> Set(age_id)
+        const ageIdsPorFonteGeral = {};           // fonteKey -> Set(age_id)
+        const totalAtendimentosSet = new Set();   // age_id distintos no relatorio
 
         for (const agendamento of agendamentos) {
             const ageData = moment(agendamento.age_data).format('YYYY-MM-DD');
+            const ageId = agendamento.age_id;
             const astId = agendamento.ast_id;
             const funId = agendamento.fun_id;
             const statusDescricao = statusAgendamentos.find(s => s.ast_id === astId)?.ast_descricao || 'Desconhecido';
 
-            // Valor efetivamente pago do agendamento - mesma logica do financeiro (totalReceitaRecebida)
-            const valorAgendamento = pagamentosPorAgendamento[agendamento.age_id] || 0;
+            // Fonte do atendimento (normalizada)
+            const fonteOriginal = (agendamento.age_fonte || '').trim();
+            const fonteExibicao = fonteOriginal || 'Outros';
+            const fonteKey = fonteOriginal.toLowerCase() || '__outros__';
 
-            // Calcular valor total dos servicos para distribuir proporcionalmente
-            let valorTotalServicos = 0;
+            totalAtendimentosSet.add(ageId);
+
+            // Pre-calculo de cobrado/pago no agendamento (para distribuir valorRecebido)
+            const valorPagoAgendamento = pagamentosPorAgendamento[ageId] || 0;
+            let valorCobradoAgendamento = 0;
             for (const s of agendamento.servicos) {
-                const sValor = parseFloat(s.ser_valor || 0);
-                const sQtd = s.ser_quantity || 1;
-                valorTotalServicos += sValor * sQtd;
+                valorCobradoAgendamento += parseFloat(s.ser_valor || 0) * (s.ser_quantity || 1);
             }
 
             // Processar cada servico do agendamento
@@ -896,14 +1007,17 @@ router.get('/get/servicos', async (req, res) => {
                 const serNome = servico.ser_nome || 'Sem nome';
                 const serValor = parseFloat(servico.ser_valor || 0);
                 const serQuantity = servico.ser_quantity || 1;
-                const serValorTeoricoTotal = serValor * serQuantity;
 
-                // Calcular valor proporcional do servico com base no valor do agendamento
-                let serValorTotal = 0;
-                if (valorTotalServicos > 0) {
-                    serValorTotal = (serValorTeoricoTotal / valorTotalServicos) * valorAgendamento;
-                } else if (valorAgendamento > 0 && agendamento.servicos.length > 0) {
-                    serValorTotal = valorAgendamento / agendamento.servicos.length;
+                // Valor CADASTRADO do servico no agendamento (ser_valor * qty do AXS).
+                // Pode divergir do recebido quando ha desconto/parcial/gorjeta.
+                const serValorTotal = serValor * serQuantity;
+
+                // Valor RECEBIDO proporcional (mesma logica que o relatorio Financeiro usa para o total)
+                let serValorRecebido = 0;
+                if (valorCobradoAgendamento > 0) {
+                    serValorRecebido = (serValorTotal / valorCobradoAgendamento) * valorPagoAgendamento;
+                } else if (valorPagoAgendamento > 0 && agendamento.servicos.length > 0) {
+                    serValorRecebido = valorPagoAgendamento / agendamento.servicos.length;
                 }
 
                 const isOld = servico.isOld || false;
@@ -911,32 +1025,18 @@ router.get('/get/servicos', async (req, res) => {
                 const serPaiId = servico.ser_pai_id || servico.ser_id;
 
                 // Determinar a chave do servico PAI
-                let ser_pai_key;
-                if (isOld) {
-                    ser_pai_key = `old_${servico.ser_id}`;
-                } else {
-                    ser_pai_key = `new_${serPaiId}`;
-                }
+                const ser_pai_key = isOld ? `old_${servico.ser_id}` : `new_${serPaiId}`;
 
-                // Quantidade: sempre soma
-                totalServicosRealizados += serQuantity;
-
-                // Valor: soma o valor pago proporcional
                 totalValorGerado += serValorTotal;
+                totalValorRecebido += serValorRecebido;
+
+                // Resolver nome do PAI via cache (sem N+1 queries)
+                const nomePai = (isSub && serPaiId && servicosNewMap[serPaiId]) ? servicosNewMap[serPaiId] : serNome;
 
                 // ==========================
                 // 2.1 Agregar por SERVICO PAI (inclui subs)
                 // ==========================
                 if (!servicosPaiMap[ser_pai_key]) {
-                    // Buscar nome do PAI se for sub
-                    let nomePai = serNome;
-                    if (isSub && serPaiId) {
-                        const paiQuery = await dbQuery('SELECT ser_nome FROM SERVICOS_NEW WHERE ser_id = ?', [serPaiId]);
-                        if (paiQuery.length > 0) {
-                            nomePai = paiQuery[0].ser_nome;
-                        }
-                    }
-
                     servicosPaiMap[ser_pai_key] = {
                         ser_id: serPaiId,
                         ser_nome: nomePai,
@@ -944,24 +1044,28 @@ router.get('/get/servicos', async (req, res) => {
                         isOld: isOld,
                         quantidade: 0,
                         valorTotal: 0,
+                        valorRecebido: 0,
                         statusCount: {},
                         agendamentos: []
                     };
-
-                    // Inicializar contadores de status
                     for (const status of statusAgendamentos) {
                         servicosPaiMap[ser_pai_key].statusCount[status.ast_descricao] = 0;
                     }
+                    ageIdsPorPai[ser_pai_key] = new Set();
                 }
 
-                // Somar quantidade e valor ao PAI (inclui subs)
-                servicosPaiMap[ser_pai_key].quantidade += serQuantity;
                 servicosPaiMap[ser_pai_key].valorTotal += serValorTotal;
-                servicosPaiMap[ser_pai_key].statusCount[statusDescricao] =
-                    (servicosPaiMap[ser_pai_key].statusCount[statusDescricao] || 0) + serQuantity;
+                servicosPaiMap[ser_pai_key].valorRecebido += serValorRecebido;
+
+                // statusCount conta ATENDIMENTOS distintos por status
+                if (!ageIdsPorPai[ser_pai_key].has(ageId)) {
+                    servicosPaiMap[ser_pai_key].statusCount[statusDescricao] =
+                        (servicosPaiMap[ser_pai_key].statusCount[statusDescricao] || 0) + 1;
+                }
+                ageIdsPorPai[ser_pai_key].add(ageId);
 
                 // ==========================
-                // 2.2 Agregar SUBSERVICOS detalhados (apenas subs)
+                // 2.2 Agregar SUBSERVICOS detalhados (apenas subs) - conta ITENS
                 // ==========================
                 if (isSub && servico.ser_sub_id) {
                     const sub_key = `sub_${servico.ser_sub_id}`;
@@ -974,10 +1078,9 @@ router.get('/get/servicos', async (req, res) => {
                             ser_descricao: servico.ser_descricao || '',
                             quantidade: 0,
                             valorTotal: 0,
+                            valorRecebido: 0,
                             statusCount: {}
                         };
-
-                        // Inicializar contadores de status
                         for (const status of statusAgendamentos) {
                             subsDetalhados[sub_key].statusCount[status.ast_descricao] = 0;
                         }
@@ -985,29 +1088,24 @@ router.get('/get/servicos', async (req, res) => {
 
                     subsDetalhados[sub_key].quantidade += serQuantity;
                     subsDetalhados[sub_key].valorTotal += serValorTotal;
+                    subsDetalhados[sub_key].valorRecebido += serValorRecebido;
                     subsDetalhados[sub_key].statusCount[statusDescricao] =
                         (subsDetalhados[sub_key].statusCount[statusDescricao] || 0) + serQuantity;
                 }
 
                 // ==========================
-                // 2.3 Agregar por data (evolucao)
+                // 2.3 Agregar por data (evolucao) - ATENDIMENTOS distintos
                 // ==========================
                 if (!servicosPorData[ageData]) {
-                    servicosPorData[ageData] = {
-                        data: ageData,
-                        quantidade: 0,
-                        valorTotal: 0
-                    };
+                    servicosPorData[ageData] = { data: ageData, quantidade: 0, valorTotal: 0, valorRecebido: 0 };
+                    ageIdsPorData[ageData] = new Set();
                 }
-
-                // Quantidade: sempre soma
-                servicosPorData[ageData].quantidade += serQuantity;
-
-                // Valor: soma o valor pago proporcional
                 servicosPorData[ageData].valorTotal += serValorTotal;
+                servicosPorData[ageData].valorRecebido += serValorRecebido;
+                ageIdsPorData[ageData].add(ageId);
 
                 // ==========================
-                // 2.4 Agregar por funcionario
+                // 2.4 Agregar por funcionario - ATENDIMENTOS distintos
                 // ==========================
                 if (!servicosPorFuncionario[funId]) {
                     const funcionario = funcionarios.find(f => f.id === funId);
@@ -1017,57 +1115,106 @@ router.get('/get/servicos', async (req, res) => {
                         servicosRealizados: {},
                         quantidadeTotal: 0,
                         valorTotal: 0,
+                        valorRecebido: 0,
                         statusCount: {}
                     };
-
-                    // Inicializar contadores de status
                     for (const status of statusAgendamentos) {
                         servicosPorFuncionario[funId].statusCount[status.ast_descricao] = 0;
                     }
+                    ageIdsPorFuncionario[funId] = new Set();
                 }
 
-                // Usar a chave do PAI para funcionarios tambem
-                if (!servicosPorFuncionario[funId].servicosRealizados[ser_pai_key]) {
-                    // Buscar nome do PAI
-                    let nomePai = serNome;
-                    if (isSub && serPaiId) {
-                        const paiQuery = await dbQuery('SELECT ser_nome FROM SERVICOS_NEW WHERE ser_id = ?', [serPaiId]);
-                        if (paiQuery.length > 0) {
-                            nomePai = paiQuery[0].ser_nome;
-                        }
-                    }
+                const funServicoKey = `${funId}_${ser_pai_key}`;
 
+                if (!servicosPorFuncionario[funId].servicosRealizados[ser_pai_key]) {
                     servicosPorFuncionario[funId].servicosRealizados[ser_pai_key] = {
                         ser_nome: nomePai,
                         quantidade: 0,
                         valorTotal: 0,
+                        valorRecebido: 0,
                         statusCount: {}
                     };
-
-                    // Inicializar contadores de status para este servico
                     for (const status of statusAgendamentos) {
                         servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[status.ast_descricao] = 0;
                     }
+                    ageIdsPorFuncionarioServico[funServicoKey] = new Set();
                 }
 
-                // Quantidade: sempre soma
-                servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].quantidade += serQuantity;
-
-                // Valor: soma o valor pago proporcional
                 servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].valorTotal += serValorTotal;
+                servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].valorRecebido += serValorRecebido;
 
-                servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[statusDescricao] =
-                    (servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[statusDescricao] || 0) + serQuantity;
+                if (!ageIdsPorFuncionarioServico[funServicoKey].has(ageId)) {
+                    servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[statusDescricao] =
+                        (servicosPorFuncionario[funId].servicosRealizados[ser_pai_key].statusCount[statusDescricao] || 0) + 1;
+                }
+                ageIdsPorFuncionarioServico[funServicoKey].add(ageId);
 
-                // Quantidade: sempre soma
-                servicosPorFuncionario[funId].quantidadeTotal += serQuantity;
-
-                // Valor: soma o valor pago proporcional
                 servicosPorFuncionario[funId].valorTotal += serValorTotal;
+                servicosPorFuncionario[funId].valorRecebido += serValorRecebido;
 
-                servicosPorFuncionario[funId].statusCount[statusDescricao] =
-                    (servicosPorFuncionario[funId].statusCount[statusDescricao] || 0) + serQuantity;
+                if (!ageIdsPorFuncionario[funId].has(ageId)) {
+                    servicosPorFuncionario[funId].statusCount[statusDescricao] =
+                        (servicosPorFuncionario[funId].statusCount[statusDescricao] || 0) + 1;
+                }
+                ageIdsPorFuncionario[funId].add(ageId);
+
+                // ==========================
+                // 2.5 Agregar por SERVICO PAI x FONTE
+                // ==========================
+                const servicoFonteKey = `${ser_pai_key}__${fonteKey}`;
+                if (!servicosPorFonte[servicoFonteKey]) {
+                    servicosPorFonte[servicoFonteKey] = {
+                        ser_id: serPaiId,
+                        ser_nome: nomePai,
+                        fonte: fonteExibicao,
+                        quantidade: 0,        // atendimentos distintos
+                        valorTotal: 0,        // cobrado
+                        valorRecebido: 0      // recebido proporcional
+                    };
+                    ageIdsPorServicoFonte[servicoFonteKey] = new Set();
+                }
+                servicosPorFonte[servicoFonteKey].valorTotal += serValorTotal;
+                servicosPorFonte[servicoFonteKey].valorRecebido += serValorRecebido;
+                ageIdsPorServicoFonte[servicoFonteKey].add(ageId);
+
+                // ==========================
+                // 2.6 Agregar por FONTE geral (resumo do relatorio de servicos)
+                // ==========================
+                if (!fontesGerais[fonteKey]) {
+                    fontesGerais[fonteKey] = {
+                        fonte: fonteExibicao,
+                        quantidade: 0,      // atendimentos distintos com aquela fonte
+                        valorTotal: 0,
+                        valorRecebido: 0
+                    };
+                    ageIdsPorFonteGeral[fonteKey] = new Set();
+                }
+                fontesGerais[fonteKey].valorTotal += serValorTotal;
+                fontesGerais[fonteKey].valorRecebido += serValorRecebido;
+                ageIdsPorFonteGeral[fonteKey].add(ageId);
             }
+        }
+
+        // Materializar contadores de ATENDIMENTOS distintos a partir dos Sets
+        const totalServicosRealizados = totalAtendimentosSet.size;
+        for (const key of Object.keys(servicosPaiMap)) {
+            servicosPaiMap[key].quantidade = ageIdsPorPai[key]?.size || 0;
+        }
+        for (const key of Object.keys(servicosPorData)) {
+            servicosPorData[key].quantidade = ageIdsPorData[key]?.size || 0;
+        }
+        for (const funId of Object.keys(servicosPorFuncionario)) {
+            servicosPorFuncionario[funId].quantidadeTotal = ageIdsPorFuncionario[funId]?.size || 0;
+            for (const sKey of Object.keys(servicosPorFuncionario[funId].servicosRealizados)) {
+                servicosPorFuncionario[funId].servicosRealizados[sKey].quantidade =
+                    ageIdsPorFuncionarioServico[`${funId}_${sKey}`]?.size || 0;
+            }
+        }
+        for (const key of Object.keys(servicosPorFonte)) {
+            servicosPorFonte[key].quantidade = ageIdsPorServicoFonte[key]?.size || 0;
+        }
+        for (const key of Object.keys(fontesGerais)) {
+            fontesGerais[key].quantidade = ageIdsPorFonteGeral[key]?.size || 0;
         }
 
         // ==========================
@@ -1093,6 +1240,7 @@ router.get('/get/servicos', async (req, res) => {
                         isOld: true,
                         quantidade: 0,
                         valorTotal: 0,
+                        valorRecebido: 0,
                         statusCount: {}
                     };
 
@@ -1110,6 +1258,7 @@ router.get('/get/servicos', async (req, res) => {
 
                 servicosConsolidados[keyLegacy].quantidade += servico.quantidade;
                 servicosConsolidados[keyLegacy].valorTotal += servico.valorTotal;
+                servicosConsolidados[keyLegacy].valorRecebido += servico.valorRecebido || 0;
             } else {
                 servicosConsolidados[key] = servico;
             }
@@ -1131,6 +1280,12 @@ router.get('/get/servicos', async (req, res) => {
         // Subservicos detalhados em array
         const subsDetalhadosArray = Object.values(subsDetalhados).sort((a, b) => b.quantidade - a.quantidade);
 
+        // Serviço x Fonte (matriz cruzada) e Fontes (resumo)
+        const servicosPorFonteArray = Object.values(servicosPorFonte)
+            .sort((a, b) => b.quantidade - a.quantidade);
+        const fontesGeraisArray = Object.values(fontesGerais)
+            .sort((a, b) => b.quantidade - a.quantidade);
+
         // 4.2 Preparar evolucao temporal
         const evolucaoServicos = Object.values(servicosPorData).sort((a, b) => new Date(a.data) - new Date(b.data));
 
@@ -1147,7 +1302,8 @@ router.get('/get/servicos', async (req, res) => {
         res.status(200).json({
             // Metricas gerais
             totalServicosRealizados,
-            totalValorGerado,
+            totalValorGerado,         // COBRADO
+            totalValorRecebido,        // RECEBIDO (proporcional aos pagamentos)
             ticketMedio,
             servicoMaisRealizado,
             servicoMaisLucrativo,
@@ -1159,6 +1315,10 @@ router.get('/get/servicos', async (req, res) => {
             servicosDetalhados: servicosArray,
             subservicosDetalhados: subsDetalhadosArray,
             servicosPorFuncionario: servicosPorFuncionarioArray,
+
+            // Origem dos atendimentos (cruzamento serviço × fonte)
+            servicosPorFonte: servicosPorFonteArray,
+            fontesGerais: fontesGeraisArray,
 
             // Dados auxiliares
             funcionarios,
@@ -1329,8 +1489,8 @@ router.get('/get/agendamentos', async (req, res) => {
             const isAtendido = agendamento.ast_id === 3;
             const isAgendadoOuConfirmado = agendamento.ast_id === 1 || agendamento.ast_id === 2;
             const isPago = valorPago > 0;
-            const funcionario = [funcionariosMap[agendamento.fun_id]] || null;
-            const funcionarioNome = funcionario ? funcionario?.fullName : null;
+            const funcionario = funcionariosMap[agendamento.fun_id] || null;
+            const funcionarioNome = funcionario?.fullName || null;
 
             agendamento.funcionario = funcionario;
 
@@ -1376,13 +1536,14 @@ router.get('/get/agendamentos', async (req, res) => {
                 }
             }
 
-            // Por bairro
+            // Por bairro (chave normalizada para consolidar variações de digitação)
             if (endereco && endereco.end_bairro) {
-                const bairroKey = endereco.end_bairro.trim();
+                const bairroOriginal = endereco.end_bairro.trim();
+                const bairroKey = bairroOriginal.toLowerCase();
 
                 if (!bairrosMap[bairroKey]) {
                     bairrosMap[bairroKey] = {
-                        bairro: bairroKey,
+                        bairro: bairroOriginal,
                         quantidade: 0,
                         valorRecebido: 0
                     };
@@ -1440,8 +1601,6 @@ router.get('/get/agendamentos', async (req, res) => {
                 const contratoKey = agendamento.age_contrato;
                 const contratoInfo = contratosInfoMap[contratoKey];
 
-                console.log("contratoInfo", contratosInfoMap);
-
                 if (!contratosMap[contratoKey]) {
                     contratosMap[contratoKey] = {
                         contrato: contratoKey,
@@ -1479,11 +1638,13 @@ router.get('/get/agendamentos', async (req, res) => {
                 statusMap[statusKey].valorFuturo += ageValor;
             }
 
-            // Por fonte (incluindo agendamentos sem fonte)
-            const fonteKey = agendamento.age_fonte || 'Sem fonte';
+            // Por fonte (chave normalizada para consolidar variações de digitação)
+            const fonteOriginal = (agendamento.age_fonte || '').trim();
+            const fonteExibicao = fonteOriginal || 'Outros';
+            const fonteKey = fonteOriginal.toLowerCase() || '__outros__';
             if (!fontesMap[fonteKey]) {
                 fontesMap[fonteKey] = {
-                    fonte: fonteKey,
+                    fonte: fonteExibicao,
                     quantidade: 0,
                     valorRecebido: 0,
                     valorFuturo: 0
@@ -1551,7 +1712,7 @@ router.get('/get/agendamentos', async (req, res) => {
                 totalValorRecebido,
                 totalValorPendente,
                 totalValorFuturo,
-                ticketMedio: totalAgendamentos > 0 ? totalValorRecebido / qtdAtendidos : 0,
+                ticketMedio: qtdAtendidos > 0 ? totalValorRecebido / qtdAtendidos : 0,
                 qtdAtendidos,
                 qtdConfirmados,
                 qtdCancelados,

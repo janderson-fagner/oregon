@@ -442,10 +442,10 @@ const setPeriodo = (tipo) => {
           <h3 class="text-h3 mt-4 mb-1">
             {{ formatValor(relatorios.totalValorGerado) }}
           </h3>
-          <p class="text-sm mb-0">Total de Serviços</p>
+          <p class="text-sm mb-0">Total Cobrado em Serviços</p>
 
           <div class="d-flex align-center mt-3 text-sm">
-            <span class="text-disabled">Realizados</span>
+            <span class="text-disabled">{{ relatorios.totalServicosRealizados }} atendimentos</span>
           </div>
         </VCardText>
       </VCard>
@@ -464,10 +464,10 @@ const setPeriodo = (tipo) => {
           <h3 class="text-h3 mt-4 mb-1">
             {{ formatValor(relatorios.ticketMedio) }}
           </h3>
-          <p class="text-sm mb-0">Ticket Médio</p>
+          <p class="text-sm mb-0">Ticket Médio Cobrado</p>
 
           <div class="d-flex align-center mt-3 text-sm">
-            <span class="text-disabled">Por Serviço</span>
+            <span class="text-disabled">Por Atendimento</span>
           </div>
         </VCardText>
       </VCard>
@@ -530,6 +530,27 @@ const setPeriodo = (tipo) => {
           </div>
         </VCardText>
       </VCard>
+    </VCol>
+  </VRow>
+
+  <!-- Nota: origem dos valores -->
+  <VRow class="mb-6" v-if="relatorios">
+    <VCol cols="12">
+      <VAlert
+        type="info"
+        variant="tonal"
+        density="comfortable"
+        icon="tabler-info-circle"
+      >
+        <div class="text-sm">
+          <strong>Sobre os valores:</strong> os valores exibidos neste relatório
+          referem-se ao <strong>cadastro do serviço no agendamento</strong>
+          (preço cobrado × quantidade). Eles podem diferir do valor efetivamente
+          recebido quando há descontos, pagamentos parciais, gorjetas ou
+          ajustes manuais. Para conferir o que entrou no caixa, consulte o
+          <strong>Relatório Financeiro</strong>.
+        </div>
+      </VAlert>
     </VCol>
   </VRow>
 
@@ -626,8 +647,9 @@ const setPeriodo = (tipo) => {
               >
                 <tr>
                   <th>Serviço</th>
-                  <th>Quantidade</th>
-                  <th>Valor Total</th>
+                  <th>Atendimentos</th>
+                  <th>Cobrado</th>
+                  <th>Recebido</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -659,8 +681,11 @@ const setPeriodo = (tipo) => {
                       {{ servico.quantidade }}
                     </VChip>
                   </td>
-                  <td class="font-weight-bold text-success">
+                  <td class="font-weight-bold">
                     {{ formatValor(servico.valorTotal) }}
+                  </td>
+                  <td class="font-weight-bold text-success">
+                    {{ formatValor(servico.valorRecebido || 0) }}
                   </td>
                   <td>
                     <div class="d-flex flex-wrap gap-1">
@@ -1034,6 +1059,95 @@ const setPeriodo = (tipo) => {
                 }}
               </p>
             </div>
+          </div>
+        </VCardText>
+      </VCard>
+    </VCol>
+  </VRow>
+
+  <!-- Origem dos Atendimentos - Resumo por Fonte -->
+  <VRow class="mb-6" v-if="relatorios && relatorios.fontesGerais && relatorios.fontesGerais.length > 0">
+    <VCol cols="12" md="5">
+      <VCard>
+        <VCardText>
+          <div class="d-flex justify-space-between align-center mb-4">
+            <div>
+              <h5 class="text-h5 mb-1">Origem dos Atendimentos</h5>
+              <p class="text-sm text-disabled mb-0">
+                Total por fonte
+              </p>
+            </div>
+            <VAvatar color="success" variant="tonal" rounded size="42">
+              <VIcon icon="tabler-arrow-down-right" size="28" />
+            </VAvatar>
+          </div>
+
+          <VTable density="compact" hover>
+            <thead>
+              <tr>
+                <th>Fonte</th>
+                <th class="text-end">Atend.</th>
+                <th class="text-end">Recebido</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="f in relatorios.fontesGerais" :key="f.fonte">
+                <td>{{ f.fonte }}</td>
+                <td class="text-end">
+                  <VChip color="success" size="x-small">{{ f.quantidade }}</VChip>
+                </td>
+                <td class="text-end font-weight-bold text-success">
+                  {{ formatValor(f.valorRecebido) }}
+                </td>
+              </tr>
+            </tbody>
+          </VTable>
+        </VCardText>
+      </VCard>
+    </VCol>
+
+    <!-- Cruzamento Serviço × Fonte -->
+    <VCol cols="12" md="7">
+      <VCard>
+        <VCardText>
+          <div class="d-flex justify-space-between align-center mb-4">
+            <div>
+              <h5 class="text-h5 mb-1">Serviço × Origem</h5>
+              <p class="text-sm text-disabled mb-0">
+                De onde vem cada categoria
+              </p>
+            </div>
+            <VAvatar color="info" variant="tonal" rounded size="42">
+              <VIcon icon="tabler-arrows-split" size="28" />
+            </VAvatar>
+          </div>
+
+          <div style="max-height: 420px; overflow-y: auto;">
+            <VTable density="compact" hover>
+              <thead style="position: sticky; top: 0; background: rgb(var(--v-theme-surface)); z-index: 1;">
+                <tr>
+                  <th>Serviço</th>
+                  <th>Origem</th>
+                  <th class="text-end">Atend.</th>
+                  <th class="text-end">Recebido</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="sf in relatorios.servicosPorFonte"
+                  :key="`${sf.ser_id}_${sf.fonte}`"
+                >
+                  <td>{{ sf.ser_nome }}</td>
+                  <td>
+                    <VChip size="x-small" color="primary" variant="tonal">{{ sf.fonte }}</VChip>
+                  </td>
+                  <td class="text-end">{{ sf.quantidade }}</td>
+                  <td class="text-end font-weight-bold text-success">
+                    {{ formatValor(sf.valorRecebido) }}
+                  </td>
+                </tr>
+              </tbody>
+            </VTable>
           </div>
         </VCardText>
       </VCard>
