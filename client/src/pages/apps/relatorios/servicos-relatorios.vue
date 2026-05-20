@@ -1065,56 +1065,16 @@ const setPeriodo = (tipo) => {
     </VCol>
   </VRow>
 
-  <!-- Origem dos Atendimentos - Resumo por Fonte -->
-  <VRow class="mb-6" v-if="relatorios && relatorios.fontesGerais && relatorios.fontesGerais.length > 0">
-    <VCol cols="12" md="5">
-      <VCard>
-        <VCardText>
-          <div class="d-flex justify-space-between align-center mb-4">
-            <div>
-              <h5 class="text-h5 mb-1">Origem dos Atendimentos</h5>
-              <p class="text-sm text-disabled mb-0">
-                Total por fonte
-              </p>
-            </div>
-            <VAvatar color="success" variant="tonal" rounded size="42">
-              <VIcon icon="tabler-arrow-down-right" size="28" />
-            </VAvatar>
-          </div>
-
-          <VTable density="compact" hover>
-            <thead>
-              <tr>
-                <th>Fonte</th>
-                <th class="text-end">Atend.</th>
-                <th class="text-end">Recebido</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="f in relatorios.fontesGerais" :key="f.fonte">
-                <td>{{ f.fonte }}</td>
-                <td class="text-end">
-                  <VChip color="success" size="x-small">{{ f.quantidade }}</VChip>
-                </td>
-                <td class="text-end font-weight-bold text-success">
-                  {{ formatValor(f.valorRecebido) }}
-                </td>
-              </tr>
-            </tbody>
-          </VTable>
-        </VCardText>
-      </VCard>
-    </VCol>
-
-    <!-- Cruzamento Serviço × Fonte -->
-    <VCol cols="12" md="7">
+  <!-- Cruzamento Serviço × Origem -->
+  <VRow class="mb-6" v-if="relatorios && relatorios.servicosPorFonte && relatorios.servicosPorFonte.length > 0">
+    <VCol cols="12">
       <VCard>
         <VCardText>
           <div class="d-flex justify-space-between align-center mb-4">
             <div>
               <h5 class="text-h5 mb-1">Serviço × Origem</h5>
               <p class="text-sm text-disabled mb-0">
-                De onde vem cada categoria
+                De onde vem cada categoria de serviço
               </p>
             </div>
             <VAvatar color="info" variant="tonal" rounded size="42">
@@ -1122,13 +1082,14 @@ const setPeriodo = (tipo) => {
             </VAvatar>
           </div>
 
-          <div style="max-height: 420px; overflow-y: auto;">
+          <div style="max-height: 480px; overflow-y: auto;">
             <VTable density="compact" hover>
               <thead style="position: sticky; top: 0; background: rgb(var(--v-theme-surface)); z-index: 1;">
                 <tr>
                   <th>Serviço</th>
                   <th>Origem</th>
-                  <th class="text-end">Atend.</th>
+                  <th class="text-end">Atendimentos</th>
+                  <th class="text-end">Cobrado</th>
                   <th class="text-end">Recebido</th>
                 </tr>
               </thead>
@@ -1142,6 +1103,7 @@ const setPeriodo = (tipo) => {
                     <VChip size="x-small" color="primary" variant="tonal">{{ sf.fonte }}</VChip>
                   </td>
                   <td class="text-end">{{ sf.quantidade }}</td>
+                  <td class="text-end">{{ formatValor(sf.valorTotal) }}</td>
                   <td class="text-end font-weight-bold text-success">
                     {{ formatValor(sf.valorRecebido) }}
                   </td>
