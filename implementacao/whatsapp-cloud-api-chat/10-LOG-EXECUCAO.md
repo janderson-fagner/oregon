@@ -90,6 +90,21 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 
 <!-- Adicione novas entradas abaixo, da mais antiga (topo) para a mais recente (fundo). -->
 
+## 2026-05-27 20:40 — FASE-03 FECHADA (rotas REST do chat)
+
+- Construção: builder agent (Sonnet 4.6 medium)
+- Arquivos modificados: `server/src/routes/zap-route.js` (allChats, getChat, send-message-chat, save-anexo reescritos + window-status + multer dedicado + mapearMsgCloud/mapearAckStatus), `server/src/routes/whatsapp-config-route.js` (GET /templates, POST /templates/send)
+- Rotas wwebjs restantes (clients/connect/disconnect/check-conn/send-message/send-image/editar-msg/actions-*) mantidas intactas (removidas na FASE-05)
+- Testes:
+  - Smoke do builder (seed config+conversa, cleanup): allChats 200, getChat 200 (zera unread), getChat inexistente 404, window-status 200, templates 502 (token fake)/400 (inativo), templates/send nome inválido 400, send-message-chat 502 (token fake, sem crash), janela fechada 422, login OK
+  - Sanity da sessão (sem seed): allChats 200, getChat/window-status inexistente 404, send body inválido 400, templates 400, sem token 401, PM2 online ✅
+- 🔒 Security: ✅ — empresa_id do JWT; ownership via getById antes de ler/enviar; paginação ≤100; multer whitelist+16MB; regex anti-injeção em templateName/languageCode; erros Meta → 502 PT-BR
+- ✅ Quality: ✅ — contrato com frontend mantido via mapearMsgCloud (campos tipo/texto/ack/fromMe); rotas legadas preservadas
+- Testes humanos pendentes: envio real (texto/mídia/template) com credenciais Meta reais e janela aberta
+- 🌳 Commit: _(hash abaixo)_
+- Próxima fase: FASE-04 (frontend — config Meta + ajustes do chat)
+- Autopilot: seguindo para FASE-04 (invocarei frontend-design antes de delegar a UI).
+
 ## 2026-05-27 20:25 — FASE-02 FECHADA (webhook fixo)
 
 - Construção: builder agent (Sonnet 4.6 medium); correções pela sessão (Edit)
@@ -105,7 +120,7 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 - 🔒 Security: ✅ — HMAC-SHA256 com crypto.timingSafeEqual (try/catch) validada ANTES de processar; empresa_id resolvido por phone_number_id (atacante não forja assinatura sem app_secret); sem PII em log; query de CLIENTES parametrizada; mídia em setImmediate (não bloqueia 200)
 - ✅ Quality: ⚠️→✅ — corrigida inflação de unread_count em reentregas do Meta (incrementUnread movido para depois do check de idempotência)
 - Validação final: critério de aceite da fase ✅; PM2 online
-- 🌳 Commit: _(hash abaixo)_
+- 🌳 Commit: `da24c24` — feat(whatsapp): FASE-02 — webhook fixo com validação de assinatura
 - Próxima fase: FASE-03 (rotas REST do chat sobre Conversations/Messages)
 - Autopilot: seguindo para FASE-03.
 

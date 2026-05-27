@@ -428,12 +428,12 @@ pm2 status oregon-node-dev
 
 ## Log da fase (marcar durante execução)
 
-- [ ] Subfase A concluída
-- [ ] Subfase B concluída
-- [ ] Subfase C concluída
-- [ ] Critério de aceite da fase verificado
-- [ ] Security review consolidado ✅
-- [ ] Quality review consolidado ✅
-- [ ] Commit feito (hash registrado no log) — sem `--no-verify`, sem secrets/credenciais no diff
-- [ ] Log atualizado em [`../10-LOG-EXECUCAO.md`](../10-LOG-EXECUCAO.md)
-- [ ] Autorização do usuário para próxima fase
+- [x] Subfase A concluída — allChats + getChat reescritos sobre Conversations/Messages com mapearMsgCloud
+- [x] Subfase B concluída — send-message-chat + save-anexo (multer dedicado memoryStorage, whitelist, 16MB) via messageService
+- [x] Subfase C concluída — window-status + GET/POST templates
+- [x] Critério de aceite da fase verificado — smoke do builder (seed+cleanup) + sanity da sessão (200/404/400/401)
+- [x] Security review consolidado ✅ — empresa_id do JWT, ownership via getById, paginação ≤100, whitelist de mimetype, regex anti-injeção em templateName/languageCode, erros Meta → 502 PT-BR (sem 500 cru)
+- [x] Quality review consolidado ✅ — rotas wwebjs restantes intactas; mapearMsgCloud retrocompatível
+- [x] Commit feito (hash registrado no log)
+- [x] Log atualizado em [`../10-LOG-EXECUCAO.md`](../10-LOG-EXECUCAO.md)
+- [x] Autorização para próxima fase — **AUTOPILOT**
