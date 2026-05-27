@@ -98,6 +98,30 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 
 <!-- Adicione novas entradas abaixo, da mais antiga (topo) para a mais recente (fundo). -->
 
+## 2026-05-27 21:20 — FASE-05 FECHADA (remoção do wwebjs)
+
+- Construção: builder agent (Sonnet 4.6 medium)
+- Arquivos modificados: `server/src/zap/{client,message,chats,index}.js` (stubs sem wwebjs, 38 exports preservados), `server/src/routes/zap-route.js` (connect/disconnect/check-conn/clients → 410), `server/src/utils/crmUtils.js`, `server/src/crons.js`, `server/src/flows/actions/messageActions.js`, `server/src/routes/flows-route.js` (comentários TODO [ASSUMPTION-AUTOPILOT]), `server/package.json` + `package-lock.json` (whatsapp-web.js removido)
+- Testes (verificação independente da sessão):
+  - grep `require('whatsapp-web.js')` em src → vazio (só comentário) ✅
+  - whatsapp-web.js fora do package.json e do node_modules ✅
+  - `require('./zap')` carrega (38 exports) ✅
+  - boot PM2 limpo: "Servidor rodando na porta 3005", sem Cannot find module ✅
+  - Regressão: allChats 200, /whatsapp/config 200, /zap/connect 410, /zap/check-conn 410, webhook handshake 403, login 200 ✅
+- 🔒 Security: ✅ — stubs não lançam exceção; rotas aposentadas retornam 410 sem stack; nenhum dado apagado (tabela Clients e pasta session-zap preservadas)
+- ✅ Quality: ✅ — interface de exports do módulo zap preservada (zero quebra nos call sites de crons/crm/flows); processos Chrome órfãos do wwebjs encerrados
+- Notas: fluxos/IA/disparos/crons agora são no-op com TODO de migração — comportamento esperado (usuário ciente)
+- 🌳 Commit: _(hash abaixo)_
+- Próxima fase: nenhuma — **SPEC concluída**
+
+## 2026-05-27 21:20 — AUTOPILOT CONCLUÍDO — SPEC COMPLETA
+
+- 6 fases (FASE-00 a FASE-05) executadas em autopilot sem blockers irrecuperáveis.
+- Gate de usage nunca passou de ~25% (5h) / 18% (semanal) — sem PAUSE.
+- Migração chat wwebjs → WhatsApp Cloud API oficial entregue: config por empresa, webhook seguro, persistência própria, janela 24h, templates, frontend.
+- Pendências: validações com credenciais Meta REAIS e validação visual do frontend (ver "TESTES HUMANOS PENDENTES" no topo).
+- Branch: `feat/whatsapp-cloud-api-chat` (sem push — aguardando comando do usuário).
+
 ## 2026-05-27 21:00 — FASE-04 FECHADA (frontend)
 
 - Construção: builder agent (Sonnet 4.6 medium); design das 3 peças de UI via Skill frontend-design (sessão), injetado no prompt

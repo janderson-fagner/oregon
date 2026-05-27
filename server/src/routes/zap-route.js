@@ -136,137 +136,36 @@ function getClientId(req, tipo = null) {
 
 // ============= ROTAS DE GERENCIAMENTO DE CLIENTS =============
 
-// Lista todos os clients
-router.get('/clients/list', async (req, res) => {
-    try {
-        const empresa_id = req.user?.empresa_id || null;
-        const clients = await getAllClients(empresa_id);
-        res.status(200).json(clients);
-    } catch (error) {
-        console.error('Erro ao listar clients:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Lista clients — recurso descontinuado (wwebjs removido)
+router.get('/clients/list', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
-// Cria um novo client
-router.post('/clients/create', async (req, res) => {
-    try {
-        const { clientId, name } = req.body;
-        const empresa_id = req.user?.empresa_id || null;
-
-        if (!clientId || !name) {
-            return res.status(400).json({ error: 'clientId e name são obrigatórios' });
-        }
-
-        const result = await createClient(clientId, name, empresa_id);
-
-        if (result.success) {
-            res.status(200).json({ message: result.message });
-        } else {
-            res.status(400).json({ error: result.message });
-        }
-    } catch (error) {
-        console.error('Erro ao criar client:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Cria client — recurso descontinuado (wwebjs removido)
+router.post('/clients/create', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
-// Remove um client (valida que pertence à empresa do usuário)
-router.delete('/clients/delete/:clientId', async (req, res) => {
-    try {
-        const { clientId } = req.params;
-        const empresa_id = req.user?.empresa_id;
-
-        // Valida que o client pertence à empresa do usuário
-        const check = await dbQuery('SELECT id FROM Clients WHERE id = ? AND empresa_id = ?', [clientId, empresa_id]);
-        if (check.length === 0) {
-            return res.status(403).json({ error: 'Client não pertence à sua empresa' });
-        }
-
-        const result = await deleteClient(clientId);
-
-        if (result) {
-            res.status(200).json({ message: 'Client removido com sucesso' });
-        } else {
-            res.status(400).json({ error: 'Erro ao remover client' });
-        }
-    } catch (error) {
-        console.error('Erro ao deletar client:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Remove client — recurso descontinuado (wwebjs removido)
+router.delete('/clients/delete/:clientId', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
 // ============= ROTAS DE CONEXÃO =============
 
-// Conecta um client
-router.get('/connect', async (req, res) => {
-    console.log('Conectando WhatsApp...');
-
-    try {
-        const clientId = getClientId(req);
-
-        const connected = await isClientConnected(clientId);
-        if (connected) {
-            return res.status(200).json({ message: 'Conectado', clientId });
-        }
-
-        const result = await initClient(clientId);
-
-        if (result.success) {
-            res.status(200).json({ message: 'Iniciado', clientId });
-        } else {
-            res.status(500).json({ error: result.message });
-        }
-    } catch (error) {
-        console.error('Erro ao conectar:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Conecta via QR code — recurso descontinuado (wwebjs removido)
+router.get('/connect', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
-// Desconecta um client
-router.get('/disconnect', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-
-        const result = await disconnectClient(clientId);
-
-        if (result) {
-            res.status(200).json({ message: 'Desconectado com sucesso', clientId });
-        } else {
-            res.status(400).json({ error: 'Erro ao desconectar' });
-        }
-    } catch (error) {
-        console.error('Erro ao desconectar:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Desconecta — recurso descontinuado (wwebjs removido)
+router.get('/disconnect', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
-// Verifica status de conexão
-router.get('/check-conn', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        const empresa_id = req.user.empresa_id;
-
-        const clientData = await dbQuery(
-            'SELECT * FROM Clients WHERE id = ? AND empresa_id = ?',
-            [clientId, empresa_id]
-        );
-
-        if (clientData.length === 0) {
-            return res.status(200).json({ status: 'Desconectado', clientId });
-        }
-
-        const status = clientData[0].status === 'connected' ? 'Conectado' : 'Desconectado';
-
-        res.status(200).json({
-            status,
-            clientId,
-            data: clientData[0]
-        });
-    } catch (error) {
-        console.error('Erro ao verificar conexão:', error);
-        res.status(500).json({ error: error.message });
-    }
+// Verifica status de conexão via wwebjs — recurso descontinuado
+router.get('/check-conn', (req, res) => {
+    return res.status(410).json({ error: 'Recurso descontinuado. A conexão agora é feita por credenciais do Meta em Configurações > WhatsApp.' });
 });
 
 // ============= ROTAS DE MENSAGENS =============

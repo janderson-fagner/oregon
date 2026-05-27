@@ -101,6 +101,7 @@ const sendWhatsAppToUsers = async (users, lembrete) => {
       if (user.phone) {
         try {
           console.log(`[Lembrete WhatsApp] Enviando para ${user.fullName} (${user.phone})`);
+          // TODO [ASSUMPTION-AUTOPILOT]: fluxo/disparo via wwebjs desativado — pendente migração Cloud API
           await sendZapMessage(connectedClient.id, user.phone, mensagem);
         } catch (err) {
           console.error(`[Lembrete WhatsApp] Erro ao enviar para ${user.phone}:`, err.message);

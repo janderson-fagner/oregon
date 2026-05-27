@@ -382,6 +382,7 @@ router.post('/run/:runId/release-agent-block', async (req, res) => {
         // Remover tag do WhatsApp Business (se disponível)
         if (run.chat_id) {
             try {
+                // TODO [ASSUMPTION-AUTOPILOT]: fluxo/disparo via wwebjs desativado — pendente migração Cloud API
                 const zap = require('../zap');
                 await zap.removeWaitingForAgentTag(run.chat_id);
                 console.log('🏷️ Tag removida do WhatsApp Business');

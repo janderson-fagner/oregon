@@ -1,377 +1,57 @@
 /**
- * Módulo principal da integração com WhatsApp Web JS
- * Exporta todas as funções e gerencia eventos globais
+ * MÓDULO WWEBJS REMOVIDO
+ * Listeners de message_create, message_ack e message_edit desativados.
+ * O webhook /webhook/whatsapp (Cloud API) substitui esses listeners.
+ * Todos os exports são preservados para não quebrar call sites.
+ * @deprecated Removido na migração para Cloud API (FASE-05)
  */
 
-const { emitToEmpresa } = require('../socket');
-const { usersJump } = require('./utils');
-const { mapearMsg } = require('./message');
-const { getClientById } = require('./client');
-const dbQuery = require('../utils/dbHelper');
-
-// Importa e re-exporta todas as funções dos módulos
+// Importa módulos stub (sem require('whatsapp-web.js'))
 const clientFunctions = require('./client');
 const messageFunctions = require('./message');
 const chatFunctions = require('./chats');
 const utilFunctions = require('./utils');
 
 /**
- * Cache de message IDs processados recentemente para evitar duplicacao
- * (whatsapp-web.js as vezes emite message_create varias vezes para a mesma msg,
- * ou listeners podem acumular em re-conexoes)
- * Mantem entradas por 60s e limpa entradas antigas periodicamente.
- */
-const _processedMessageIds = new Map(); // id -> timestamp
-const _DEDUPE_WINDOW_MS = 60000;
-
-function _isDuplicateMessage(messageId) {
-    if (!messageId) return false;
-    const now = Date.now();
-    const seen = _processedMessageIds.get(messageId);
-    if (seen && (now - seen) < _DEDUPE_WINDOW_MS) {
-        return true;
-    }
-    _processedMessageIds.set(messageId, now);
-    return false;
-}
-
-// Limpeza periodica do cache de dedupe
-setInterval(() => {
-    const now = Date.now();
-    let removed = 0;
-    for (const [id, ts] of _processedMessageIds.entries()) {
-        if (now - ts > _DEDUPE_WINDOW_MS) {
-            _processedMessageIds.delete(id);
-            removed++;
-        }
-    }
-    if (removed > 0) {
-        console.log(`[ZapDedupe] 🧹 Cache cleanup: ${removed} ids antigos removidos. Restantes: ${_processedMessageIds.size}`);
-    }
-}, 120000).unref?.();
-
-/**
- * MAPEAMENTO COMPLETO DE TIPOS DE MENSAGEM DO whatsapp-web.js
- *
- * MESSAGE.TYPE - tipos REAIS de conteudo de mensagem do usuario (devem ser processados):
- *  - 'chat'              → mensagem de texto
- *  - 'image'             → imagem
- *  - 'video'             → video
- *  - 'audio'             → audio (anexo)
- *  - 'ptt'               → push-to-talk (mensagem de voz)
- *  - 'sticker'           → figurinha
- *  - 'document'          → documento (PDF, DOCX, etc)
- *  - 'vcard'             → contato unico
- *  - 'multi_vcard'       → multiplos contatos
- *  - 'location'          → localizacao
- *  - 'live_location'     → localizacao ao vivo
- *  - 'poll_creation'     → enquete criada
- *  - 'poll_vote'         → voto em enquete
- *  - 'list'              → lista interativa enviada
- *  - 'list_response'     → resposta de lista
- *  - 'buttons_response'  → resposta de botao
- *  - 'order'             → pedido
- *  - 'product'           → produto do catalogo
- *  - 'payment'           → pagamento
- *  - 'reaction'          → reacao com emoji (geralmente NAO queremos processar como msg)
- *  - 'gif'               → GIF animado
- *
- * MESSAGE.TYPE - tipos de NOTIFICACAO/SISTEMA (NAO sao mensagens reais, devem ser ignorados):
- *  - 'e2e_notification'       → notificacao de criptografia E2E (chave mudou, etc)
- *  - 'notification_template'  → notificacoes de sistema (contato apagado/reinstalado, etc)
- *  - 'gp2'                    → notificacoes de grupo (entrou/saiu, mudanca de admin)
- *  - 'broadcast_notification' → notificacoes de lista de transmissao
- *  - 'call_log'               → registro de chamada (atendida/perdida)
- *  - 'protocol'               → mensagens de protocolo do whatsapp
- *  - 'ciphertext'             → mensagem criptografada nao decifrada
- *  - 'revoked'                → mensagem apagada/revogada
- *  - 'unknown'                → tipo desconhecido
- *  - 'group_notification'     → notificacao de grupo legacy
- */
-const ALLOWED_MESSAGE_TYPES = new Set([
-    'chat', 'image', 'video', 'audio', 'ptt', 'sticker',
-    'document', 'vcard', 'multi_vcard', 'location', 'live_location',
-    'poll_creation', 'poll_vote', 'list', 'list_response',
-    'buttons_response', 'order', 'product', 'payment', 'gif'
-    // 'reaction' fica de fora propositalmente - reacoes nao iniciam fluxos
-]);
-
-const BLOCKED_NOTIFICATION_TYPES = new Set([
-    'e2e_notification', 'notification_template', 'gp2',
-    'broadcast_notification', 'call_log', 'protocol', 'ciphertext',
-    'revoked', 'unknown', 'group_notification'
-]);
-
-function _shouldProcessMessage(message) {
-    const type = message?.type;
-    if (!type) return { ok: false, reason: 'sem-type' };
-    if (BLOCKED_NOTIFICATION_TYPES.has(type)) return { ok: false, reason: `tipo-notificacao:${type}` };
-    if (!ALLOWED_MESSAGE_TYPES.has(type)) return { ok: false, reason: `tipo-nao-mapeado:${type}` };
-    return { ok: true };
-}
-
-/**
- * Configura os listeners de eventos para um client específico
- * @param {string} clientId - ID do client
+ * Stub: setupClientListeners — sem client wwebjs para registrar listeners.
+ * @param {string} clientId
  */
 async function setupClientListeners(clientId) {
-    const client = getClientById(clientId);
-
-    if (!client) {
-        console.error(`Client ${clientId} não encontrado para configurar listeners`);
-        return;
-    }
-
-    // DEFENSIVO: remover listeners existentes antes de adicionar novos
-    // Evita acumulo quando setupClientListeners e chamado mais de uma vez
-    // (auto-init + reconexao manual, etc)
-    const beforeCount = client.listenerCount?.('message_create') || 0;
-    client.removeAllListeners('message_create');
-    client.removeAllListeners('message_ack');
-    client.removeAllListeners('message_edit');
-    if (beforeCount > 0) {
-        console.log(`[ZapListeners] ⚠️ Client ${clientId}: ${beforeCount} listener(s) message_create existentes foram removidos antes de re-registrar`);
-    }
-
-    // Busca empresa_id do client para isolamento de socket
-    const clientDataArr = await dbQuery('SELECT empresa_id FROM Clients WHERE id = ?', [clientId]);
-    const empresaId = clientDataArr.length > 0 ? clientDataArr[0].empresa_id : null;
-
-    // Listener de criação de mensagens
-    client.on('message_create', async (message) => {
-        // Dedupe por message ID - protege contra emissao duplicada do whatsapp-web.js
-        const msgId = message?.id?._serialized || message?.id?.id || null;
-        if (_isDuplicateMessage(msgId)) {
-            console.log(`[MESSAGE_CREATE] 🚫 Mensagem DUPLICADA ignorada (id=${msgId}) | clientId=${clientId} fromMe=${message?.fromMe} body="${(message?.body || '').slice(0, 40)}"`);
-            return;
-        }
-
-        console.log('[MESSAGE_CREATE] Mensagem recebida:', {
-            type: message.type,
-            body: message.body,
-            fromMe: message.fromMe,
-            to: message.to,
-            from: message.from,
-            id: msgId,
-            timestamp: message.timestamp,
-            clientId
-        });
-        // Filtro por tipo de mensagem ANTES de qualquer processamento
-        // Bloqueia notificacoes de sistema do WhatsApp (e2e_notification, notification_template,
-        // gp2, etc) que sao geradas em eventos como apagar/recadastrar contato, mudanca de chave
-        // de criptografia, atualizacoes de grupo, etc - essas NAO sao mensagens reais do usuario.
-        const typeCheck = _shouldProcessMessage(message);
-        if (!typeCheck.ok) {
-            console.log(`[MESSAGE_CREATE] 🚫 Ignorada por tipo (${typeCheck.reason}) | id=${msgId} fromMe=${message?.fromMe} body="${(message?.body || '').slice(0, 40)}"`);
-            return;
-        }
-
-        try {
-            const chat = await message.getChat();
-
-            if (chat && !chat.isGroup && message.type != 'e2e_notification' && chat.type != 'e2e_notification' &&
-                (chat.id.server === 'c.us' || chat.id.server === 'lid')
-                && !usersJump.includes(chat.id.user)) {
-
-                const mappedMsg = await mapearMsg(message, true);
-
-                if (mappedMsg) {
-                    mappedMsg.idChat = chat.id._serialized;
-                    mappedMsg.clientId = clientId;
-
-                    // Emite apenas para a empresa dona do client
-                    emitToEmpresa(empresaId, 'nova-mensagem', mappedMsg);
-                    emitToEmpresa(empresaId, `nova-mensagem-${clientId}`, mappedMsg);
-
-                    // Atualizar data da última mensagem no cliente
-                    try {
-                        let msgPhone = chat.id.user;
-                        if (chat.id.server === 'lid') {
-                            const contato = await chat.getContact();
-                            msgPhone = contato.number;
-                        }
-                        if (msgPhone && empresaId) {
-                            const last8 = msgPhone.replace(/\D/g, '').slice(-8);
-                            const fromMe = message.fromMe;
-                            const updateFields = fromMe
-                                ? 'cli_ultima_msg_sistema_data = NOW(), cli_ultima_msg_data = NOW()'
-                                : 'cli_ultima_msg_cliente_data = NOW(), cli_ultima_msg_data = NOW()';
-                            dbQuery(
-                                `UPDATE CLIENTES SET ${updateFields} WHERE empresa_id = ? AND RIGHT(REGEXP_REPLACE(COALESCE(cli_celular, ''), '[^0-9]', ''), 8) = ?`,
-                                [empresaId, last8]
-                            ).catch(() => { });
-                        }
-                    } catch (e) { /* silently continue */ }
-
-                    // Integra ao motor de fluxos quando houver mensagem do usuário (não do sistema)
-                    // Verifica se este client é do tipo "atendimento" (qualquer empresa)
-                    if (!message.fromMe && clientId.startsWith('atendimento_')) {
-                        try {
-                            const { handleIncomingMessage } = require('../flows/core/flowEngine');
-                            let phone;
-
-                            if (chat.id.server === 'c.us') {
-                                phone = chat.id.user;
-                            } else if (chat.id.server === 'lid') {
-                                const contato = await chat.getContact();
-                                phone = contato.number;
-                            }
-
-                            if (!phone) {
-                                console.error('Número de telefone não encontrado');
-                                return;
-                            }
-
-                            let mediaPath = null;
-                            let mediaType = null;
-
-                            if (mappedMsg && mappedMsg.media) {
-                                mediaPath = mappedMsg.media.caminho;
-                                mediaType = mappedMsg.media.mime;
-                                console.log('📎 Mídia detectada do mapearMsg:', mediaPath);
-                                console.log('🎬 Tipo:', mediaType);
-                            }
-
-                            const textBody = message.body || '';
-
-                            // Defesa final: nao envia ao motor de fluxos se nao ha conteudo algum
-                            // (sem texto E sem midia). Ja filtramos tipos de notificacao acima,
-                            // mas pode haver edge cases (reacoes que escapam, mensagens vazias, etc)
-                            if (!textBody.trim() && !mediaPath) {
-                                console.log(`[MESSAGE_CREATE] 🚫 Mensagem sem conteudo (sem texto E sem midia) ignorada para fluxos | type=${message.type} id=${msgId} phone=${phone}`);
-                                return;
-                            }
-
-                            await handleIncomingMessage({
-                                clientId,
-                                phone,
-                                chatId: chat.id._serialized,
-                                text: textBody,
-                                mediaPath,
-                                mediaType,
-                                empresa_id: empresaId
-                            });
-                        } catch (e) {
-                            console.error('flowEngine incoming error:', e.message);
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('Erro ao processar message_create:', error);
-        }
-    });
-
-    // Listener de confirmação de mensagem (ACK)
-    client.on('message_ack', async (message, ack) => {
-        emitToEmpresa(empresaId, 'update-mensagem', {
-            id: message.id._serialized,
-            ack: ack,
-            clientId
-        });
-    });
-
-    // Listener de edição de mensagem
-    client.on('message_edit', async (message) => {
-        const { formatarMensagemHTML } = require('./utils');
-        emitToEmpresa(empresaId, 'update-mensagem', {
-            id: message.id._serialized,
-            texto: formatarMensagemHTML(message.body),
-            clientId
-        });
-    });
-
-    console.log(`✅ Listeners configurados para client ${clientId}`);
+    // Stub: wwebjs removido — listeners desativados.
 }
 
 /**
- * Remove os listeners de eventos de um client
- * @param {string} clientId - ID do client
+ * Stub: removeClientListeners — sem client wwebjs para remover listeners.
+ * @param {string} clientId
  */
 function removeClientListeners(clientId) {
-    const client = getClientById(clientId);
-
-    if (!client) {
-        return;
-    }
-
-    // Remove todos os listeners customizados
-    client.removeAllListeners('message_create');
-    client.removeAllListeners('message_ack');
-    client.removeAllListeners('message_edit');
-
-    console.log(`🗑️ Listeners removidos do client ${clientId}`);
+    // Stub: wwebjs removido — nada a remover.
 }
 
 /**
- * Inicializa o sistema com clients padrão (para compatibilidade)
- * Esta função será chamada automaticamente na inicialização do servidor
+ * Stub: initDefaultClient — não inicializa mais Chrome/wwebjs.
+ * Loga aviso único na inicialização do servidor.
  */
 async function initDefaultClient() {
-    try {
-        console.log('🔄 Verificando clients para auto-inicialização...');
-
-        const dbQuery = require('../utils/dbHelper');
-
-        // Buscar TODOS os clients que estavam conectados (multi-tenant SaaS)
-        const allClients = await dbQuery('SELECT * FROM Clients WHERE status = ?', ['connected']);
-
-        for (const clientRow of allClients) {
-            const clientId = clientRow.id;
-            try {
-                if (true) {
-                    console.log(`🚀 Auto-inicializando client ${clientId}...`);
-                    const result = await clientFunctions.initClient(clientId);
-
-                    if (result.success) {
-                        setupClientListeners(clientId);
-                        console.log(`✅ [auto-init] Client ${clientId} pronto (listeners registrados)`);
-                    } else {
-                        console.log(`⚠️ [auto-init] Falha ao inicializar client ${clientId}: ${result.message}`);
-                    }
-                }
-            } catch (error) {
-                console.error(`❌ Erro ao inicializar client ${clientId}:`, error);
-            }
-        }
-
-        console.log('✅ Auto-inicialização de clients concluída');
-    } catch (error) {
-        console.error('Erro na auto-inicialização:', error);
-    }
+    console.log('[zap/index] STUB: wwebjs removido — clients não são mais inicializados (Cloud API ativa em /webhook/whatsapp).');
 }
 
-/**
- * Wrapper para initClient que também configura os listeners
- * @param {string} clientId - ID do client
- * @returns {Promise<Object>} Resultado da inicialização
- */
-async function initClientWithListeners(clientId) {
-    const result = await clientFunctions.initClient(clientId);
-
-    if (result.success) {
-        setupClientListeners(clientId);
-    }
-
-    return result;
-}
-
-/**
- * Wrapper para disconnectClient que também remove os listeners
- * @param {string} clientId - ID do client
- * @returns {Promise<boolean>} True se desconectado com sucesso
- */
-async function disconnectClientWithCleanup(clientId) {
-    removeClientListeners(clientId);
-    return await clientFunctions.disconnectClient(clientId);
-}
-
-// Exporta todas as funções
+// Exporta todas as funções — mesmos nomes que call sites esperam
 module.exports = {
     // Funções de client
     ...clientFunctions,
-    initClient: initClientWithListeners, // Sobrescreve com versão que adiciona listeners
-    disconnectClient: disconnectClientWithCleanup, // Sobrescreve com versão que remove listeners
+
+    // Sobrescreve initClient com versão no-op (compatível com call sites)
+    initClient: async (clientId) => {
+        console.warn('[zap] STUB: initClient — wwebjs removido. Use Cloud API.');
+        return { success: false, message: 'wwebjs removido' };
+    },
+
+    // Sobrescreve disconnectClient com versão no-op
+    disconnectClient: async (clientId) => {
+        console.warn('[zap] STUB: disconnectClient — wwebjs removido.');
+        return false;
+    },
 
     // Funções de mensagens
     ...messageFunctions,
@@ -382,11 +62,10 @@ module.exports = {
     // Funções utilitárias
     ...utilFunctions,
 
-    // Funções de gerenciamento de listeners
+    // Gerenciamento de listeners (no-op)
     setupClientListeners,
     removeClientListeners,
 
     // Inicialização
     initDefaultClient
 };
-

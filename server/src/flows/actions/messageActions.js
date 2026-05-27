@@ -135,6 +135,7 @@ async function sendWhatsAppMessage(config, context) {
             };
         }
 
+        // TODO [ASSUMPTION-AUTOPILOT]: fluxo/disparo via wwebjs desativado — pendente migração Cloud API
         const { sendZapMessage: szm, sendZapMessageImage: szmi, sendMessageChat: smc } = loadZapFunctions();
         
         // Determinar destinatário

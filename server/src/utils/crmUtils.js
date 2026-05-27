@@ -941,6 +941,7 @@ async function dispararCampanhas(empresa_id = null) {
                         // Verificar se tem mídia
                         const midia = modeloWhatsApp.midia || modeloWhatsApp.content?.midia;
 
+                        // TODO [ASSUMPTION-AUTOPILOT]: fluxo/disparo via wwebjs desativado — pendente migração Cloud API
                         if (midia && midia.pathFile) {
                             console.log('🖼️ Enviando com mídia:', midia.pathFile);
                             envioM = await sendZapMessageImage('disparos_1', cliente.phone, message, midia.pathFile);
