@@ -111,7 +111,7 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 - 🔒 Security: ✅ — stubs não lançam exceção; rotas aposentadas retornam 410 sem stack; nenhum dado apagado (tabela Clients e pasta session-zap preservadas)
 - ✅ Quality: ✅ — interface de exports do módulo zap preservada (zero quebra nos call sites de crons/crm/flows); processos Chrome órfãos do wwebjs encerrados
 - Notas: fluxos/IA/disparos/crons agora são no-op com TODO de migração — comportamento esperado (usuário ciente)
-- 🌳 Commit: _(hash abaixo)_
+- 🌳 Commit: `ef0a5aa` — refactor(whatsapp): FASE-05 — remoção completa do whatsapp-web.js
 - Próxima fase: nenhuma — **SPEC concluída**
 
 ## 2026-05-27 21:20 — AUTOPILOT CONCLUÍDO — SPEC COMPLETA
