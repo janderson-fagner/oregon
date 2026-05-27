@@ -1,365 +1,381 @@
 <script setup>
-  import QRCode from "qrcode";
-  import { socket } from "@/composables/useSocket";
-  const { setAlert } = useAlert();
   import { can } from "@layouts/plugins/casl";
-
+  const { setAlert } = useAlert();
   const router = useRouter();
-  if(!can("view", "crm_chat")) {
-    setAlert(
-      "Você não tem permissão para acessar esta página.",
-      "error",
-      "tabler-alert-triangle",
-      3000
-    );
+
+  if (!can("view", "crm_chat")) {
+    setAlert("Você não tem permissão para acessar esta página.", "error", "tabler-alert-triangle", 3000);
     router.push("/");
   }
-  // Gerenciamento de múltiplos clients (carregados da API)
-  const clients = ref([]);
-  const tabClient = ref(null);
-  const loadingClients = ref(true);
 
-  // Ícone e descrição por tipo de client
-  const clientMeta = {
-    atendimento: { icon: 'tabler-message-circle', description: 'WhatsApp usado para conversas e atendimento ao cliente' },
-    disparos: { icon: 'tabler-send', description: 'WhatsApp usado para envio de disparos/campanhas' },
-    default: { icon: 'tabler-brand-whatsapp', description: 'WhatsApp' }
-  };
+  const loading = ref(false);
+  const loadingSave = ref(false);
+  const loadingRemove = ref(false);
 
-  const getClientType = (id) => {
-    const parts = id.split('_');
-    return parts.length > 1 ? parts.slice(0, -1).join('_') : id;
-  };
-
-  // Carrega clients da API (filtrados por empresa no backend)
-  const loadClients = async () => {
-    try {
-      const res = await $api("/zap/clients/list", { method: "GET" });
-      if (!res || !Array.isArray(res)) return;
-
-      clients.value = res.filter(c => c.id !== 'default').map(c => {
-        const type = getClientType(c.id);
-        const meta = clientMeta[type] || clientMeta.default;
-        return {
-          id: c.id,
-          name: c.name || type.charAt(0).toUpperCase() + type.slice(1),
-          description: meta.description,
-          icon: meta.icon,
-          type,
-          qrCode: null,
-          conectado: c.status === 'connected',
-          loading: false
-        };
-      });
-
-      if (clients.value.length > 0 && !tabClient.value) {
-        tabClient.value = clients.value[0].id;
-      }
-    } catch (error) {
-      console.error('Erro ao carregar clients:', error);
-    } finally {
-      loadingClients.value = false;
-    }
-  };
-
-  // Verifica conexão de um client específico
-  const checkConectado = async (client) => {
-    try {
-      const res = await $api("/zap/check-conn", {
-        method: "GET",
-        query: { type: client.type }
-      });
-
-      if (!res) return;
-
-      client.conectado = res.status === "Conectado";
-    } catch (error) {
-      console.error(`Error check ${client.id}:`, error);
-      client.conectado = false;
-    }
-
-    client.loading = false;
-  };
-
-  // Conecta um client específico
-  const connect = async (client) => {
-    client.loading = true;
-
-    try {
-      const res = await $api("/zap/connect", {
-        method: "GET",
-        query: { type: client.type }
-      });
-
-      if (!res) return;
-
-      if (res.message === "Conectado") {
-        client.conectado = true;
-        client.qrCode = null;
-        setAlert(`${client.name} conectado!`, "success", "tabler-check", 3000);
-      }
-    } catch (error) {
-      console.error(`Error connect ${client.id}:`, error);
-      setAlert(`Erro ao conectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
-    }
-
-    setTimeout(() => {
-      client.loading = false;
-    }, 8000);
-  };
-
-  // Desconecta um client específico
-  const disconnect = async (client) => {
-    client.loading = true;
-
-    try {
-      const res = await $api("/zap/disconnect", {
-        method: "GET",
-        query: { type: client.type }
-      });
-
-      if (!res) return;
-
-      client.conectado = false;
-      client.qrCode = null;
-      setAlert(`${client.name} desconectado!`, "info", "tabler-unlink", 3000);
-    } catch (error) {
-      console.error(`Error disconnect ${client.id}:`, error);
-      setAlert(`Erro ao desconectar ${client.name}`, "error", "tabler-alert-triangle", 3000);
-    }
-
-    setTimeout(() => {
-      client.loading = false;
-    }, 8000);
-  };
-
-  // Setup dos listeners do socket para cada client
-  const setupSocketListeners = () => {
-    clients.value.forEach(client => {
-      socket.on(`qr-${client.id}`, (qr) => {
-        QRCode.toDataURL(qr, (err, url) => {
-          client.qrCode = url;
-          client.conectado = false;
-          client.loading = false;
-        });
-      });
-
-      socket.on(`autentica-zap-${client.id}`, () => {
-        setAlert(`${client.name} conectado com sucesso!`, "success", "tabler-check", 5000);
-        client.qrCode = null;
-        client.conectado = true;
-        client.loading = false;
-      });
-
-      socket.on(`autentica-error-zap-${client.id}`, () => {
-        setAlert(`Erro ao conectar ${client.name}. Tente novamente!`, "error", "tabler-alert-triangle", 5000);
-        client.qrCode = null;
-        client.conectado = false;
-        client.loading = false;
-      });
-
-      socket.on(`desconectado-zap-${client.id}`, () => {
-        setAlert(`${client.name} foi desconectado!`, "error", "tabler-unlink", 5000);
-        client.qrCode = null;
-        client.conectado = false;
-        client.loading = false;
-      });
-    });
-  };
-
-  // Inicialização: carrega clients da API, depois configura socket
-  onMounted(async () => {
-    await loadClients();
-    setupSocketListeners();
+  // Campos do formulário (write-only para tokens)
+  const form = ref({
+    phone_number_id: "",
+    waba_id: "",
+    display_phone_number: "",
+    graph_api_version: "v18.0",
+    access_token: "",
+    app_secret: "",
+    verify_token: "",
   });
 
-  onUnmounted(() => {
-    clients.value.forEach(client => {
-      socket.off(`qr-${client.id}`);
-      socket.off(`autentica-zap-${client.id}`);
-      socket.off(`autentica-error-zap-${client.id}`);
-      socket.off(`desconectado-zap-${client.id}`);
-    });
+  // Status da configuração
+  const config = ref(null);
+  const configured = ref(false);
+
+  // Toggle de visibilidade dos campos de senha
+  const showAccessToken = ref(false);
+  const showAppSecret = ref(false);
+  const showVerifyToken = ref(false);
+
+  // URL do webhook gerada pelo backend
+  const webhookUrl = computed(() => config.value?.webhook_url || "");
+
+  const carregarConfig = async () => {
+    loading.value = true;
+    try {
+      const res = await $api("/whatsapp/config", { method: "GET" });
+      if (!res) return;
+
+      config.value = res;
+      configured.value = !!res.configured;
+
+      // Preenche os campos não-sensíveis
+      form.value.phone_number_id = res.phone_number_id || "";
+      form.value.waba_id = res.waba_id || "";
+      form.value.display_phone_number = res.display_phone_number || "";
+      form.value.graph_api_version = res.graph_api_version || "v18.0";
+      // Tokens não são devolvidos pelo backend — campos ficam em branco (write-only)
+    } catch (e) {
+      setAlert("Erro ao carregar configuração do WhatsApp.", "error", "tabler-alert-triangle", 4000);
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  const salvar = async () => {
+    loadingSave.value = true;
+    try {
+      const body = {
+        phone_number_id: form.value.phone_number_id,
+        waba_id: form.value.waba_id,
+        display_phone_number: form.value.display_phone_number,
+        graph_api_version: form.value.graph_api_version,
+      };
+      // Envia tokens somente se preenchidos
+      if (form.value.access_token) body.access_token = form.value.access_token;
+      if (form.value.app_secret) body.app_secret = form.value.app_secret;
+      if (form.value.verify_token) body.verify_token = form.value.verify_token;
+
+      await $api("/whatsapp/config", { method: "POST", body });
+
+      setAlert("Configuração salva com sucesso!", "success", "tabler-check", 3000);
+
+      // Limpa tokens do formulário após salvar (write-only)
+      form.value.access_token = "";
+      form.value.app_secret = "";
+      form.value.verify_token = "";
+
+      await carregarConfig();
+    } catch (e) {
+      setAlert(
+        e?.response?._data?.message || "Erro ao salvar configuração.",
+        "error",
+        "tabler-alert-triangle",
+        4000
+      );
+    } finally {
+      loadingSave.value = false;
+    }
+  };
+
+  const remover = async () => {
+    if (!confirm("Tem certeza que deseja remover a configuração do WhatsApp Meta? Esta ação não pode ser desfeita.")) return;
+    loadingRemove.value = true;
+    try {
+      await $api("/whatsapp/config", { method: "DELETE" });
+      setAlert("Configuração removida.", "info", "tabler-trash", 3000);
+      config.value = null;
+      configured.value = false;
+      form.value = {
+        phone_number_id: "",
+        waba_id: "",
+        display_phone_number: "",
+        graph_api_version: "v18.0",
+        access_token: "",
+        app_secret: "",
+        verify_token: "",
+      };
+    } catch (e) {
+      setAlert(
+        e?.response?._data?.message || "Erro ao remover configuração.",
+        "error",
+        "tabler-alert-triangle",
+        4000
+      );
+    } finally {
+      loadingRemove.value = false;
+    }
+  };
+
+  const copiarWebhook = async () => {
+    if (!webhookUrl.value) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl.value);
+      setAlert("URL copiada!", "success", "tabler-check", 2000);
+    } catch {
+      setAlert("Não foi possível copiar.", "error", "tabler-alert-triangle", 2000);
+    }
+  };
+
+  onMounted(() => {
+    carregarConfig();
   });
 </script>
+
 <template>
   <div class="mb-6">
-    <h2 class="text-h5 mb-0">WhatsApp</h2>
-    <p class="text-sm mb-0">Configure a conexão com os WhatsApps do sistema</p>
+    <h2 class="text-h5 mb-0">WhatsApp Meta (API Oficial)</h2>
+    <p class="text-sm mb-0">Configure as credenciais da API oficial do WhatsApp Business (Meta)</p>
   </div>
 
-  <!-- Abas dos Clients -->
-  <div class="d-flex flex-row flex-nowrap gap-3 mb-4">
-    <VBtn
-      v-for="client in clients"
-      :key="client.id"
-      :color="tabClient === client.id ? 'primary' : 'grey lighten-2'"
-      :text-color="tabClient === client.id ? 'white' : 'black'"
-      @click="tabClient = client.id"
-      class="text-none"
-    >
-      <VIcon :icon="client.icon" class="mr-2" />
-      {{ client.name }}
-      <VChip
-        v-if="client.conectado"
-        size="x-small"
-        color="success"
-        class="ml-2"
-      >
-        <VIcon icon="tabler-check" size="12" />
-      </VChip>
-    </VBtn>
+  <div v-if="loading" class="d-flex justify-center py-8">
+    <VProgressCircular indeterminate color="primary" size="48" />
   </div>
 
-  <!-- Conteúdo de cada Client -->
-  <VWindow v-model="tabClient">
-    <VWindowItem
-      v-for="client in clients"
-      :key="client.id"
-      :value="client.id"
-    >
-      <VCard class="mb-4">
+  <VRow v-else>
+    <!-- Formulário de credenciais -->
+    <VCol cols="12" md="7">
+      <VCard>
         <VCardText>
-          <div class="d-flex align-center mb-0">
-            <VIcon :icon="client.icon" size="32" class="mr-3" />
-            <div>
-              <p class="text-h6 mb-0">{{ client.name }}</p>
-              <p class="text-caption mb-0">{{ client.description }}</p>
+          <div class="d-flex align-center justify-space-between mb-4">
+            <p class="text-h6 mb-0">
+              <VIcon icon="tabler-brand-meta" class="mr-2" />
+              Credenciais
+            </p>
+            <VChip
+              :color="configured ? 'success' : 'default'"
+              size="small"
+              label
+            >
+              <VIcon :icon="configured ? 'tabler-check' : 'tabler-settings'" size="14" class="mr-1" />
+              {{ configured ? "Configurado" : "Não configurado" }}
+            </VChip>
+          </div>
+
+          <VRow>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.phone_number_id"
+                label="Phone Number ID"
+                placeholder="123456789012345"
+                :prepend-inner-icon="'tabler-phone'"
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.waba_id"
+                label="WABA ID"
+                placeholder="123456789012345"
+                :prepend-inner-icon="'tabler-building-store'"
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.display_phone_number"
+                label="Número exibido"
+                placeholder="+55 41 99999-9999"
+                :prepend-inner-icon="'tabler-device-mobile'"
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.graph_api_version"
+                label="Versão Graph API"
+                placeholder="v18.0"
+                :prepend-inner-icon="'tabler-code'"
+              />
+            </VCol>
+
+            <VCol cols="12">
+              <VDivider class="my-2" />
+              <p class="text-caption text-disabled mb-3">
+                <VIcon icon="tabler-lock" size="14" class="mr-1" />
+                Tokens — preencha apenas para criar ou atualizar. Deixe em branco para manter os salvos.
+              </p>
+            </VCol>
+
+            <VCol cols="12">
+              <AppTextField
+                v-model="form.access_token"
+                label="Access Token"
+                placeholder="EAAxxxxx..."
+                :type="showAccessToken ? 'text' : 'password'"
+                :prepend-inner-icon="'tabler-key'"
+                :append-inner-icon="showAccessToken ? 'tabler-eye-off' : 'tabler-eye'"
+                @click:append-inner="showAccessToken = !showAccessToken"
+                :hint="configured && config?.has_access_token ? 'Token já configurado — preencha para substituir' : ''"
+                persistent-hint
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.app_secret"
+                label="App Secret"
+                placeholder="abc123..."
+                :type="showAppSecret ? 'text' : 'password'"
+                :prepend-inner-icon="'tabler-lock'"
+                :append-inner-icon="showAppSecret ? 'tabler-eye-off' : 'tabler-eye'"
+                @click:append-inner="showAppSecret = !showAppSecret"
+                :hint="configured && config?.has_app_secret ? 'Já configurado — preencha para substituir' : ''"
+                persistent-hint
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <AppTextField
+                v-model="form.verify_token"
+                label="Verify Token (Webhook)"
+                placeholder="meu-token-secreto"
+                :type="showVerifyToken ? 'text' : 'password'"
+                :prepend-inner-icon="'tabler-shield-check'"
+                :append-inner-icon="showVerifyToken ? 'tabler-eye-off' : 'tabler-eye'"
+                @click:append-inner="showVerifyToken = !showVerifyToken"
+                :hint="configured && config?.has_verify_token ? 'Já configurado — preencha para substituir' : ''"
+                persistent-hint
+              />
+            </VCol>
+          </VRow>
+
+          <div class="d-flex flex-row align-center justify-end gap-3 mt-6">
+            <VBtn
+              v-if="configured"
+              color="error"
+              variant="outlined"
+              @click="remover"
+              :loading="loadingRemove"
+            >
+              <VIcon icon="tabler-trash" class="mr-1" />
+              Remover
+            </VBtn>
+            <VBtn
+              color="primary"
+              @click="salvar"
+              :loading="loadingSave"
+            >
+              <VIcon icon="tabler-device-floppy" class="mr-1" />
+              {{ configured ? "Atualizar" : "Salvar" }}
+            </VBtn>
+          </div>
+        </VCardText>
+      </VCard>
+    </VCol>
+
+    <!-- Painel lateral: Webhook -->
+    <VCol cols="12" md="5">
+      <VCard>
+        <VCardText>
+          <p class="text-h6 mb-3">
+            <VIcon icon="tabler-webhook" class="mr-2" />
+            Webhook
+          </p>
+
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            icon="tabler-info-circle"
+            class="mb-4"
+          >
+            Configure esta URL no painel do Facebook Developer como URL de callback do Webhook.
+          </VAlert>
+
+          <p class="text-caption text-disabled mb-1">URL do Webhook</p>
+          <div class="webhook-code d-flex align-center justify-space-between gap-2 mb-4">
+            <span class="text-caption webhook-url-text">
+              {{ webhookUrl || "Salve a configuração para gerar a URL" }}
+            </span>
+            <IconBtn
+              v-if="webhookUrl"
+              size="small"
+              @click="copiarWebhook"
+            >
+              <VIcon icon="tabler-copy" size="16" />
+              <VTooltip text="Copiar URL" activator="parent" />
+            </IconBtn>
+          </div>
+
+          <VDivider class="my-3" />
+
+          <p class="text-caption text-disabled mb-2">Eventos necessários no Webhook:</p>
+          <div class="d-flex flex-column gap-1">
+            <VChip size="x-small" color="primary" variant="tonal" label>
+              <VIcon icon="tabler-message" size="12" class="mr-1" />
+              messages
+            </VChip>
+            <VChip size="x-small" color="primary" variant="tonal" label>
+              <VIcon icon="tabler-checks" size="12" class="mr-1" />
+              message_status_updates
+            </VChip>
+          </div>
+
+          <VDivider class="my-3" />
+
+          <p class="text-caption text-disabled mb-2">Status dos tokens:</p>
+          <div class="d-flex flex-column gap-2">
+            <div class="d-flex align-center justify-space-between">
+              <span class="text-caption">Access Token</span>
+              <VChip
+                :color="config?.has_access_token ? 'success' : 'default'"
+                size="x-small"
+                label
+              >
+                {{ config?.has_access_token ? "Configurado" : "Ausente" }}
+              </VChip>
+            </div>
+            <div class="d-flex align-center justify-space-between">
+              <span class="text-caption">App Secret</span>
+              <VChip
+                :color="config?.has_app_secret ? 'success' : 'default'"
+                size="x-small"
+                label
+              >
+                {{ config?.has_app_secret ? "Configurado" : "Ausente" }}
+              </VChip>
+            </div>
+            <div class="d-flex align-center justify-space-between">
+              <span class="text-caption">Verify Token</span>
+              <VChip
+                :color="config?.has_verify_token ? 'success' : 'default'"
+                size="x-small"
+                label
+              >
+                {{ config?.has_verify_token ? "Configurado" : "Ausente" }}
+              </VChip>
             </div>
           </div>
         </VCardText>
       </VCard>
-
-      <VRow>
-        <!-- QR Code / Status -->
-        <VCol cols="12" md="6">
-          <VCard>
-            <VCardText>
-              <div class="text-center">
-                <!-- QR Code -->
-                <v-fade-transition>
-                  <div v-if="client.qrCode">
-                    <img :src="client.qrCode" alt="QR Code" class="img-fluid" />
-                    <p class="mb-0 text-caption mt-2">
-                      O QR Code é atualizado a cada 30 segundos!
-                    </p>
-                  </div>
-                </v-fade-transition>
-
-                <!-- Loading -->
-                <v-fade-transition>
-                  <div
-                    v-if="!client.qrCode && !client.conectado && client.loading"
-                    class="d-flex align-center justify-center flex-column"
-                    style="min-height: 250px"
-                  >
-                    <VProgressCircular indeterminate color="primary" size="64" />
-                    <p class="mt-2 text-caption">Carregando conexão...</p>
-                  </div>
-                </v-fade-transition>
-
-                <!-- Conectado -->
-                <v-fade-transition>
-                  <div
-                    v-if="client.conectado"
-                    class="d-flex align-center justify-center flex-column"
-                    style="min-height: 250px"
-                  >
-                    <VIcon icon="tabler-check" size="64" color="success" />
-                    <p class="mt-2 text-h6">Conectado!</p>
-                  </div>
-                </v-fade-transition>
-
-                <!-- Desconectado -->
-                <v-fade-transition>
-                  <div
-                    v-if="!client.conectado && !client.qrCode && !client.loading"
-                    class="d-flex align-center justify-center flex-column"
-                    style="min-height: 250px"
-                  >
-                    <VIcon icon="tabler-unlink" size="48" color="error" class="mb-3" />
-                    <p class="mb-2 text-caption">
-                      Conecte o WhatsApp para {{ client.type === 'atendimento' ? 'atender clientes' : 'enviar campanhas' }}.
-                    </p>
-                    <VBtn
-                      @click="connect(client)"
-                      color="primary"
-                      :loading="client.loading"
-                    >
-                      <VIcon icon="tabler-link" class="mr-1" />
-                      Conectar
-                    </VBtn>
-                  </div>
-                </v-fade-transition>
-              </div>
-            </VCardText>
-          </VCard>
-        </VCol>
-
-        <!-- Informações -->
-        <VCol cols="12" md="6">
-          <VCard>
-            <VCardText>
-              <p class="font-weight-bold mb-3">
-                <VIcon icon="tabler-info-circle" class="mr-2" />
-                Informações
-              </p>
-
-              <div class="mb-3">
-                <p class="text-sm mb-1">Status da Conexão:</p>
-                <VChip
-                  :color="client.conectado ? 'success' : 'error'"
-                  label
-                  size="small"
-                >
-                  <VIcon
-                    :icon="client.conectado ? 'tabler-wifi' : 'tabler-wifi-off'"
-                    size="16"
-                    class="mr-1"
-                  />
-                  {{ client.conectado ? "Conectado" : "Desconectado" }}
-                </VChip>
-              </div>
-
-              <VDivider class="my-3" />
-
-              <div v-if="client.conectado" class="mb-3">
-                <VAlert
-                  type="info"
-                  variant="tonal"
-                  density="compact"
-                  icon="tabler-info-circle"
-                >
-                  Para desconectar, use o botão abaixo ou desconecte pelo celular.
-                </VAlert>
-
-                <VBtn
-                  @click="disconnect(client)"
-                  color="error"
-                  variant="outlined"
-                  block
-                  class="mt-3"
-                  :loading="client.loading"
-                >
-                  <VIcon icon="tabler-unlink" class="mr-1" />
-                  Desconectar
-                </VBtn>
-              </div>
-
-              <div v-else>
-                <VAlert
-                  type="warning"
-                  variant="tonal"
-                  density="compact"
-                  icon="tabler-alert-triangle"
-                >
-                  Este WhatsApp está desconectado. Conecte-o para {{ client.type === 'atendimento' ? 'atender clientes' : 'enviar campanhas' }}.
-                </VAlert>
-              </div>
-            </VCardText>
-          </VCard>
-        </VCol>
-      </VRow>
-    </VWindowItem>
-  </VWindow>
+    </VCol>
+  </VRow>
 </template>
+
+<style scoped>
+.webhook-code {
+  background: rgba(var(--v-theme-surface-variant), 0.5);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 12px;
+  min-height: 40px;
+}
+.webhook-url-text {
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 11px;
+}
+</style>

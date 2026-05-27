@@ -68,6 +68,14 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 - Critério: mensagem chega no celular; erro 190/131047 retorna mensagem PT-BR amigável no chat.
 - _Motivo do pendente:_ as funções HTTP exigem token Meta válido — não testáveis em modo simulação. A lógica local (isWindowOpen, persistência, idempotência, isolamento) já foi validada automaticamente.
 
+### FASE-04 — validação visual interativa do frontend (browser logado)
+- [ ] Abrir `/crm/config` → aba WhatsApp: confirmar o formulário de credenciais Meta (substituiu o QR), campos write-only mascarados, callout do webhook com botão copiar, chip de status. Salvar credenciais reais e ver chip "Conectado".
+- [ ] Abrir um chat: confirmar que a lista carrega (allChats), mensagens aparecem (getChat), e que ícones de status (ack) renderizam.
+- [ ] Janela 24h FECHADA: input desabilitado + banner de aviso + botão "Enviar template" abre o modal.
+- [ ] Modal de template: lista templates APPROVED, preenche parâmetros {{n}}, preview correto, envio OK.
+- [ ] Realtime: enviar mensagem do celular → aparece no chat via socket `nova-mensagem`; status outbound atualiza via `update-mensagem`.
+- _Motivo do pendente:_ é um SPA atrás de login; a validação automática cobriu build de produção (vite, sem erros), boot do dev server e review de código. Interação visual exige sessão de navegador autenticada.
+
 ---
 
 ## DECISÕES PENDENTES DE REVISÃO (acumulativo)
@@ -90,6 +98,19 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 
 <!-- Adicione novas entradas abaixo, da mais antiga (topo) para a mais recente (fundo). -->
 
+## 2026-05-27 21:00 — FASE-04 FECHADA (frontend)
+
+- Construção: builder agent (Sonnet 4.6 medium); design das 3 peças de UI via Skill frontend-design (sessão), injetado no prompt
+- Arquivos criados: `client/src/pages/apps/crm/configs/MetaTemplateDialog.vue`
+- Arquivos modificados: `client/src/pages/apps/crm/configs/zap.vue` (substituído QR → form Meta), `client/src/pages/apps/crm/chat.vue` (helpers mapConversaToChat/mapMsgFront/ackFromStatus; getAllChats/getMoreChats/getChat/getMoreMsgs/sendMessage/sendAnexo adaptados; socket nova-mensagem/update-mensagem; banner janela 24h; input desabilitado; MetaTemplateDialog)
+- Testes (automáticos): `npm run build` ✅ (1456 módulos, sem erro); oregon-front online sem erro de compilação; dist gerado; review de código das 3 peças + edições do chat.vue
+- 🔒 Security: ✅ — tokens write-only (form vazio, backend não devolve); sem credencial em query/log; sem novo v-html (reuso do render existente)
+- ✅ Quality: ✅ — componentes fiéis ao tema Vuexy/Vuetify; chat.vue editado cirurgicamente (sem reescrever o arquivo de 2210 linhas)
+- Testes humanos pendentes: validação visual interativa (ver seção no topo) — SPA atrás de login
+- 🌳 Commit: _(hash abaixo)_
+- Próxima fase: FASE-05 (remoção do wwebjs + stubs TODO)
+- Autopilot: seguindo para FASE-05.
+
 ## 2026-05-27 20:40 — FASE-03 FECHADA (rotas REST do chat)
 
 - Construção: builder agent (Sonnet 4.6 medium)
@@ -101,7 +122,7 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 - 🔒 Security: ✅ — empresa_id do JWT; ownership via getById antes de ler/enviar; paginação ≤100; multer whitelist+16MB; regex anti-injeção em templateName/languageCode; erros Meta → 502 PT-BR
 - ✅ Quality: ✅ — contrato com frontend mantido via mapearMsgCloud (campos tipo/texto/ack/fromMe); rotas legadas preservadas
 - Testes humanos pendentes: envio real (texto/mídia/template) com credenciais Meta reais e janela aberta
-- 🌳 Commit: _(hash abaixo)_
+- 🌳 Commit: `13a58cf` — feat(whatsapp): FASE-03 — rotas do chat sobre Conversations/Messages
 - Próxima fase: FASE-04 (frontend — config Meta + ajustes do chat)
 - Autopilot: seguindo para FASE-04 (invocarei frontend-design antes de delegar a UI).
 

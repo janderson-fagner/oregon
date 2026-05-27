@@ -4,6 +4,7 @@
   import moment from "moment";
 
   import DadosCliente from "@/views/apps/crm/dadosCliente.vue";
+  import MetaTemplateDialog from "@/pages/apps/crm/configs/MetaTemplateDialog.vue";
 
   const { setAlert } = useAlert();
 
@@ -19,37 +20,99 @@
   const selectedChat = ref(null);
   const loadingMoreChats = ref(false);
 
+  // ---- Helpers de mapeamento Meta Cloud API ----
+  function mapConversaToChat(c) {
+    return {
+      id: c.id,
+      nome: c.contact_name || c.contact_wa_id || 'Contato',
+      naoLida: c.unread_count || 0,
+      pinned: false,
+      ultimaAcao: c.last_message_at,
+      ultimaMensagem: { texto: c.last_message_preview || '', data: c.last_message_at },
+      messagens: [],
+      cliente: null,
+      contato: { numero: c.contact_wa_id, nome: c.contact_name, avatar: null },
+      phoneFlowsBlocked: false,
+      waitingForAgent: null,
+      _conv: c,
+    };
+  }
+
+  function mapMsgFront(m) {
+    const out = { ...m };
+    if (m.hasMedia || m.media_url || m.media_path) {
+      out.media = {
+        url: m.media_url || (m.media_path ? '/uploads/' + m.media_path : null),
+        mime: m.media_mime,
+        filename: m.media_filename,
+        duration: null,
+      };
+      out.hasMedia = true;
+    }
+    // Garantir campo texto
+    if (!out.texto && out.body) out.texto = out.body;
+    // Garantir campo data
+    if (!out.data && out.created_at) {
+      out.data = moment(out.created_at).format("DD/MM/YYYY HH:mm:ss");
+    }
+    return out;
+  }
+
+  function ackFromStatus(status) {
+    return ({ pending: 0, sent: 1, delivered: 2, read: 3, failed: -1 })[status] ?? 0;
+  }
+
+  // ---- Estado da janela 24h ----
+  const janela = ref({ windowOpen: true, expiresAt: null, hoursRemaining: null });
+  const templateDialog = ref(false);
+
+  const carregarJanela = async (id) => {
+    if (!id) return;
+    try {
+      const res = await $api(`/zap/window-status/${id}`, { method: "GET" });
+      if (res) janela.value = res;
+    } catch {
+      // Se erro, assume janela aberta para não bloquear indevidamente
+      janela.value = { windowOpen: true, expiresAt: null, hoursRemaining: null };
+    }
+  };
+
+  const abrirTemplateDialog = () => {
+    templateDialog.value = true;
+  };
+
+  const onTemplateEnviado = async () => {
+    if (!selectedChat.value?.id) return;
+    await carregarJanela(selectedChat.value.id);
+    await getChat(selectedChat.value.id, allChats.value.findIndex((c) => c.id == selectedChat.value.id));
+  };
+  // ---- Fim helpers Meta ----
+
   const getMoreChats = async () => {
     loadingMoreChats.value = true;
 
     try {
+      const nextPage = Math.ceil(allChats.value.length / 20) + 1;
       const res = await $api("/zap/allChats", {
         method: "GET",
         query: {
-          itemsPerPage: allChats.value.length + 12,
-          type: 'atendimento'
+          page: nextPage,
+          limit: 20,
+          busca: searchQuery.value || undefined,
         },
       });
 
       if (!res) return;
 
-      console.log("res more chats", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível obter as conversas, verifique se o WhatsApp está conectado.",
-          "error"
+      const lista = res.chats || [];
+      if (lista.length > 0) {
+        const novos = lista.map(mapConversaToChat).filter(
+          (nc) => !allChats.value.some((ec) => ec.id == nc.id)
         );
-        return;
-      }
-
-      if (res.length > 0) {
-        allChats.value = res;
+        allChats.value = [...allChats.value, ...novos];
       }
     } catch (error) {
-      console.error("Error fetching chats:", error, error.response);
-
-      allChats.value = [];
+      console.error("Error fetching more chats:", error, error.response);
     } finally {
       loadingMoreChats.value = false;
     }
@@ -77,31 +140,17 @@
       const res = await $api("/zap/allChats", {
         method: "GET",
         query: {
-          q: searchQuery.value,
-          type: 'atendimento'
+          page: 1,
+          limit: 20,
+          busca: searchQuery.value || undefined,
         },
       });
 
       if (!res) return;
 
-      console.log("res chats", res);
-
-      if (res?.status && res?.status == "Desconectado") {
-        setAlert(
-          "Não foi possível obter as conversas, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
-        return;
-      }
-
-      allChats.value = res;
+      allChats.value = (res.chats || []).map(mapConversaToChat);
     } catch (error) {
       console.error("Error fetching chats:", error, error.response);
-
       allChats.value = [];
     } finally {
       loading.value = false;
@@ -158,44 +207,32 @@
     try {
       const res = await $api("/zap/getChat/" + id, {
         method: "GET",
-        query: {
-          type: 'atendimento'
-        },
       });
 
       if (!res) return;
 
-      console.log("res chat", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível obter as mensagens, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
-        return;
-      }
+      const mensagens = (res.messages || []).map(mapMsgFront);
+      const chatMapeado = {
+        ...mapConversaToChat(res.conversation || { id }),
+        messagens: mensagens,
+        loadingChat: false,
+      };
 
       if (!up && selectedChat.value && index >= 0) {
-        res.naoLida = 0;
-        selectedChat.value = res;
-        allChats.value[index] = res;
+        chatMapeado.naoLida = 0;
+        // Preserva estado de atendimento/bloqueio se já estava carregado
+        chatMapeado.waitingForAgent = selectedChat.value.waitingForAgent;
+        chatMapeado.phoneFlowsBlocked = selectedChat.value.phoneFlowsBlocked;
+        chatMapeado.cliente = selectedChat.value.cliente;
+        selectedChat.value = chatMapeado;
+        allChats.value[index] = { ...allChats.value[index], ...chatMapeado };
 
+        carregarJanela(id);
         rolarFimChat();
       } else {
-        // Evita duplicação: verifica se o chat já existe na lista
-        const jaExiste = allChats.value.some(c => c.id == res.id);
+        const jaExiste = allChats.value.some(c => c.id == chatMapeado.id);
         if (!jaExiste) {
-          let nchat = {
-            ...res,
-            ultimaMensagem: res.messagens?.length
-              ? res.messagens[res.messagens.length - 1]
-              : null,
-          }
-          allChats.value.unshift(nchat);
+          allChats.value.unshift(chatMapeado);
         }
       }
     } catch (error) {
@@ -225,39 +262,51 @@
 
   const _pendingChatLoads = new Set();
 
-  const handleNewMessage = (msg) => {
-    if (!msg) return;
+  const handleNewMessage = (payload) => {
+    if (!payload) return;
 
-    let chatIndex = allChats.value.findIndex((c) => c.id == msg.idChat);
+    // Suporte ao payload Meta: { conversation_id, message }
+    const chatId = payload.conversation_id ?? payload.idChat;
+    const msg = payload.message ?? payload;
 
-    console.log("chatIndex", chatIndex);
+    if (!chatId || !msg) return;
+
+    const msgMapeada = mapMsgFront(msg);
+
+    let chatIndex = allChats.value.findIndex((c) => c.id == chatId);
 
     if (chatIndex < 0 && (!searchQuery.value || searchQuery.value == "")) {
-      // Evita múltiplas requisições simultâneas para o mesmo chat
-      if (_pendingChatLoads.has(msg.idChat)) return;
-      _pendingChatLoads.add(msg.idChat);
-      return getChat(msg.idChat, -1, true).finally(() => _pendingChatLoads.delete(msg.idChat));
+      if (_pendingChatLoads.has(chatId)) return;
+      _pendingChatLoads.add(chatId);
+      return getChat(chatId, -1, true).finally(() => _pendingChatLoads.delete(chatId));
     }
 
-    allChats.value[chatIndex].ultimaMensagem = msg;
-    if (!msg.fromMe) allChats.value[chatIndex].naoLida += 1;
+    if (chatIndex >= 0) {
+      allChats.value[chatIndex].ultimaMensagem = msgMapeada;
+      allChats.value[chatIndex].ultimaAcao = msgMapeada.data || msgMapeada.created_at;
+      if (!msgMapeada.fromMe) allChats.value[chatIndex].naoLida = (allChats.value[chatIndex].naoLida || 0) + 1;
 
-    if (selectedChat?.value?.id == msg.idChat) {
-      // Evita duplicação: verifica se a mensagem já existe no chat
-      const jaExiste = selectedChat.value.messagens.some(m => m.id == msg.id);
+      // Reordenar para o topo
+      const chatItem = allChats.value.splice(chatIndex, 1)[0];
+      allChats.value.unshift(chatItem);
+      chatIndex = 0;
+    }
+
+    if (selectedChat?.value?.id == chatId) {
+      const jaExiste = selectedChat.value.messagens.some(m => m.id == msgMapeada.id || (msgMapeada.wamid && m.wamid == msgMapeada.wamid));
       if (!jaExiste) {
         selectedChat.value.messagens = [
           ...selectedChat.value.messagens,
-          msg,
+          msgMapeada,
         ].sort((a, b) => {
-          return (
-            moment(a.data, "DD/MM/YYYY HH:mm:ss") -
-            moment(b.data, "DD/MM/YYYY HH:mm:ss")
-          );
+          return moment(a.data, "DD/MM/YYYY HH:mm:ss") - moment(b.data, "DD/MM/YYYY HH:mm:ss");
         });
       }
-      allChats.value[chatIndex].naoLida = 0;
+      if (chatIndex >= 0) allChats.value[chatIndex].naoLida = 0;
       rolarFimChat();
+
+      // Recarrega janela ao receber msg inbound
+      if (!msgMapeada.fromMe) carregarJanela(chatId);
     }
   };
 
@@ -267,25 +316,45 @@
     window.open(url, "_blank");
   };
 
-  socket.on("nova-mensagem", (msg) => {
-    console.log("nova-mensagem", msg);
-
-    handleNewMessage(msg);
+  socket.on("nova-mensagem", (payload) => {
+    handleNewMessage(payload);
   });
 
-  socket.on("update-mensagem", (msg) => {
-    console.log("update-mensagem", msg);
+  socket.on("update-mensagem", (payload) => {
+    if (!payload) return;
 
-    if (!msg || !selectedChat.value || !selectedChat.value?.messagens?.length)
+    if (!selectedChat.value || !selectedChat.value?.messagens?.length) return;
+
+    // Payload com status: { wamid, status }
+    if (payload.wamid && payload.status) {
+      const idx = selectedChat.value.messagens.findIndex((m) => m.wamid == payload.wamid);
+      if (idx >= 0) {
+        selectedChat.value.messagens[idx].ack = ackFromStatus(payload.status);
+        selectedChat.value.messagens[idx].status = payload.status;
+      }
       return;
+    }
 
-    let chatIndex = selectedChat.value?.messagens?.findIndex(
-      (c) => c.id == msg.id
-    );
+    // Payload com mídia inbound baixada: { id, media_url, media_path, media_mime }
+    if (payload.id && (payload.media_url || payload.media_path)) {
+      const idx = selectedChat.value.messagens.findIndex((m) => m.id == payload.id);
+      if (idx >= 0) {
+        selectedChat.value.messagens[idx].media = {
+          url: payload.media_url || (payload.media_path ? '/uploads/' + payload.media_path : null),
+          mime: payload.media_mime || selectedChat.value.messagens[idx].media?.mime,
+          filename: payload.media_filename || selectedChat.value.messagens[idx].media?.filename,
+          duration: null,
+        };
+        selectedChat.value.messagens[idx].hasMedia = true;
+      }
+      return;
+    }
 
-    if (chatIndex < 0) return;
-
-    selectedChat.value.messagens[chatIndex].ack = msg.ack;
+    // Fallback legado: { id, ack }
+    if (payload.id && payload.ack !== undefined) {
+      const idx = selectedChat.value.messagens.findIndex((m) => m.id == payload.id);
+      if (idx >= 0) selectedChat.value.messagens[idx].ack = payload.ack;
+    }
   });
 
   // Normaliza telefone para comparacao (ultimos 8 digitos)
@@ -515,40 +584,49 @@
       const res = await $api("/zap/send-message-chat", {
         method: "POST",
         body: {
-          chatId: selectedChat.value.id,
-          message: message.value,
-          midiaPath: filePath,
-          replyId: viewReply.value && msgReply.value ? msgReply.value.id : null,
-          type: 'atendimento'
+          conversationId: selectedChat.value.id,
+          text: message.value,
+          replyToWamid: viewReply.value && msgReply.value ? (msgReply.value.wamid || null) : null,
         },
       });
 
       if (!res) return;
 
-      console.log("res sendMessage", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível enviar a mensagem, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
+      // Janela fechada
+      if (res.windowClosed) {
+        janela.value = { windowOpen: false, expiresAt: null, hoursRemaining: 0 };
+        setAlert("A janela de 24h está fechada. Envie um template para reabrir.", "warning", "tabler-clock", 5000);
         return;
       }
 
       message.value = "";
       filesToSend.value = [];
-      inputFiles.value.value = null;
-      inputFiles.value.files = null;
+      if (inputFiles.value) {
+        inputFiles.value.value = null;
+      }
       audioUrl.value = null;
       audioBlob.value = null;
       viewReply.value = false;
       msgReply.value = null;
+
+      // Append otimista da mensagem retornada
+      if (res.message) {
+        const msgMapeada = mapMsgFront(res.message);
+        const jaExiste = selectedChat.value.messagens.some((m) => m.id == msgMapeada.id || (msgMapeada.wamid && m.wamid == msgMapeada.wamid));
+        if (!jaExiste) {
+          selectedChat.value.messagens = [...selectedChat.value.messagens, msgMapeada];
+          rolarFimChat();
+        }
+      }
     } catch (error) {
       console.error("Error sending message:", error, error.response);
+
+      // 422 = janela fechada
+      if (error?.response?.status === 422 || error?.response?._data?.windowClosed) {
+        janela.value = { windowOpen: false, expiresAt: null, hoursRemaining: 0 };
+        setAlert("A janela de 24h está fechada. Envie um template para reabrir.", "warning", "tabler-clock", 5000);
+        return;
+      }
 
       setAlert(
         error?.response?._data?.message ||
@@ -563,7 +641,7 @@
     }
   };
 
-  const sendAnexo = async (anexo) => {
+  const sendAnexo = async (anexo, caption = "") => {
     if (!anexo) return;
 
     try {
@@ -580,22 +658,35 @@
         formData.append("file", anexo);
       }
 
+      formData.append("conversationId", selectedChat.value.id);
+      if (caption) formData.append("caption", caption);
+
       const res = await $api("/zap/save-anexo", {
         method: "POST",
-        query: {
-          chatId: selectedChat.value.id,
-          type: 'atendimento'
-        },
         body: formData,
       });
 
-      console.log("res sendAnexo", res);
-
       if (!res) return;
+
+      // Append otimista se retornar mensagem
+      if (res.message) {
+        const msgMapeada = mapMsgFront(res.message);
+        const jaExiste = selectedChat.value.messagens.some((m) => m.id == msgMapeada.id);
+        if (!jaExiste) {
+          selectedChat.value.messagens = [...selectedChat.value.messagens, msgMapeada];
+          rolarFimChat();
+        }
+      }
 
       return res;
     } catch (error) {
       console.error("Error sending anexo:", error, error.response);
+
+      if (error?.response?.status === 422 || error?.response?._data?.windowClosed) {
+        janela.value = { windowOpen: false, expiresAt: null, hoursRemaining: 0 };
+        setAlert("A janela de 24h está fechada. Envie um template para reabrir.", "warning", "tabler-clock", 5000);
+        return;
+      }
 
       setAlert(
         error?.response?._data?.message ||
@@ -972,36 +1063,28 @@
     loadingMoreMsgs.value = true;
 
     try {
+      const currentCount = selectedChat.value.messagens?.length || 0;
       const res = await $api("/zap/getChat/" + selectedChat.value.id, {
         method: "GET",
         query: {
-          limit: selectedChat.value.messagens.length + 50,
-          type: 'atendimento'
+          page: Math.ceil(currentCount / 50) + 1,
+          limit: 50,
         },
       });
 
       if (!res) return;
 
-      console.log("res more msgs", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível obter as mensagens, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-        return;
-      }
-
-      if (res.messagens.length > 0) {
-        selectedChat.value.messagens = res.messagens.sort((a, b) => {
-          return (
-            moment(a.data, "DD/MM/YYYY HH:mm:ss") -
-            moment(b.data, "DD/MM/YYYY HH:mm:ss")
-          );
+      const novas = (res.messages || []).map(mapMsgFront);
+      if (novas.length > 0) {
+        // Prepend evitando duplicatas
+        const idsExistentes = new Set(selectedChat.value.messagens.map((m) => m.id));
+        const semDup = novas.filter((m) => !idsExistentes.has(m.id));
+        selectedChat.value.messagens = [...semDup, ...selectedChat.value.messagens].sort((a, b) => {
+          return moment(a.data, "DD/MM/YYYY HH:mm:ss") - moment(b.data, "DD/MM/YYYY HH:mm:ss");
         });
       }
     } catch (error) {
-      console.error("Error fetching chat:", error, error.response);
+      console.error("Error fetching more msgs:", error, error.response);
     }
 
     loadingMoreMsgs.value = false;
@@ -1219,6 +1302,12 @@
 </script>
 
 <template>
+  <MetaTemplateDialog
+    v-model="templateDialog"
+    :conversation-id="selectedChat?.id"
+    @sent="onTemplateEnviado"
+  />
+
   <div class="menu-chat position-absolute">
     <VMenu v-model="viewMenuChat" location="top" contained>
       <VList>
@@ -1843,6 +1932,39 @@
           </template>
         </div>
 
+        <!-- Banner janela 24h -->
+        <div v-if="selectedChat && !janela.windowOpen" class="px-3 pt-2">
+          <VAlert
+            type="warning"
+            variant="tonal"
+            density="compact"
+            icon="tabler-clock"
+            class="mb-2"
+          >
+            <div class="d-flex align-center justify-space-between">
+              <span class="text-body-2">A janela de 24h está fechada. Você não pode enviar mensagens avulsas.</span>
+              <VBtn
+                size="small"
+                color="warning"
+                variant="flat"
+                class="ml-3"
+                @click="abrirTemplateDialog"
+              >
+                <VIcon icon="tabler-template" class="mr-1" size="16" />
+                Enviar template
+              </VBtn>
+            </div>
+          </VAlert>
+        </div>
+        <div v-else-if="selectedChat && janela.windowOpen && janela.hoursRemaining !== null" class="px-3 pt-1">
+          <div class="d-flex align-center justify-end">
+            <VChip size="x-small" color="success" variant="tonal" label class="mb-1">
+              <VIcon icon="tabler-clock" size="12" class="mr-1" />
+              Janela: {{ janela.hoursRemaining }}h restantes
+            </VChip>
+          </div>
+        </div>
+
         <div class="message-send">
           <div
             class="send-files"
@@ -1991,6 +2113,7 @@
             @click="inputFiles.click()"
             :loading="loadingSendMessage"
             v-if="!gravando"
+            :disabled="!janela.windowOpen"
           >
             <VIcon icon="tabler-paperclip" />
           </IconBtn>
@@ -1999,11 +2122,12 @@
             v-model="message"
             bg-color="white"
             active
-            placeholder="Digite uma mensagem"
+            :placeholder="janela.windowOpen ? 'Digite uma mensagem' : 'Janela de 24h fechada — envie um template'"
             class="w-100"
             rows="1"
             clearable
             :loading="loadingMessages || loadingSendMessage"
+            :disabled="!janela.windowOpen"
           />
 
           <IconBtn
@@ -2015,6 +2139,7 @@
                 : sendMessage()
             "
             :loading="loadingSendMessage"
+            :disabled="!janela.windowOpen"
           >
             <VIcon
               :icon="
@@ -2043,6 +2168,7 @@
               @click="sendMessage('audio')"
               :loading="loadingSendMessage"
               color="success"
+              :disabled="!janela.windowOpen"
             >
               <VIcon icon="tabler-send" />
             </IconBtn>
