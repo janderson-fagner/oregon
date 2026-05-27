@@ -60,7 +60,13 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 ## TESTES HUMANOS PENDENTES (acumulativo)
 
 > Atualizado continuamente durante o autopilot. Quando o Janderson voltar, validar manualmente cada item.
-> _(vazio até agora — itens serão acrescentados ao fim de cada subfase com validação humana)_
+
+### FASE-01 — chamadas HTTP reais à Graph API (cloudApiClient)
+- [ ] Com credenciais Meta REAIS configuradas (`POST /whatsapp/config`), validar envio de texto via `messageService.sendTextMessage` para um número de teste dentro da janela de 24h e confirmar recebimento no WhatsApp.
+- [ ] Validar `listTemplates` retornando os templates APPROVED da WABA real.
+- [ ] Validar download de mídia inbound (depende da FASE-02) e upload de mídia outbound.
+- Critério: mensagem chega no celular; erro 190/131047 retorna mensagem PT-BR amigável no chat.
+- _Motivo do pendente:_ as funções HTTP exigem token Meta válido — não testáveis em modo simulação. A lógica local (isWindowOpen, persistência, idempotência, isolamento) já foi validada automaticamente.
 
 ---
 
@@ -83,6 +89,25 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 ---
 
 <!-- Adicione novas entradas abaixo, da mais antiga (topo) para a mais recente (fundo). -->
+
+## 2026-05-27 20:10 — FASE-01 FECHADA (subfases A, B, C)
+
+- Construção: builder agent (Sonnet 4.6 medium); correções pela sessão (Edit)
+- Arquivos criados: `server/src/whatsapp/cloudApiClient.js`, `server/src/whatsapp/repositories/conversationRepository.js`, `server/src/whatsapp/repositories/messageRepository.js`, `server/src/whatsapp/messageService.js`
+- Arquivos modificados: `server/package.json` (form-data como dep explícita)
+- Testes:
+  - Carregamento dos 4 módulos → OK; `isWindowOpen` 2h→true, 25h→false, null→false ✅
+  - Integração no banco (empresa 1): upsert id estável, `unread_count` incrementa no inbound, `insertMessage` idempotente por wamid, `updateMessageStatusByWamid`, **isolamento cross-tenant** (getByWamid empresa errada → null), `getMessages` ✅ — linhas de teste limpas
+- 🔒 Security: ✅ — token nunca logado; queries parametrizadas; isolamento por empresa_id em todo WHERE; anti-path-traversal no download (empresaId int + filename uuid); whitelist de extensão de mídia; timeout em todas as chamadas axios
+- ✅ Quality: ⚠️→✅ — 3 correções da sessão:
+  1. **Bug de runtime no `upsertConversation`**: array de params tinha 9 itens para 10 placeholders (faltava `unread_count` na posição do VALUES) → ER_PARSE_ERROR. Corrigido e re-testado.
+  2. **`comRetry` (cloudApiClient)**: axios lança em 4xx/5xx, então o `mapearErroMeta` PT-BR nunca era aplicado — chamador recebia erro cru. Agora lança erro mapeado com `metaCode`.
+  3. **`sendMediaMessage`**: passou a aceitar `mediaPath` e persistir `media_path` (spec previa; necessário pro chat exibir mídia enviada).
+- Validação final: critério de aceite da fase ✅ (módulos + isWindowOpen + integração DB); PM2 `online` sem erros
+- Testes humanos pendentes: chamadas HTTP reais ao Meta (ver seção no topo)
+- 🌳 Commit: _(hash abaixo)_
+- Próxima fase: FASE-02 (webhook fixo)
+- Autopilot: seguindo para FASE-02.
 
 ## 2026-05-27 — DESCOBERTA OPERACIONAL
 
@@ -132,6 +157,6 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 - Critério de aceite da fase: ✅ (tabelas + CRUD sem expor tokens + PM2 online)
 - 🔒 Security review (consolidado): ✅ aprovado
 - ✅ Quality review (consolidado): ✅ aprovado
-- 🌳 Commit: _(hash registrado abaixo após git)_
+- 🌳 Commit: `827e090` — feat(whatsapp): FASE-00 — modelo de dados + config Meta por empresa (branch `feat/whatsapp-cloud-api-chat`)
 - Próxima fase: FASE-01 (cliente Cloud API + repositórios de mensagens)
 - Autopilot: seguindo direto para FASE-01 (sem aguardar usuário).
