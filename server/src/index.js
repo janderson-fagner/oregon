@@ -100,6 +100,7 @@ app.use('/crm', getUserLoggedUser, checkFeature('acessoCRM'), require('./routes/
 app.use('/disparos', getUserLoggedUser, checkFeature('acessoCRM'), require('./routes/disparos'));
 app.use('/templates', getUserLoggedUser, require('./routes/templates'));
 app.use('/zap', getUserLoggedUser, checkFeature('acessoCRM'), require('./routes/zap-route'));
+app.use('/whatsapp', getUserLoggedUser, require('./routes/whatsapp-config-route'));
 app.use('/atendimento', require('./routes/atendimento'));
 app.use('/flows', require('./flows/routes/flowsRoute'));
 app.use('/ordem-servico', require('./routes/ordem-servico'));
