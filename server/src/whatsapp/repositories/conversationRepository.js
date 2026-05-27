@@ -118,6 +118,21 @@ async function getById(conversationId, empresaId) {
 }
 
 /**
+ * Incrementa o unread_count da conversa em 1.
+ * Usado pelo webhook APÓS confirmar que a mensagem inbound é nova (não duplicada),
+ * evitando inflar o contador quando o Meta reentrega o mesmo evento.
+ * @param {number} conversationId
+ * @param {number} empresaId
+ * @returns {Promise<void>}
+ */
+async function incrementUnread(conversationId, empresaId) {
+  await dbQuery(
+    'UPDATE Conversations SET unread_count = unread_count + 1 WHERE id = ? AND empresa_id = ?',
+    [conversationId, empresaId]
+  );
+}
+
+/**
  * Zera unread_count da conversa (marcar como lida).
  * @param {number} conversationId
  * @param {number} empresaId
@@ -134,5 +149,6 @@ module.exports = {
   upsertConversation,
   listConversations,
   getById,
+  incrementUnread,
   markConversationRead,
 };

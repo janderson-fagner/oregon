@@ -21,7 +21,13 @@ console.log('Carregando variáveis de ambiente do arquivo:', pathEnv);
 require('dotenv').config({ path: pathEnv });
 require('events').EventEmitter.defaultMaxListeners = 20;
 
-app.use(express.json({ limit: '5000mb' }));
+app.use(express.json({
+  limit: '5000mb',
+  verify: (req, res, buf) => {
+    // Salva o raw body para validação HMAC-SHA256 do webhook do Meta
+    req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ limit: '5000mb', extended: true }));
 app.use(express.static(path.join(__dirname, '../../client/dist'), { index: false }));
 
@@ -116,6 +122,10 @@ app.use('/contrato-publico', require('./routes/contratos-publico'));
 // Rotas SaaS - Sistema de Assinaturas
 app.use('/saas', require('./routes/saas'));
 app.use('/webhook', require('./routes/webhook-asaas'));
+
+// Webhook do WhatsApp Cloud API — SEM autenticação JWT (Meta chama diretamente)
+// DEVE estar após webhook-asaas (paths distintos: /asaas vs /whatsapp)
+app.use('/webhook', require('./routes/webhook-route'));
 
 // Centro de Ajuda
 app.use('/help-center', require('./routes/help-center'));

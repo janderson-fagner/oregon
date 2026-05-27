@@ -115,6 +115,26 @@ async function getMessages(conversationId, empresaId, opcoes) {
 }
 
 /**
+ * Atualiza o caminho e MIME de mídia de uma mensagem após download em background.
+ * media_url é derivado do path para ser servível pelo endpoint /uploads.
+ * @param {number} msgId - id primário da mensagem
+ * @param {string} mediaPath - path relativo (ex: midias/1/uuid.jpg)
+ * @param {string} mediaMime - MIME type do arquivo
+ * @returns {Promise<void>}
+ */
+async function updateMediaPath(msgId, mediaPath, mediaMime) {
+  const mediaUrl = `/uploads/${mediaPath}`;
+  await dbQuery(
+    `UPDATE Messages
+     SET media_path = ?,
+         media_url  = ?,
+         media_mime = COALESCE(?, media_mime)
+     WHERE id = ?`,
+    [mediaPath, mediaUrl, mediaMime || null, msgId]
+  );
+}
+
+/**
  * Busca mensagem pelo wamid, validando tenant.
  * @param {string} wamid
  * @param {number} empresaId
@@ -131,6 +151,7 @@ async function getByWamid(wamid, empresaId) {
 module.exports = {
   insertMessage,
   updateMessageStatusByWamid,
+  updateMediaPath,
   getMessages,
   getByWamid,
 };

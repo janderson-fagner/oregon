@@ -90,6 +90,25 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
 
 <!-- Adicione novas entradas abaixo, da mais antiga (topo) para a mais recente (fundo). -->
 
+## 2026-05-27 20:25 — FASE-02 FECHADA (webhook fixo)
+
+- Construção: builder agent (Sonnet 4.6 medium); correções pela sessão (Edit)
+- Arquivos criados: `server/src/routes/webhook-route.js`
+- Arquivos modificados: `server/src/index.js` (express.json verify→rawBody + mount /webhook), `configRepository.js` (getByVerifyToken), `messageRepository.js` (updateMediaPath), `conversationRepository.js` (incrementUnread)
+- Testes (smoke de segurança INDEPENDENTE da sessão, http://127.0.0.1:3005):
+  - Handshake válido → challenge ecoado; token errado → 403 ✅
+  - **POST assinatura inválida → 401 e 0 linhas persistidas** ✅ (propriedade de segurança central)
+  - POST assinatura válida → 200 + 1 linha; reenvio → idempotente (1 linha) ✅
+  - Status update via webhook → status='read' ✅
+  - Login + express.json intactos (rawBody não quebrou) ✅
+  - Após fix: 2 entregas do mesmo wamid → unread_count=1 ✅
+- 🔒 Security: ✅ — HMAC-SHA256 com crypto.timingSafeEqual (try/catch) validada ANTES de processar; empresa_id resolvido por phone_number_id (atacante não forja assinatura sem app_secret); sem PII em log; query de CLIENTES parametrizada; mídia em setImmediate (não bloqueia 200)
+- ✅ Quality: ⚠️→✅ — corrigida inflação de unread_count em reentregas do Meta (incrementUnread movido para depois do check de idempotência)
+- Validação final: critério de aceite da fase ✅; PM2 online
+- 🌳 Commit: _(hash abaixo)_
+- Próxima fase: FASE-03 (rotas REST do chat sobre Conversations/Messages)
+- Autopilot: seguindo para FASE-03.
+
 ## 2026-05-27 20:10 — FASE-01 FECHADA (subfases A, B, C)
 
 - Construção: builder agent (Sonnet 4.6 medium); correções pela sessão (Edit)
@@ -105,7 +124,7 @@ Log vivo da execução desta SPEC. Cada subfase concluída adiciona uma entrada.
   3. **`sendMediaMessage`**: passou a aceitar `mediaPath` e persistir `media_path` (spec previa; necessário pro chat exibir mídia enviada).
 - Validação final: critério de aceite da fase ✅ (módulos + isWindowOpen + integração DB); PM2 `online` sem erros
 - Testes humanos pendentes: chamadas HTTP reais ao Meta (ver seção no topo)
-- 🌳 Commit: _(hash abaixo)_
+- 🌳 Commit: `def04e2` — feat(whatsapp): FASE-01 — cliente Cloud API + persistência de mensagens
 - Próxima fase: FASE-02 (webhook fixo)
 - Autopilot: seguindo para FASE-02.
 

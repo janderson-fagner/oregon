@@ -405,12 +405,12 @@ pm2 status oregon-node-dev
 
 ## Log da fase (marcar durante execução)
 
-- [ ] Subfase A concluída
-- [ ] Subfase B concluída
-- [ ] Subfase C concluída
-- [ ] Critério de aceite da fase verificado
-- [ ] Security review consolidado ✅
-- [ ] Quality review consolidado ✅
-- [ ] Commit feito (hash registrado no log) — sem `--no-verify`, sem secrets/credenciais no diff
-- [ ] Log atualizado em [`../10-LOG-EXECUCAO.md`](../10-LOG-EXECUCAO.md)
-- [ ] Autorização do usuário para próxima fase
+- [x] Subfase A concluída — express.json com rawBody + GET handshake + getByVerifyToken
+- [x] Subfase B concluída — POST com HMAC timingSafeEqual + persistência + socket + mídia em setImmediate
+- [x] Subfase C concluída — montagem pública em /webhook (coexiste com asaas)
+- [x] Critério de aceite da fase verificado — smoke de segurança independente da sessão
+- [x] Security review consolidado ✅ — assinatura inválida → 401 e **0 linhas persistidas** (comprovado); empresa_id via phone_number_id; sem PII em log; idempotência
+- [x] Quality review consolidado ✅ — corrigida inflação de unread_count em reentrega (incrementUnread só para mensagem nova)
+- [x] Commit feito (hash registrado no log)
+- [x] Log atualizado em [`../10-LOG-EXECUCAO.md`](../10-LOG-EXECUCAO.md)
+- [x] Autorização para próxima fase — **AUTOPILOT**

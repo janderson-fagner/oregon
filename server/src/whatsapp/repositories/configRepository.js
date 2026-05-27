@@ -24,6 +24,20 @@ async function getByEmpresa(empresaId) {
 }
 
 /**
+ * Busca a configuração pelo verify_token (usado no handshake GET do webhook).
+ * Retorna apenas registros ativos (ativo = 1). Query parametrizada.
+ * @param {string} verifyToken - token de verificação configurado pela empresa
+ * @returns {Promise<Object|null>} Objeto de configuração ativo ou null
+ */
+async function getByVerifyToken(verifyToken) {
+  const rows = await dbQuery(
+    'SELECT * FROM WhatsappCloudConfig WHERE verify_token = ? AND ativo = 1 LIMIT 1',
+    [verifyToken]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
+/**
  * Busca a configuração pelo phone_number_id (usado pelo webhook para resolver o tenant).
  * Retorna apenas registros ativos (ativo = 1). Lookup O(1) via índice único.
  * @param {string} phoneNumberId - Phone Number ID da Meta
@@ -128,4 +142,4 @@ async function remove(empresaId) {
   );
 }
 
-module.exports = { getByEmpresa, getByPhoneNumberId, upsert, remove };
+module.exports = { getByEmpresa, getByPhoneNumberId, getByVerifyToken, upsert, remove };
