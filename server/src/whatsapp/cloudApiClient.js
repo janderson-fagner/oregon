@@ -213,6 +213,49 @@ async function sendText(config, to, text, replyToWamid = null) {
 }
 
 /**
+ * Envia (ou remove) uma reação a uma mensagem existente.
+ * O WhatsApp Cloud API aceita type:'reaction' com o wamid da mensagem alvo.
+ * Para REMOVER a reação, envie emoji vazio ('').
+ * @param {Object} config
+ * @param {string} to - wa_id do destinatário (contato da conversa)
+ * @param {string} messageWamid - wamid da mensagem que receberá a reação
+ * @param {string} emoji - emoji da reação, ou '' para remover
+ * @returns {Promise<{wamid: string}>}
+ */
+async function sendReaction(config, to, messageWamid, emoji) {
+  const versao = obterVersaoApi(config);
+  const url = `https://graph.facebook.com/${versao}/${config.phone_number_id}/messages`;
+
+  const body = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'reaction',
+    reaction: {
+      message_id: messageWamid,
+      emoji: emoji || '',
+    },
+  };
+
+  log('cloudApi.sendReaction.req', { url, to, messageWamid, hasEmoji: !!emoji });
+
+  const resposta = await comRetry(() =>
+    axios.post(url, body, {
+      headers: {
+        Authorization: `Bearer ${config.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    })
+  );
+
+  verificarErroResposta(resposta);
+  const wamid = extrairWamid(resposta.data);
+  log('cloudApi.sendReaction.ok', { wamid, respBody: resposta.data });
+  return { wamid };
+}
+
+/**
  * Envia mensagem de mídia (image/document/audio/video).
  * Aceita envio por mediaId (upload prévio) ou link direto.
  * @param {Object} config
@@ -524,6 +567,7 @@ async function listTemplates(config) {
 
 module.exports = {
   sendText,
+  sendReaction,
   sendMedia,
   sendTemplate,
   markAsRead,

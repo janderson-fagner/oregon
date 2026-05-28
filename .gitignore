@@ -64,6 +64,10 @@ src/uploads/
 session-zap/
 .wwebjs_cache/
 
+#playwright
+.playwright-mcp/
+.playwright-mcp
+
 #core dumps
 core.[0-9]*
 

@@ -21,6 +21,7 @@ const configRepository = require('../whatsapp/repositories/configRepository');
 const conversationRepository = require('../whatsapp/repositories/conversationRepository');
 const messageRepository = require('../whatsapp/repositories/messageRepository');
 const cloudApiClient = require('../whatsapp/cloudApiClient');
+const { mirrorWebhook } = require('../whatsapp/webhookMirror');
 const log = require('../whatsapp/logger');
 const dbQuery = require('../utils/dbHelper');
 const { emitToEmpresa } = require('../socket');
@@ -52,29 +53,48 @@ function extrairBody(msg) {
 }
 
 /**
+ * Rótulos amigáveis (com emoji) por tipo de mensagem sem texto, usados no
+ * preview da lista de conversas. Evita os antigos "[audio]"/"[reaction]".
+ */
+const PREVIEW_LABELS = {
+  image: '📷 Foto',
+  video: '🎥 Vídeo',
+  audio: '🎤 Mensagem de voz',
+  sticker: '🌟 Figurinha',
+  location: '📍 Localização',
+  contacts: '👤 Contato',
+  document: '📄 Documento',
+};
+
+/**
  * Extrai preview resumido (máximo 100 caracteres) para last_message_preview.
- * Para tipos sem texto, retorna o tipo entre colchetes.
+ * Para tipos com legenda, usa a legenda; para tipos sem texto, usa um rótulo
+ * amigável (ex.: "🎤 Mensagem de voz"); documentos mostram o nome do arquivo.
  * @param {Object} msg
  * @returns {string}
  */
 function extrairPreview(msg) {
   if (!msg) return '';
 
+  const truncar = (s) => (s.length > 100 ? s.substring(0, 97) + '...' : s);
+
   if (msg.type === 'text') {
-    const body = (msg.text && msg.text.body) || '';
-    return body.length > 100 ? body.substring(0, 97) + '...' : body;
+    return truncar((msg.text && msg.text.body) || '');
   }
 
   const tiposComCaption = ['image', 'document', 'video'];
   if (tiposComCaption.includes(msg.type)) {
     const caption = (msg[msg.type] && msg[msg.type].caption) || '';
-    if (caption) {
-      return caption.length > 100 ? caption.substring(0, 97) + '...' : caption;
-    }
+    if (caption) return truncar(caption);
   }
 
-  // Áudio, sticker, reaction, location, etc.
-  return `[${msg.type}]`;
+  // Documento sem legenda: mostra o nome do arquivo, se houver.
+  if (msg.type === 'document') {
+    const nome = (msg.document && msg.document.filename) || '';
+    return nome ? truncar(`📄 ${nome}`) : PREVIEW_LABELS.document;
+  }
+
+  return PREVIEW_LABELS[msg.type] || 'Mensagem';
 }
 
 /**
@@ -192,6 +212,12 @@ router.post('/whatsapp', async (req, res) => {
 
   log('webhook.POST.assinatura_ok', { empresa_id: config.empresa_id });
 
+  // ── 3b. Espelhar para o ambiente de desenvolvimento (migração) ──
+  // Só ocorre em produção (WEBHOOK_MIRROR_URL definido) e nunca quando a
+  // própria requisição já é um espelho — assim o dev grava no seu banco sem
+  // reencaminhar de volta. Fire-and-forget: não bloqueia o 200 ao Meta.
+  mirrorWebhook(req);
+
   // ── 4. Processar payload (responder 200 mesmo se houver erro interno) ──
   // Resposta antecipada NÃO é feita aqui; respondemos ao final após processar
   // de forma síncrona as operações críticas. O download de mídia é em setImmediate.
@@ -218,6 +244,27 @@ router.post('/whatsapp', async (req, res) => {
               empresa_id: empresaId, wamid: msg.id, type: msg.type, from: msg.from,
               hasMedia: !!extrairMediaId(msg), hasContext: !!msg.context,
             });
+
+            // Reação: NÃO é uma mensagem nova — aplica o emoji à mensagem-alvo
+            // (identificada por reaction.message_id) e atualiza o frontend.
+            // Emoji vazio significa remoção da reação.
+            if (msg.type === 'reaction') {
+              const targetWamid = msg.reaction && msg.reaction.message_id;
+              const emoji = (msg.reaction && msg.reaction.emoji) || null;
+              if (targetWamid) {
+                try {
+                  const afetadas = await messageRepository.setReactionByWamid(targetWamid, emoji, empresaId);
+                  log('webhook.reaction.aplicada', { targetWamid, emoji, afetadas });
+                  if (afetadas > 0) {
+                    emitToEmpresa(empresaId, 'update-mensagem', { wamid: targetWamid, reaction: emoji || null });
+                  }
+                } catch (reErr) {
+                  log.err('webhook.reaction.falhou', { msg: reErr.message, targetWamid });
+                }
+              }
+              // Reação não cria mensagem, não mexe na conversa nem no unread.
+              continue;
+            }
 
             // 4a. Upsert da conversa
             const conversationId = await conversationRepository.upsertConversation({

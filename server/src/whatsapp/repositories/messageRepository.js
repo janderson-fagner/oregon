@@ -83,6 +83,26 @@ async function updateMessageStatusByWamid(wamid, status, errorData, empresaId) {
 }
 
 /**
+ * Aplica (ou remove) a reação de uma mensagem, identificada pelo wamid alvo.
+ * O WhatsApp envia emoji vazio ('') quando o usuário REMOVE a reação — nesse
+ * caso gravamos NULL. Inclui empresa_id no WHERE para isolamento de tenant.
+ * @param {string} targetWamid - wamid da mensagem que recebeu a reação
+ * @param {string|null} emoji - emoji da reação, ou null/'' para remover
+ * @param {number} empresaId
+ * @returns {Promise<number>} linhas afetadas (0 = mensagem alvo não encontrada)
+ */
+async function setReactionByWamid(targetWamid, emoji, empresaId) {
+  const valor = emoji && emoji.trim() ? emoji : null;
+  const resultado = await dbQuery(
+    `UPDATE Messages
+     SET reaction = ?
+     WHERE wamid = ? AND empresa_id = ?`,
+    [valor, targetWamid, empresaId]
+  );
+  return resultado.affectedRows || 0;
+}
+
+/**
  * Busca mensagens de uma conversa com paginação.
  * Ordenadas cronologicamente (mais antigas primeiro) via COALESCE para tratar timestamp_ms nulo.
  * @param {number} conversationId
@@ -151,6 +171,7 @@ async function getByWamid(wamid, empresaId) {
 module.exports = {
   insertMessage,
   updateMessageStatusByWamid,
+  setReactionByWamid,
   updateMediaPath,
   getMessages,
   getByWamid,

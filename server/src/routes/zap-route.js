@@ -123,6 +123,7 @@ const messageService = require('../whatsapp/messageService');
 const conversationRepository = require('../whatsapp/repositories/conversationRepository');
 const messageRepository = require('../whatsapp/repositories/messageRepository');
 const configRepository = require('../whatsapp/repositories/configRepository');
+const cloudApiClient = require('../whatsapp/cloudApiClient');
 const contactService = require('../whatsapp/contactService');
 const log = require('../whatsapp/logger');
 const { emitToEmpresa } = require('../socket');
@@ -231,6 +232,61 @@ router.post('/send-message-chat', async (req, res) => {
         return res.json({ success: true, message: msgObj });
     } catch (error) {
         console.error('Erro ao enviar mensagem de texto:', error.message);
+        return res.status(502).json({ error: error.message || 'Erro ao comunicar com a API do WhatsApp.' });
+    }
+});
+
+/**
+ * POST /zap/send-reaction
+ * Envia (ou remove) uma reação do atendente a uma mensagem da conversa.
+ * Body: { conversationId, messageWamid, emoji } — emoji '' ou null remove.
+ * Valida ownership (empresa_id) da conversa e da mensagem-alvo antes de enviar.
+ * Retorna: { success: true, wamid, reaction }
+ */
+router.post('/send-reaction', async (req, res) => {
+    try {
+        const empresaId = req.user.empresa_id;
+        const { conversationId, messageWamid } = req.body;
+        const emoji = req.body.emoji || ''; // '' => remover reação
+
+        if (!conversationId || !messageWamid) {
+            return res.status(400).json({ error: 'conversationId e messageWamid são obrigatórios.' });
+        }
+
+        // Conversa precisa pertencer à empresa (isolamento de tenant)
+        const conversation = await conversationRepository.getById(conversationId, empresaId);
+        if (!conversation) {
+            return res.status(404).json({ error: 'Conversa não encontrada.' });
+        }
+
+        // A mensagem-alvo precisa existir e pertencer à mesma empresa
+        const alvo = await messageRepository.getByWamid(messageWamid, empresaId);
+        if (!alvo || alvo.conversation_id != conversationId) {
+            return res.status(404).json({ error: 'Mensagem não encontrada nesta conversa.' });
+        }
+
+        // Config (phone_number_id/token) da empresa
+        const config = await configRepository.getByEmpresa(empresaId);
+        if (!config || !config.ativo) {
+            return res.status(400).json({ error: 'WhatsApp Cloud não configurado para esta empresa.' });
+        }
+
+        // Envia a reação ao Meta
+        try {
+            await cloudApiClient.sendReaction(config, conversation.contact_wa_id, messageWamid, emoji);
+        } catch (errMeta) {
+            log.err('zap.send-reaction.meta_falhou', { msg: errMeta.message, messageWamid });
+            return res.status(502).json({ error: errMeta.message || 'Erro ao comunicar com a API do WhatsApp.' });
+        }
+
+        // Persiste localmente e atualiza o frontend (emoji vazio => NULL)
+        const valor = emoji && emoji.trim() ? emoji : null;
+        await messageRepository.setReactionByWamid(messageWamid, valor, empresaId);
+        emitToEmpresa(empresaId, 'update-mensagem', { wamid: messageWamid, reaction: valor });
+
+        return res.json({ success: true, wamid: messageWamid, reaction: valor });
+    } catch (error) {
+        console.error('Erro ao enviar reação:', error.message);
         return res.status(502).json({ error: error.message || 'Erro ao comunicar com a API do WhatsApp.' });
     }
 });
@@ -431,6 +487,7 @@ function mapearMsgCloud(msg) {
         senderName: msg.sender_name || null,
         ack: mapearAckStatus(msg.status),
         status: msg.status,
+        reaction: msg.reaction || null,
         reply_to_wamid: msg.reply_to_wamid || null,
         data: msg.timestamp_ms ? new Date(Number(msg.timestamp_ms)).toISOString() : msg.created_at,
         timestamp_ms: msg.timestamp_ms,

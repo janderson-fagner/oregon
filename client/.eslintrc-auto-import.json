@@ -381,6 +381,11 @@
     "useAssinatura": true,
     "connectSocket": true,
     "disconnectSocket": true,
-    "useHelpCenter": true
+    "useHelpCenter": true,
+    "escapeHtml": true,
+    "formatWhatsAppText": true,
+    "stripWhatsAppMarks": true,
+    "temFormatacao": true,
+    "htmlToWhatsApp": true
   }
 }
