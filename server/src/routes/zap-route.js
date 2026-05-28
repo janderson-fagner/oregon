@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const caminhoBase = path.join(__dirname, '../uploads/midias/');
 
@@ -46,6 +48,9 @@ const MIMETYPES_ACEITOS = new Set([
     'audio/ogg',
     'audio/mpeg',
     'audio/mp4',
+    // audio/webm é o formato padrão do MediaRecorder no Chrome. A Cloud API
+    // do Meta NÃO aceita webm — convertemos para ogg/opus antes do envio.
+    'audio/webm',
     'application/pdf',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -65,6 +70,7 @@ const MIME_PARA_EXT = {
     'audio/ogg': '.ogg',
     'audio/mpeg': '.mp3',
     'audio/mp4': '.m4a',
+    'audio/webm': '.webm',
     'application/pdf': '.pdf',
     'application/msword': '.doc',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
@@ -77,11 +83,32 @@ const MIME_PARA_EXT = {
  * Usa memoryStorage: o buffer é passado para messageService.sendMediaMessage,
  * que salva em disco após validação. Limite 16MB (máximo WhatsApp para documentos).
  */
+/**
+ * Normaliza mimetype removendo parâmetros (ex.: "audio/ogg; codecs=opus" → "audio/ogg").
+ * O navegador envia o codec no Content-Type, mas o whitelist tem só o tipo base.
+ */
+function mimeBase(mime) {
+    return String(mime || '').split(';')[0].trim().toLowerCase();
+}
+
+/**
+ * Deriva o tipo de mídia WhatsApp a partir do mimetype (sem parâmetros).
+ * @param {string} mime
+ * @returns {'image'|'video'|'audio'|'document'}
+ */
+function tipoMidiaPorMime(mime) {
+    const m = mimeBase(mime);
+    if (m.startsWith('image/')) return 'image';
+    if (m.startsWith('video/')) return 'video';
+    if (m.startsWith('audio/')) return 'audio';
+    return 'document';
+}
+
 const uploadAnexo = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 16 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        if (MIMETYPES_ACEITOS.has(file.mimetype)) {
+        if (MIMETYPES_ACEITOS.has(mimeBase(file.mimetype))) {
             cb(null, true);
         } else {
             const err = new Error(`Tipo de arquivo não permitido: ${file.mimetype}`);
@@ -91,48 +118,16 @@ const uploadAnexo = multer({
     },
 });
 
-const dbQuery = require('../utils/dbHelper');
-
 // Repositórios e serviços da Cloud API
 const messageService = require('../whatsapp/messageService');
 const conversationRepository = require('../whatsapp/repositories/conversationRepository');
 const messageRepository = require('../whatsapp/repositories/messageRepository');
+const configRepository = require('../whatsapp/repositories/configRepository');
+const contactService = require('../whatsapp/contactService');
+const log = require('../whatsapp/logger');
 const { emitToEmpresa } = require('../socket');
 
 console.log('Zap route carregado');
-
-// Importa as funções da nova estrutura modular
-const {
-    initClient,
-    disconnectClient,
-    isClientConnected,
-    getAllClients,
-    createClient,
-    deleteClient,
-    sendZapMessage,
-    sendZapMessageImage,
-    getAllChats,
-    getChatById,
-    sendMessageChat,
-    actionsChat,
-    actionsMsg
-} = require('../zap');
-
-/**
- * Resolve o clientId do WhatsApp a partir do usuário autenticado (SaaS).
- * Convenção de ID: {tipo}_{empresa_id} (ex: atendimento_1, disparos_2)
- * @param {Object} req - Request com req.user.empresa_id
- * @param {string} [tipo] - Tipo do client (atendimento, disparos). Se null, usa query/body 'type' ou default 'atendimento'
- * @returns {string} clientId no formato {tipo}_{empresa_id}
- */
-function getClientId(req, tipo = null) {
-    const empresa_id = req.user?.empresa_id;
-    if (!empresa_id) {
-        throw new Error('Usuário não autenticado');
-    }
-    const type = tipo || req.query?.type || req.body?.type || 'atendimento';
-    return `${type}_${empresa_id}`;
-}
 
 // ============= ROTAS DE GERENCIAMENTO DE CLIENTS =============
 
@@ -169,58 +164,6 @@ router.get('/check-conn', (req, res) => {
 });
 
 // ============= ROTAS DE MENSAGENS =============
-
-// Envia mensagem de texto
-router.post('/send-message', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        let { number, message } = req.body;
-
-        if (!number || !message) {
-            return res.status(400).json({ error: 'Número e mensagem são obrigatórios' });
-        }
-
-        const connected = await isClientConnected(clientId);
-        if (!connected) {
-            return res.status(500).json({ error: 'WhatsApp desconectado!' });
-        }
-
-        console.log('Enviando mensagem:', { clientId, number, message });
-
-        await sendZapMessage(clientId, number, message);
-
-        res.status(200).json({ message: 'Mensagem enviada com sucesso!' });
-    } catch (error) {
-        console.error('Erro ao enviar mensagem:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Envia mensagem com imagem
-router.post('/send-image', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        let { number, message, imagePath } = req.body;
-
-        if (!number || !imagePath) {
-            return res.status(400).json({ error: 'Número e imagem são obrigatórios' });
-        }
-
-        const connected = await isClientConnected(clientId);
-        if (!connected) {
-            return res.status(500).json({ error: 'WhatsApp desconectado!' });
-        }
-
-        console.log('Enviando imagem:', { clientId, number, message, imagePath });
-
-        await sendZapMessageImage(clientId, number, message, imagePath);
-
-        res.status(200).json({ message: 'Mensagem com imagem enviada com sucesso!' });
-    } catch (error) {
-        console.error('Erro ao enviar imagem:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
 
 /**
  * POST /zap/send-message-chat
@@ -323,8 +266,60 @@ router.post('/save-anexo', (req, res, next) => {
             return res.status(400).json({ error: 'conversationId e arquivo são obrigatórios.' });
         }
 
+        // Normaliza mimetype para o whitelist + extensão + Meta (sem parâmetros de codec)
+        let mimeNormal = mimeBase(req.file.mimetype);
+        let bufferEnviar = req.file.buffer;
+        let originalname = req.file.originalname;
+
+        log('save-anexo.recebido', {
+            empresaId, convId, mimeRaw: req.file.mimetype, mimeNormal,
+            originalname, bufferSize: req.file.size, captionLen: (caption || '').length,
+        });
+
+        // O Chrome grava áudio em audio/webm (Opus, stereo, ~120 kbps). A Cloud API não aceita
+        // webm e o WhatsApp espera nota de voz em OGG/Opus MONO, ~16-32 kbps, otimizado para voip.
+        // Um `-c:a copy` produz OGG válido sintaticamente, mas carrega metadados/canais do webm
+        // que o cliente do WhatsApp não reproduz corretamente (toca picotado/silencioso).
+        // Por isso re-encodamos: re-encode de áudio curto (<30s) leva <200ms e garante
+        // um arquivo limpo equivalente ao que o app de WhatsApp gera nativamente.
+        if (mimeNormal === 'audio/webm') {
+            const tamanhoAntes = bufferEnviar.length;
+            const tmpIn = path.join(os.tmpdir(), `${crypto.randomUUID()}.webm`);
+            const tmpOut = path.join(os.tmpdir(), `${crypto.randomUUID()}.ogg`);
+            try {
+                fs.writeFileSync(tmpIn, bufferEnviar);
+                execFileSync(
+                    'ffmpeg',
+                    [
+                        '-y', '-i', tmpIn,
+                        '-vn',                         // sem stream de vídeo
+                        '-map_metadata', '-1',         // descarta tags herdadas (ex.: language=eng)
+                        '-c:a', 'libopus',             // re-encode opus
+                        '-b:a', '32k',                 // bitrate voz
+                        '-ac', '1',                    // mono (padrão de nota de voz do WhatsApp)
+                        '-ar', '48000',                // 48 kHz (taxa nativa do Opus)
+                        '-application', 'voip',        // otimiza para fala
+                        tmpOut,
+                    ],
+                    { stdio: 'ignore' }
+                );
+                bufferEnviar = fs.readFileSync(tmpOut);
+                mimeNormal = 'audio/ogg';
+                originalname = (originalname || 'voz').replace(/\.[^.]+$/i, '') + '.ogg';
+                log('save-anexo.webm_para_ogg.ok', { antes: tamanhoAntes, depois: bufferEnviar.length });
+            } catch (convErr) {
+                log.err('save-anexo.webm_para_ogg.falhou', { msg: convErr.message, stack: convErr.stack });
+                return res.status(500).json({ error: 'Falha ao processar o áudio gravado. Tente novamente.' });
+            } finally {
+                try { fs.unlinkSync(tmpIn); } catch (_) {}
+                try { fs.unlinkSync(tmpOut); } catch (_) {}
+            }
+        }
+
+        const tipoMidia = tipoMidiaPorMime(mimeNormal);
+
         // Salva buffer em disco antes de enviar (path local para exibição no chat)
-        const ext = MIME_PARA_EXT[req.file.mimetype] || '.bin';
+        const ext = MIME_PARA_EXT[mimeNormal] || '.bin';
         const nomeArquivo = `${crypto.randomUUID()}${ext}`;
         const pastaEmpresa = path.join(__dirname, '../uploads/midias', String(empresaId));
 
@@ -333,7 +328,7 @@ router.post('/save-anexo', (req, res, next) => {
         }
 
         const caminhoCompleto = path.join(pastaEmpresa, nomeArquivo);
-        fs.writeFileSync(caminhoCompleto, req.file.buffer);
+        fs.writeFileSync(caminhoCompleto, bufferEnviar);
 
         // mediaPath relativo ao diretório uploads/ (servido como /uploads/midias/{id}/{arquivo})
         const mediaPath = `midias/${empresaId}/${nomeArquivo}`;
@@ -341,35 +336,41 @@ router.post('/save-anexo', (req, res, next) => {
         const resultado = await messageService.sendMediaMessage(
             empresaId,
             convId,
-            req.file.buffer,
-            req.file.mimetype,
-            req.file.originalname,
+            bufferEnviar,
+            mimeNormal,
+            originalname,
             caption || null,
             senderName,
             mediaPath
         );
 
         if (resultado.windowClosed) {
+            log.warn('save-anexo.janela_fechada', { convId, tipoMidia });
             return res.status(422).json(resultado);
         }
         if (resultado.error) {
+            log.warn('save-anexo.resultado_erro', { convId, resultado });
             return res.status(400).json(resultado);
         }
+
+        log('save-anexo.ok', {
+            convId, wamid: resultado.wamid, tipoMidia, mimeNormal, mediaPath,
+        });
 
         const msgObj = {
             wamid: resultado.wamid || null,
             direction: 'outbound',
             fromMe: true,
-            tipo: resultado.type || 'document',
-            type: resultado.type || 'document',
+            tipo: tipoMidia,
+            type: tipoMidia,
             texto: caption || null,
             body: caption || null,
             hasMedia: true,
             media: mediaPath,
             media_path: mediaPath,
             media_url: '/uploads/' + mediaPath,
-            media_mime: req.file.mimetype,
-            media_filename: req.file.originalname,
+            media_mime: mimeNormal,
+            media_filename: originalname,
             senderName,
             ack: 1,
             status: 'sent',
@@ -386,36 +387,8 @@ router.post('/save-anexo', (req, res, next) => {
 
         return res.json({ success: true, message: msgObj });
     } catch (error) {
-        console.error('Erro ao enviar anexo:', error.message);
+        log.err('save-anexo.excecao', { msg: error.message, metaCode: error.metaCode, stack: error.stack });
         return res.status(502).json({ error: error.message || 'Erro ao comunicar com a API do WhatsApp.' });
-    }
-});
-
-// Edita mensagem
-router.post('/editar-msg', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        const { msgId, texto } = req.body;
-
-        if (!msgId || !texto) {
-            return res.status(400).json({ error: 'ID da mensagem ou texto não fornecidos' });
-        }
-
-        const connected = await isClientConnected(clientId);
-        if (!connected) {
-            return res.status(500).json({ error: 'WhatsApp desconectado!' });
-        }
-
-        const editar = await actionsMsg(clientId, msgId, 'edit', { conteudo: texto });
-
-        if (!editar) {
-            return res.status(400).json({ error: 'Erro ao editar mensagem! Tente novamente' });
-        }
-
-        return res.status(200).json({ message: 'Mensagem editada com sucesso!' });
-    } catch (error) {
-        console.error('Erro ao editar mensagem:', error);
-        res.status(500).json({ error: error.message });
     }
 });
 
@@ -482,6 +455,9 @@ router.get('/allChats', async (req, res) => {
 
         const resultado = await conversationRepository.listConversations(empresaId, { page, limit, busca });
 
+        // Vincula cliente cadastrado + estado de atendimento/bloqueio (consultas em lote)
+        await contactService.enrichConversationsBulk(resultado.rows, empresaId);
+
         return res.json({
             chats: resultado.rows,
             total: resultado.total,
@@ -522,6 +498,9 @@ router.get('/getChat/:id', async (req, res) => {
         // Zera contador de não lidas
         await conversationRepository.markConversationRead(conversationId, empresaId);
 
+        // Vincula cliente cadastrado + endereço + estado de atendimento/bloqueio à conversa
+        await contactService.enrichConversation(conversation, empresaId);
+
         const resultado = await messageRepository.getMessages(conversationId, empresaId, { page, limit });
 
         return res.json({
@@ -534,6 +513,107 @@ router.get('/getChat/:id', async (req, res) => {
     } catch (error) {
         console.error('Erro ao buscar chat:', error);
         return res.status(500).json({ error: 'Erro interno ao buscar conversa.' });
+    }
+});
+
+/**
+ * POST /zap/start-conversation
+ * Inicia uma nova conversa com um telefone via template (única forma de iniciar
+ * contato fora da janela de 24h, conforme regra da Cloud API).
+ * Cria/recupera a conversa pelo telefone e envia o template selecionado.
+ * Body: { phone, templateName, languageCode, components? }
+ * Retorna: { success: true, conversationId, conversation }
+ */
+router.post('/start-conversation', async (req, res) => {
+    try {
+        const empresaId = req.user.empresa_id;
+        const senderName = req.user.fullName || req.user.nome || req.user.name || 'Atendente';
+        const { phone, templateName, languageCode, components = [] } = req.body;
+
+        // Normaliza telefone: apenas dígitos; prefixa código do país (55) se ausente em número BR
+        let digits = String(phone || '').replace(/\D/g, '');
+        if (!digits || digits.length < 10) {
+            return res.status(400).json({ error: 'Telefone inválido. Informe DDD + número (ex: 41999998888).' });
+        }
+        if (!digits.startsWith('55') && digits.length <= 11) {
+            digits = '55' + digits;
+        }
+
+        if (!templateName || !languageCode) {
+            return res.status(400).json({ error: 'Selecione um template para iniciar a conversa.' });
+        }
+        if (!Array.isArray(components)) {
+            return res.status(400).json({ error: 'components deve ser um array.' });
+        }
+
+        // Config (phone_number_id) da empresa
+        const config = await configRepository.getByEmpresa(empresaId);
+        if (!config || !config.ativo) {
+            return res.status(400).json({ error: 'WhatsApp Cloud não configurado para esta empresa.' });
+        }
+
+        // Upsert da conversa — NÃO mexe em last_inbound_at (a janela de 24h só abre
+        // quando o CLIENTE responde; iniciar por template não abre janela de texto livre).
+        const conversationId = await conversationRepository.upsertConversation({
+            empresa_id: empresaId,
+            phone_number_id: config.phone_number_id,
+            contact_wa_id: digits,
+            contact_name: null,
+            last_message_at: new Date(),
+            last_message_preview: `[template: ${templateName}]`,
+            last_inbound_at: null,
+            unread_count: 0,
+        });
+
+        // Envia o template
+        let resultado;
+        try {
+            resultado = await messageService.sendTemplateMessage(
+                empresaId,
+                conversationId,
+                templateName,
+                languageCode,
+                components,
+                senderName
+            );
+        } catch (errMeta) {
+            return res.status(502).json({ error: errMeta.message || 'Erro ao comunicar com a API do WhatsApp.' });
+        }
+
+        if (resultado.error) {
+            return res.status(400).json(resultado);
+        }
+
+        // Recupera a conversa criada + enriquecimento para o frontend abrir direto
+        const conversation = await conversationRepository.getById(conversationId, empresaId);
+        await contactService.enrichConversation(conversation, empresaId);
+
+        const msgObj = {
+            wamid: resultado.wamid || null,
+            direction: 'outbound',
+            fromMe: true,
+            tipo: 'template',
+            type: 'template',
+            texto: `[template: ${templateName}]`,
+            body: templateName,
+            hasMedia: false,
+            status: 'sent',
+            ack: 1,
+            senderName,
+            timestamp_ms: Date.now(),
+            data: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+        };
+
+        emitToEmpresa(empresaId, 'nova-mensagem', {
+            conversation_id: conversationId,
+            message: msgObj,
+        });
+
+        return res.json({ success: true, conversationId, conversation });
+    } catch (error) {
+        console.error('Erro ao iniciar conversa:', error.message);
+        return res.status(500).json({ error: 'Erro interno ao iniciar conversa.' });
     }
 });
 
@@ -571,72 +651,6 @@ router.get('/window-status/:conversationId', async (req, res) => {
     } catch (error) {
         console.error('Erro ao verificar status da janela:', error);
         return res.status(500).json({ error: 'Erro interno ao verificar janela de atendimento.' });
-    }
-});
-
-// Ações em chat
-router.get('/actions-chat/:id', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        const { id } = req.params;
-
-        if (!id) {
-            return res.status(400).json({ error: 'ID do chat não fornecido' });
-        }
-
-        const action = req.query.action || null;
-
-        if (!action) {
-            return res.status(400).json({ error: 'Ação não fornecida' });
-        }
-
-        const connected = await isClientConnected(clientId);
-        if (!connected) {
-            return res.status(500).json({ error: 'WhatsApp desconectado!' });
-        }
-
-        const actions = await actionsChat(clientId, id, action);
-
-        if (!actions) {
-            return res.status(404).json({ error: 'Ação não encontrada' });
-        }
-
-        return res.status(200).json({ message: 'Ação realizada com sucesso!', actions });
-    } catch (error) {
-        console.error('Erro ao executar ação do chat:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Ações em mensagem
-router.get('/actions-msg/:id', async (req, res) => {
-    try {
-        const clientId = getClientId(req);
-        const { id } = req.params;
-
-        if (!id) {
-            return res.status(400).json({ error: 'ID da mensagem não fornecido' });
-        }
-
-        const action = req.query.action || null;
-
-        if (!action) {
-            return res.status(400).json({ error: 'Ação não fornecida' });
-        }
-
-        const connected = await isClientConnected(clientId);
-        if (!connected) {
-            return res.status(500).json({ error: 'WhatsApp desconectado!' });
-        }
-
-        const actions = await actionsMsg(clientId, id, action);
-        if (!actions) {
-            return res.status(404).json({ error: 'Ação não encontrada' });
-        }
-        return res.status(200).json({ message: 'Ação realizada com sucesso!', actions });
-    } catch (error) {
-        console.error('Erro ao executar ação da mensagem:', error);
-        res.status(500).json({ error: error.message });
     }
 });
 

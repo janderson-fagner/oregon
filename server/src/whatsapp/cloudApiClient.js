@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const FormData = require('form-data');
+const log = require('./logger');
 
 // Pasta base de mídia (relativa ao __dirname deste arquivo: src/whatsapp/)
 const PASTA_MIDIAS_BASE = path.join(__dirname, '../uploads/midias');
@@ -102,8 +103,18 @@ async function comRetry(fn) {
         ? Number(err.response.data.error.code)
         : null;
 
+      log.err('cloudApi.requisicao.falhou', {
+        tentativa, codigoMeta,
+        httpStatus: err.response && err.response.status,
+        respBody: err.response && err.response.data,
+        url: err.config && err.config.url,
+        method: err.config && err.config.method,
+        msg: err.message,
+      });
+
       // Só tenta novamente em erros específicos e se ainda há tentativas restantes
       if (codigoMeta && podeTentar(codigoMeta) && tentativa < delays.length) {
+        log('cloudApi.requisicao.retry', { tentativa, delay: delays[tentativa] });
         await new Promise(resolve => setTimeout(resolve, delays[tentativa]));
         continue;
       }
@@ -183,6 +194,8 @@ async function sendText(config, to, text, replyToWamid = null) {
     body.context = { message_id: replyToWamid };
   }
 
+  log('cloudApi.sendText.req', { url, to, replyToWamid, textLen: (text || '').length });
+
   const resposta = await comRetry(() =>
     axios.post(url, body, {
       headers: {
@@ -194,7 +207,9 @@ async function sendText(config, to, text, replyToWamid = null) {
   );
 
   verificarErroResposta(resposta);
-  return { wamid: extrairWamid(resposta.data) };
+  const wamid = extrairWamid(resposta.data);
+  log('cloudApi.sendText.ok', { wamid, respBody: resposta.data });
+  return { wamid };
 }
 
 /**
@@ -217,8 +232,15 @@ async function sendMedia(config, to, mediaType, mediaParams, replyToWamid = null
   } else if (mediaParams.link) {
     objetoMidia.link = mediaParams.link;
   }
-  if (mediaParams.caption) objetoMidia.caption = mediaParams.caption;
-  if (mediaParams.filename) objetoMidia.filename = mediaParams.filename;
+  // caption: válido para image/video/document (NÃO para audio — Meta retorna erro 100)
+  if (mediaParams.caption && mediaType !== 'audio') {
+    objetoMidia.caption = mediaParams.caption;
+  }
+  // filename: APENAS para document. Em image/video/audio, Meta rejeita com erro 100
+  // ("Parâmetro inválido"). Foi esta combinação que quebrou o envio de imagem antes.
+  if (mediaParams.filename && mediaType === 'document') {
+    objetoMidia.filename = mediaParams.filename;
+  }
 
   const body = {
     messaging_product: 'whatsapp',
@@ -232,6 +254,8 @@ async function sendMedia(config, to, mediaType, mediaParams, replyToWamid = null
     body.context = { message_id: replyToWamid };
   }
 
+  log('cloudApi.sendMedia.req', { url, to, mediaType, body });
+
   const resposta = await comRetry(() =>
     axios.post(url, body, {
       headers: {
@@ -243,7 +267,9 @@ async function sendMedia(config, to, mediaType, mediaParams, replyToWamid = null
   );
 
   verificarErroResposta(resposta);
-  return { wamid: extrairWamid(resposta.data) };
+  const wamid = extrairWamid(resposta.data);
+  log('cloudApi.sendMedia.ok', { wamid, mediaType, respBody: resposta.data });
+  return { wamid };
 }
 
 /**
@@ -334,6 +360,10 @@ async function uploadMedia(config, fileBuffer, mimeType, filename) {
     contentType: mimeType,
   });
 
+  log('cloudApi.uploadMedia.req', {
+    url, mimeType, filename, bufferSize: fileBuffer && fileBuffer.length,
+  });
+
   const resposta = await comRetry(() =>
     axios.post(url, form, {
       headers: {
@@ -348,8 +378,10 @@ async function uploadMedia(config, fileBuffer, mimeType, filename) {
 
   const mediaId = resposta.data && resposta.data.id;
   if (!mediaId) {
+    log.err('cloudApi.uploadMedia.sem_id', { respBody: resposta.data });
     throw new Error('Upload de mídia não retornou media_id.');
   }
+  log('cloudApi.uploadMedia.ok', { mediaId, respBody: resposta.data });
   return mediaId;
 }
 
@@ -407,6 +439,8 @@ async function downloadMedia(config, mediaUrl, mimeType, empresaId) {
 
   const caminhoCompleto = path.join(pastaEmpresa, nomeArquivo);
 
+  log('cloudApi.downloadMedia.inicio', { mimeType, empresaId, caminhoCompleto });
+
   // Baixa o arquivo com timeout estendido (arquivo pode ser grande)
   const resposta = await axios.get(mediaUrl, {
     headers: {
@@ -418,8 +452,47 @@ async function downloadMedia(config, mediaUrl, mimeType, empresaId) {
 
   fs.writeFileSync(caminhoCompleto, Buffer.from(resposta.data));
 
+  log('cloudApi.downloadMedia.ok', {
+    caminhoCompleto, bytes: resposta.data && resposta.data.byteLength,
+  });
+
   // Retorna path relativo servível pelo endpoint /uploads
   return `midias/${idEmpresa}/${nomeArquivo}`;
+}
+
+/**
+ * Busca informações do número conectado na Meta (valida credenciais ao vivo).
+ * Faz GET /{phone_number_id} na Graph API com o access_token salvo. Em caso de
+ * token inválido/expirado ou phone_number_id incorreto, axios lança e comRetry
+ * mapeia o erro do Meta para mensagem PT-BR (com erro.metaCode preservado).
+ * @param {Object} config - credenciais da empresa
+ * @returns {Promise<{verified_name, display_phone_number, quality_rating, code_verification_status, platform_type}>}
+ */
+async function getPhoneNumberInfo(config) {
+  const versao = obterVersaoApi(config);
+  const url = `https://graph.facebook.com/${versao}/${config.phone_number_id}`;
+
+  const resposta = await comRetry(() =>
+    axios.get(url, {
+      params: {
+        fields: 'verified_name,display_phone_number,quality_rating,code_verification_status,platform_type',
+      },
+      headers: {
+        Authorization: `Bearer ${config.access_token}`,
+      },
+      timeout: 15000,
+    })
+  );
+
+  verificarErroResposta(resposta);
+
+  return {
+    verified_name: resposta.data.verified_name || null,
+    display_phone_number: resposta.data.display_phone_number || null,
+    quality_rating: resposta.data.quality_rating || null,
+    code_verification_status: resposta.data.code_verification_status || null,
+    platform_type: resposta.data.platform_type || null,
+  };
 }
 
 /**
@@ -458,5 +531,6 @@ module.exports = {
   getMediaUrl,
   downloadMedia,
   listTemplates,
+  getPhoneNumberInfo,
   mapearErroMeta,
 };

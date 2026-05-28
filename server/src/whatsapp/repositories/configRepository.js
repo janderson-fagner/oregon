@@ -130,6 +130,20 @@ async function upsert(empresaId, dados) {
 }
 
 /**
+ * Atualiza apenas o display_phone_number da empresa (cache do número conectado).
+ * Usado após a verificação ao vivo na Meta — não toca em credenciais nem em ativo.
+ * @param {number} empresaId - ID da empresa
+ * @param {string|null} displayPhoneNumber - número formatado retornado pela Meta
+ * @returns {Promise<void>}
+ */
+async function updateDisplayPhone(empresaId, displayPhoneNumber) {
+  await dbQuery(
+    'UPDATE WhatsappCloudConfig SET display_phone_number = ? WHERE empresa_id = ?',
+    [displayPhoneNumber || null, empresaId]
+  );
+}
+
+/**
  * Remove a configuração da empresa via soft delete (marca ativo = 0).
  * Os dados de credencial não são apagados fisicamente.
  * @param {number} empresaId - ID da empresa
@@ -142,4 +156,4 @@ async function remove(empresaId) {
   );
 }
 
-module.exports = { getByEmpresa, getByPhoneNumberId, getByVerifyToken, upsert, remove };
+module.exports = { getByEmpresa, getByPhoneNumberId, getByVerifyToken, upsert, updateDisplayPhone, remove };

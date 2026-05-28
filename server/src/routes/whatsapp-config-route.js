@@ -23,7 +23,14 @@ const { emitToEmpresa } = require('../socket');
  */
 router.get('/config', async (req, res) => {
   try {
-    const config = await configService.getConfig(req.user.empresa_id);
+    // A URL do webhook reflete o domínio pelo qual o usuário acessa (multi-domínio:
+    // app.oregonservicos.com.br, daviot.com.br, etc). Deriva do host da requisição,
+    // respeitando os cabeçalhos do proxy (Apache) quando presentes.
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    const host = (req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim();
+    const webhookUrl = host ? `${proto}://${host}/api/webhook/whatsapp` : undefined;
+
+    const config = await configService.getConfig(req.user.empresa_id, webhookUrl);
     return res.json(config);
   } catch (err) {
     return res.status(500).json({ error: 'Erro ao buscar configuração WhatsApp.' });
@@ -48,6 +55,21 @@ router.post('/config', async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     return res.status(500).json({ error: 'Erro ao salvar configuração WhatsApp.' });
+  }
+});
+
+/**
+ * GET /whatsapp/config/status
+ * Verifica AO VIVO se as credenciais da empresa estão conectadas na Meta.
+ * Sempre retorna 200 com { connected: boolean, ... } — erros de Meta viram
+ * connected:false + message (não derrubam a resposta).
+ */
+router.get('/config/status', async (req, res) => {
+  try {
+    const status = await configService.checkConnection(req.user.empresa_id);
+    return res.json(status);
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro ao verificar conexão WhatsApp.' });
   }
 });
 

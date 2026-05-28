@@ -130,6 +130,9 @@ app.use('/webhook', require('./routes/webhook-route'));
 // Centro de Ajuda
 app.use('/help-center', require('./routes/help-center'));
 
+// Política de Privacidade — rota pública (exigida pelo Meta Business / WhatsApp Cloud API)
+app.use('/politica-privacidade', require('./routes/politica-privacidade'));
+
 /*-------*/
 
 //Logar hora do servidor

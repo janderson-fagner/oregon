@@ -7,6 +7,10 @@
   transition: all 0.3s;
 }
 
+.v-input__details {
+  margin-top: 3px;
+}
+
 .sub-child a {
   margin-inline: 31px !important;
 }
@@ -446,7 +450,7 @@ body .fc .event-card div {
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
-}
+  }
 
   .layout-wrapper.layout-nav-type-vertical .layout-navbar,
   .layout-wrapper.layout-nav-type-vertical .layout-footer {

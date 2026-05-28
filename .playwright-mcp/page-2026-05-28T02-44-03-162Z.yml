@@ -1,0 +1,184 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e5]:
+    - alert [ref=e48]:
+      - generic [ref=e51]: Login realizado com sucesso! Você será redirecionado...
+    - generic [ref=e52]:
+      - complementary:
+        - complementary [ref=e53]:
+          - link "logo" [ref=e59] [cursor=pointer]:
+            - /url: /
+            - img "logo" [ref=e60]
+          - list [ref=e61]:
+            - listitem [ref=e62]:
+              - link [ref=e63] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=e65]
+            - listitem [ref=e68]
+            - listitem [ref=e71]:
+              - link [ref=e72] [cursor=pointer]:
+                - /url: /agendamento
+            - listitem [ref=e74]:
+              - link [ref=e75] [cursor=pointer]:
+                - /url: /servicos
+            - listitem [ref=e77]:
+              - link [ref=e78] [cursor=pointer]:
+                - /url: /lembretes
+            - listitem [ref=e80]
+            - listitem [ref=e83]:
+              - link [ref=e84] [cursor=pointer]:
+                - /url: /calculadora
+            - listitem [ref=e86]:
+              - link [ref=e87] [cursor=pointer]:
+                - /url: /clientes
+            - listitem [ref=e89]
+            - listitem [ref=e92]
+            - listitem [ref=e95]:
+              - link [ref=e96] [cursor=pointer]:
+                - /url: /comissoes
+            - listitem [ref=e98]
+            - listitem [ref=e101]
+            - listitem [ref=e104]
+            - listitem [ref=e107]:
+              - link [ref=e108] [cursor=pointer]:
+                - /url: /apps/user/list
+            - listitem [ref=e110]:
+              - link [ref=e111] [cursor=pointer]:
+                - /url: /configuracoes
+            - listitem [ref=e113]:
+              - link [ref=e114] [cursor=pointer]:
+                - /url: /saas/minha-empresa
+          - listbox [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]:
+              - generic [ref=e123]:
+                - img [ref=e126]
+                - status "Badge" [ref=e127]: "13"
+              - generic:
+                - generic: Janderson A23
+                - generic: admin
+      - generic [ref=e128]:
+        - banner [ref=e129]:
+          - generic [ref=e131]:
+            - button [ref=e133] [cursor=pointer]
+            - img "logo" [ref=e137]
+            - button [ref=e139] [cursor=pointer]
+        - main [ref=e142]:
+          - generic [ref=e143]:
+            - generic [ref=e144]:
+              - generic [ref=e146]:
+                - generic [ref=e147]:
+                  - generic [ref=e150]: Boa noite
+                  - paragraph [ref=e151]: Janderson
+                  - paragraph [ref=e152]: quarta-feira, 27 de maio
+                - paragraph [ref=e153]: "Agendamentos:"
+                - generic [ref=e154]:
+                  - generic [ref=e155]:
+                    - generic [ref=e156]: "9"
+                    - generic [ref=e157]: Hoje
+                  - generic [ref=e158]:
+                    - generic [ref=e159]: "31"
+                    - generic [ref=e160]: Semana
+                  - generic [ref=e161]:
+                    - generic [ref=e162]: "188"
+                    - generic [ref=e163]: Mês
+              - generic [ref=e164]:
+                - generic [ref=e166]:
+                  - generic [ref=e167]:
+                    - generic [ref=e171]:
+                      - paragraph [ref=e172]: Agenda de Hoje
+                      - paragraph [ref=e173]: quarta-feira
+                    - generic [ref=e175]: "9"
+                  - separator [ref=e176]
+                  - generic [ref=e177]:
+                    - generic [ref=e178] [cursor=pointer]:
+                      - generic [ref=e180]:
+                        - generic [ref=e181]: 08:00
+                        - generic [ref=e183]: 09:00
+                      - generic [ref=e184]:
+                        - paragraph [ref=e185]: Tainara Ferreira da Silva
+                        - generic [ref=e186]:
+                          - generic [ref=e187]: 1 serviço
+                          - generic [ref=e189]: Rua do Buganvília, 240 - Cidade Universitária Pedra Branca - Palhoça/SC - - apto 101
+                      - generic [ref=e192]: Agendado
+                    - generic [ref=e193] [cursor=pointer]:
+                      - generic [ref=e195]:
+                        - generic [ref=e196]: 17:00
+                        - generic [ref=e198]: 18:00
+                      - generic [ref=e199]:
+                        - paragraph [ref=e200]: SC REGULARIZAÇÃO DOCUMENTAL LTDA
+                        - generic [ref=e202]: Rua Prefeito Paulo Frederico Alves Wildner, 243 - Universitário - Biguaçu/SC - 88161-048
+                      - generic [ref=e205]: Agendado
+                    - generic [ref=e206] [cursor=pointer]:
+                      - generic [ref=e208]:
+                        - generic [ref=e209]: 13:30
+                        - generic [ref=e211]: 14:30
+                      - generic [ref=e212]:
+                        - paragraph [ref=e213]: Cliente Luiz - secretário Douglas que é responsável pela contratação
+                        - generic [ref=e214]:
+                          - generic [ref=e215]: 1 serviço
+                          - generic [ref=e217]: Rua Laurindo Januário da Silveira, 1351 - Lagoa da Conceição - Florianópolis/SC - 88062-201 - - Apto 301
+                      - generic [ref=e220]: Agendado
+                    - generic [ref=e221] [cursor=pointer]:
+                      - generic [ref=e223]:
+                        - generic [ref=e224]: 11:30
+                        - generic [ref=e226]: 12:00
+                      - generic [ref=e227]:
+                        - paragraph [ref=e228]: Nicole Degasperi
+                        - generic [ref=e229]:
+                          - generic [ref=e230]: 1 serviço
+                          - generic [ref=e232]: Osnir Ortiga, 2958 - Porto da Lagoa - Florianópolis/SC - - Casa 03 - Residencial bosque do Porto.
+                      - generic [ref=e235]: Agendado
+                    - generic [ref=e236] [cursor=pointer]:
+                      - generic [ref=e238]:
+                        - generic [ref=e239]: 15:00
+                        - generic [ref=e241]: 15:15
+                      - generic [ref=e242]:
+                        - paragraph [ref=e243]: Ana Luiza Britto Cezar de Andrade
+                        - generic [ref=e244]:
+                          - generic [ref=e245]: 1 serviço
+                          - generic [ref=e247]: Servidão Revoar das Gaivotas, 533 - Campeche - Florianópolis /SC
+                      - generic [ref=e250]: Agendado
+                  - button "Ver agenda completa" [ref=e252] [cursor=pointer]:
+                    - generic [ref=e253]: Ver agenda completa
+                - generic [ref=e256]:
+                  - generic [ref=e261]:
+                    - paragraph [ref=e262]: Financeiro
+                    - paragraph [ref=e263]: maio de 2026
+                  - separator [ref=e264]
+                  - generic [ref=e265]:
+                    - generic [ref=e269]:
+                      - generic [ref=e270]: A Pagar
+                      - generic [ref=e271]: R$ 410,00
+                      - generic [ref=e272]: 11 despesas / 3 comissões
+                    - generic [ref=e276]:
+                      - generic [ref=e277]: Em Aberto
+                      - generic [ref=e278]: R$ 0,00
+                      - generic [ref=e279]: 8 despesas / 0 comissões
+                    - generic [ref=e283]:
+                      - generic [ref=e284]: Pago
+                      - generic [ref=e285]: R$ 46.535,69
+                      - generic [ref=e286]: 40 despesas / 0 comissões
+                    - generic [ref=e290]:
+                      - generic [ref=e291]: Em Atraso
+                      - generic [ref=e292]: R$ 410,00
+                      - generic [ref=e293]: 3 despesas / 0 comissões
+                  - button "Ver pagamentos" [ref=e295] [cursor=pointer]:
+                    - generic [ref=e296]: Ver pagamentos
+              - generic [ref=e298]:
+                - paragraph [ref=e299]: Acesso Rápido
+                - generic [ref=e300]:
+                  - generic [ref=e304] [cursor=pointer]: Agenda
+                  - generic [ref=e308] [cursor=pointer]: Relatórios
+                  - generic [ref=e312] [cursor=pointer]: Serviços
+                  - generic [ref=e316] [cursor=pointer]: Clientes
+                  - generic [ref=e320] [cursor=pointer]: Lembretes
+                  - generic [ref=e324] [cursor=pointer]: Comissões
+                  - generic [ref=e328] [cursor=pointer]: Pagamentos
+                  - generic [ref=e332] [cursor=pointer]: Usuários
+                  - generic [ref=e336] [cursor=pointer]: Config
+            - button [ref=e337] [cursor=pointer]
+        - contentinfo [ref=e340]:
+          - generic [ref=e342]:
+            - paragraph [ref=e343]: Copyright 2026 © Oregon Serviços - Todos os direitos reservados.
+            - paragraph [ref=e344]: Ajuda
+  - generic:
+    - tooltip

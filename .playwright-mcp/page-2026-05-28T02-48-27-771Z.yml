@@ -1,0 +1,81 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e6]:
+    - complementary:
+      - complementary [ref=e7]:
+        - link "logo" [ref=e13] [cursor=pointer]:
+          - /url: /
+          - img "logo" [ref=e14]
+        - list [ref=e15]:
+          - listitem [ref=e16]:
+            - link [ref=e17] [cursor=pointer]:
+              - /url: /
+          - listitem [ref=e19]
+          - listitem [ref=e22]
+          - listitem [ref=e25]:
+            - link [ref=e26] [cursor=pointer]:
+              - /url: /agendamento
+          - listitem [ref=e28]:
+            - link [ref=e29] [cursor=pointer]:
+              - /url: /servicos
+          - listitem [ref=e31]:
+            - link [ref=e32] [cursor=pointer]:
+              - /url: /lembretes
+          - listitem [ref=e34]
+          - listitem [ref=e37]:
+            - link [ref=e38] [cursor=pointer]:
+              - /url: /calculadora
+          - listitem [ref=e40]:
+            - link [ref=e41] [cursor=pointer]:
+              - /url: /clientes
+          - listitem [ref=e43]
+          - listitem [ref=e46]
+          - listitem [ref=e49]:
+            - link [ref=e50] [cursor=pointer]:
+              - /url: /comissoes
+          - listitem [ref=e52]
+          - listitem [ref=e55]
+          - listitem [ref=e58]
+          - listitem [ref=e61]:
+            - link [ref=e62] [cursor=pointer]:
+              - /url: /apps/user/list
+          - listitem [ref=e64]:
+            - link [ref=e65] [cursor=pointer]:
+              - /url: /configuracoes
+          - listitem [ref=e67]:
+            - link [ref=e68] [cursor=pointer]:
+              - /url: /saas/minha-empresa
+        - listbox [ref=e72] [cursor=pointer]:
+          - generic [ref=e73]:
+            - generic [ref=e77]:
+              - img [ref=e80]
+              - status "Badge" [ref=e81]: "13"
+            - generic:
+              - generic: Janderson A23
+              - generic: admin
+    - generic [ref=e82]:
+      - banner [ref=e83]:
+        - generic [ref=e85]:
+          - button [ref=e87] [cursor=pointer]
+          - img "logo" [ref=e91]
+          - button [ref=e93] [cursor=pointer]
+      - main [ref=e96]:
+        - generic [ref=e97]:
+          - generic [ref=e100]:
+            - generic [ref=e101]:
+              - heading "Chat" [level=2] [ref=e102]
+              - generic [ref=e108]:
+                - generic: Pesquisar
+                - textbox "Pesquisar Pesquisar" [ref=e109]:
+                  - /placeholder: Pesquise uma conversa pelo nome ou número do contato
+            - generic [ref=e114] [cursor=pointer]:
+              - generic [ref=e115]:
+                - paragraph [ref=e116]: Janderson Fagner
+                - paragraph [ref=e117]: Invalid date
+              - generic [ref=e118]: "[audio]"
+          - button [ref=e119] [cursor=pointer]
+      - contentinfo [ref=e122]:
+        - generic [ref=e124]:
+          - paragraph [ref=e125]: Copyright 2026 © Oregon Serviços - Todos os direitos reservados.
+          - paragraph [ref=e126]: Ajuda
+  - generic:
+    - tooltip

@@ -21,6 +21,7 @@ const configRepository = require('../whatsapp/repositories/configRepository');
 const conversationRepository = require('../whatsapp/repositories/conversationRepository');
 const messageRepository = require('../whatsapp/repositories/messageRepository');
 const cloudApiClient = require('../whatsapp/cloudApiClient');
+const log = require('../whatsapp/logger');
 const dbQuery = require('../utils/dbHelper');
 const { emitToEmpresa } = require('../socket');
 
@@ -98,24 +99,28 @@ function extrairMediaId(msg) {
  * Responde com hub.challenge em texto puro se verify_token bater com empresa ativa.
  */
 router.get('/whatsapp', async (req, res) => {
+  log('webhook.GET.recebido', { mode: req.query['hub.mode'], hasToken: !!req.query['hub.verify_token'] });
   try {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
     if (mode !== 'subscribe' || !token) {
+      log.warn('webhook.GET.rejeitado', { motivo: 'mode/token ausente' });
       return res.status(403).send('Forbidden');
     }
 
     const config = await configRepository.getByVerifyToken(token);
     if (!config) {
+      log.warn('webhook.GET.rejeitado', { motivo: 'verify_token sem config ativa' });
       return res.status(403).send('Forbidden');
     }
 
+    log('webhook.GET.aceito', { empresa_id: config.empresa_id });
     // Responder com o challenge em texto puro — o Meta valida que é exatamente o valor enviado
     return res.status(200).send(String(challenge));
   } catch (err) {
-    console.error('[webhook] Erro no handshake GET:', err.message);
+    log.err('webhook.GET.erro', { msg: err.message, stack: err.stack });
     return res.status(500).send('Internal Server Error');
   }
 });
@@ -125,6 +130,12 @@ router.get('/whatsapp', async (req, res) => {
 // ─────────────────────────────────────────────
 
 router.post('/whatsapp', async (req, res) => {
+  log('webhook.POST.recebido', {
+    headers: { 'content-type': req.headers['content-type'], 'x-hub-signature-256': req.headers['x-hub-signature-256'] },
+    rawBodySize: Buffer.isBuffer(req.rawBody) ? req.rawBody.length : null,
+    payload: req.body,
+  });
+
   // ── 1. Extrair phone_number_id do payload (falha segura: 200 sem processar) ──
   let phoneNumberId;
   try {
@@ -132,6 +143,7 @@ router.post('/whatsapp', async (req, res) => {
     if (!phoneNumberId) throw new Error('phone_number_id ausente');
   } catch (_) {
     // Payload malformado ou campo ausente — responder 200 para evitar reenvio do Meta
+    log.warn('webhook.POST.payload_malformado', { temBody: !!req.body });
     return res.status(200).send('EVENT_RECEIVED');
   }
 
@@ -140,18 +152,18 @@ router.post('/whatsapp', async (req, res) => {
   try {
     config = await configRepository.getByPhoneNumberId(phoneNumberId);
   } catch (err) {
-    console.error('[webhook] Erro ao buscar config:', err.message);
+    log.err('webhook.POST.erro_buscar_config', { msg: err.message, phoneNumberId });
     return res.status(200).send('EVENT_RECEIVED');
   }
 
   if (!config) {
-    console.warn('[webhook] phone_number_id sem config ativa');
+    log.warn('webhook.POST.sem_config', { phoneNumberId });
     return res.status(200).send('EVENT_RECEIVED');
   }
 
   // ── 3. Validar assinatura HMAC-SHA256 ──
   if (!Buffer.isBuffer(req.rawBody)) {
-    // rawBody não foi capturado — provavelmente Content-Type diferente de application/json
+    log.warn('webhook.POST.sem_rawBody', { empresa_id: config.empresa_id });
     return res.status(400).send('Bad Request');
   }
 
@@ -170,12 +182,15 @@ router.post('/whatsapp', async (req, res) => {
     const valida = crypto.timingSafeEqual(hmacEsperado, hmacRecebido);
 
     if (!valida) {
+      log.warn('webhook.POST.assinatura_invalida', { empresa_id: config.empresa_id });
       return res.status(401).send('invalid signature');
     }
-  } catch (_) {
-    // Qualquer exceção (tamanhos diferentes, hex inválido) = assinatura inválida
+  } catch (e) {
+    log.warn('webhook.POST.assinatura_excecao', { msg: e.message });
     return res.status(401).send('invalid signature');
   }
+
+  log('webhook.POST.assinatura_ok', { empresa_id: config.empresa_id });
 
   // ── 4. Processar payload (responder 200 mesmo se houver erro interno) ──
   // Resposta antecipada NÃO é feita aqui; respondemos ao final após processar
@@ -199,6 +214,10 @@ router.post('/whatsapp', async (req, res) => {
         for (const msg of messages) {
           try {
             const contactName = (contacts[0] && contacts[0].profile && contacts[0].profile.name) || null;
+            log('webhook.msg.inbound', {
+              empresa_id: empresaId, wamid: msg.id, type: msg.type, from: msg.from,
+              hasMedia: !!extrairMediaId(msg), hasContext: !!msg.context,
+            });
 
             // 4a. Upsert da conversa
             const conversationId = await conversationRepository.upsertConversation({
@@ -230,8 +249,11 @@ router.post('/whatsapp', async (req, res) => {
 
             // wamid duplicado — não emitir socket duplicado nem incrementar unread
             if (msgId === null) {
+              log('webhook.msg.duplicada', { wamid: msg.id });
               continue;
             }
+
+            log('webhook.msg.persistida', { msgId, wamid: msg.id, conversationId });
 
             // Mensagem nova confirmada — incrementa o contador de não lidas
             try {
@@ -264,7 +286,9 @@ router.post('/whatsapp', async (req, res) => {
             if (mediaId) {
               setImmediate(async () => {
                 try {
+                  log('webhook.midia.download.inicio', { msgId, mediaId });
                   const mediaInfo = await cloudApiClient.getMediaUrl(config, mediaId);
+                  log('webhook.midia.url_obtida', { msgId, mediaId, mime: mediaInfo.mime_type, size: mediaInfo.file_size });
                   const mediaPath = await cloudApiClient.downloadMedia(
                     config,
                     mediaInfo.url,
@@ -272,6 +296,7 @@ router.post('/whatsapp', async (req, res) => {
                     empresaId
                   );
                   await messageRepository.updateMediaPath(msgId, mediaPath, mediaInfo.mime_type);
+                  log('webhook.midia.download.ok', { msgId, mediaPath, mime: mediaInfo.mime_type });
                   try {
                     emitToEmpresa(empresaId, 'update-mensagem', {
                       id: msgId,
@@ -281,7 +306,7 @@ router.post('/whatsapp', async (req, res) => {
                     });
                   } catch (_) { /* socket não pode derrubar o processo */ }
                 } catch (e) {
-                  console.error('[webhook] Erro ao baixar midia:', e.message);
+                  log.err('webhook.midia.download.falhou', { msgId, mediaId, msg: e.message, metaCode: e.metaCode, details: e.metaDetails });
                 }
               });
             }
@@ -299,13 +324,17 @@ router.post('/whatsapp', async (req, res) => {
               console.error('[webhook] Erro ao atualizar CLIENTES:', dbErr.message);
             }
           } catch (msgErr) {
-            console.error('[webhook] Erro ao processar mensagem inbound:', msgErr.message);
+            log.err('webhook.msg.processar_falhou', { msg: msgErr.message, stack: msgErr.stack });
           }
         }
 
         // Processar atualizações de status (sent/delivered/read/failed)
         for (const status of statuses) {
           try {
+            log('webhook.status.recebido', {
+              wamid: status.id, status: status.status, recipient: status.recipient_id,
+              errors: status.errors || null, conversation: status.conversation || null,
+            });
             await messageRepository.updateMessageStatusByWamid(
               status.id,
               status.status,
@@ -319,13 +348,13 @@ router.post('/whatsapp', async (req, res) => {
               });
             } catch (_) { /* socket não pode derrubar o processo */ }
           } catch (statusErr) {
-            console.error('[webhook] Erro ao processar status:', statusErr.message);
+            log.err('webhook.status.falhou', { msg: statusErr.message });
           }
         }
       }
     }
   } catch (err) {
-    console.error('[webhook] Erro geral no processamento:', err.message);
+    log.err('webhook.POST.erro_geral', { msg: err.message, stack: err.stack });
   }
 
   return res.status(200).send('EVENT_RECEIVED');

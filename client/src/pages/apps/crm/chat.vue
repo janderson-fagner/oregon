@@ -1,6 +1,7 @@
 <script setup>
   import { temaAtual } from "@core/stores/config";
   import { socket } from "@/composables/useSocket";
+  import { useDisplay } from "vuetify";
   import moment from "moment";
 
   import DadosCliente from "@/views/apps/crm/dadosCliente.vue";
@@ -14,26 +15,73 @@
   const loading = ref(false);
   const loadingMessages = ref(false);
 
+  // Detecção responsiva — em mobile alternamos entre lista e conversa
+  const { mobile, smAndDown } = useDisplay();
+  const showChatPanel = ref(false); // true em mobile = mostrar conversa
+
   const searchQuery = ref("");
 
   const allChats = ref([]);
   const selectedChat = ref(null);
   const loadingMoreChats = ref(false);
 
+  // Cache de timestamps Moment para evitar reparseamento em cada render.
+  // Limpa quando troca de chat.
+  const _momentCache = new Map();
+  const getMoment = (data) => {
+    if (!data) return moment.invalid();
+    let m = _momentCache.get(data);
+    if (!m) {
+      m = moment(data, "DD/MM/YYYY HH:mm:ss");
+      _momentCache.set(data, m);
+    }
+    return m;
+  };
+
   // ---- Helpers de mapeamento Meta Cloud API ----
+  // O backend serializa datas como ISO 8601 (ex.: "2026-05-27T22:35:26.000Z"),
+  // mas todo o componente opera no formato canônico "DD/MM/YYYY HH:mm:ss".
+  // Esta função converte qualquer origem de data para esse formato.
+  function normalizarData(raw) {
+    if (raw === null || raw === undefined || raw === "") return "";
+    const m = moment(raw);
+    return m.isValid() ? m.format("DD/MM/YYYY HH:mm:ss") : "";
+  }
+
+  // Calcula o estado da janela de 24h a partir do último inbound do contato.
+  // Usado na listagem (sem chamada extra à API). O cabeçalho usa o ref `janela`,
+  // que é atualizado via API ao selecionar/receber mensagem.
+  function calcJanela(lastInboundAt) {
+    if (!lastInboundAt) {
+      return { windowOpen: false, hoursRemaining: null, expiresAt: null };
+    }
+    const expiry = moment(lastInboundAt).add(24, "hours");
+    const horas = expiry.diff(moment(), "minutes") / 60;
+    return {
+      windowOpen: horas > 0,
+      hoursRemaining: horas > 0 ? Math.round(horas * 10) / 10 : 0,
+      expiresAt: expiry.toISOString(),
+    };
+  }
+
   function mapConversaToChat(c) {
+    const ultima = normalizarData(c.last_message_at);
+    const cliente = c.cliente || null;
     return {
       id: c.id,
-      nome: c.contact_name || c.contact_wa_id || 'Contato',
+      nome: c.contact_name || cliente?.cli_nome || c.contact_wa_id || 'Contato',
       naoLida: c.unread_count || 0,
       pinned: false,
-      ultimaAcao: c.last_message_at,
-      ultimaMensagem: { texto: c.last_message_preview || '', data: c.last_message_at },
+      ultimaAcao: ultima,
+      ultimaMensagem: { texto: c.last_message_preview || '', data: ultima },
       messagens: [],
-      cliente: null,
-      contato: { numero: c.contact_wa_id, nome: c.contact_name, avatar: null },
-      phoneFlowsBlocked: false,
-      waitingForAgent: null,
+      cliente,
+      janela: calcJanela(c.last_inbound_at),
+      // A Cloud API do Meta não fornece foto de perfil de contatos (apenas profile.name).
+      // Sem coluna de foto em CLIENTES, o avatar fica nulo e o VAvatar exibe o ícone padrão.
+      contato: { numero: c.contact_wa_id, nome: c.contact_name, avatar: cliente?.avatar || null },
+      phoneFlowsBlocked: c.phoneFlowsBlocked || false,
+      waitingForAgent: c.waitingForAgent || null,
       _conv: c,
     };
   }
@@ -51,9 +99,11 @@
     }
     // Garantir campo texto
     if (!out.texto && out.body) out.texto = out.body;
-    // Garantir campo data
-    if (!out.data && out.created_at) {
-      out.data = moment(out.created_at).format("DD/MM/YYYY HH:mm:ss");
+    // Normalizar a data para o formato canônico (prioriza timestamp_ms, depois data/created_at)
+    if (m.timestamp_ms) {
+      out.data = normalizarData(Number(m.timestamp_ms));
+    } else {
+      out.data = normalizarData(m.data || m.created_at);
     }
     return out;
   }
@@ -85,6 +135,19 @@
     if (!selectedChat.value?.id) return;
     await carregarJanela(selectedChat.value.id);
     await getChat(selectedChat.value.id, allChats.value.findIndex((c) => c.id == selectedChat.value.id));
+  };
+
+  // ---- Nova conversa (iniciar por template) ----
+  const novaConversaDialog = ref(false);
+
+  const onConversaIniciada = async (res) => {
+    await getAllChats();
+    const convId = res?.conversationId;
+    if (!convId) return;
+    const idx = allChats.value.findIndex((c) => c.id == convId);
+    if (idx >= 0) {
+      selecionarChat(allChats.value[idx]);
+    }
   };
   // ---- Fim helpers Meta ----
 
@@ -220,15 +283,20 @@
 
       if (!up && selectedChat.value && index >= 0) {
         chatMapeado.naoLida = 0;
-        // Preserva estado de atendimento/bloqueio se já estava carregado
-        chatMapeado.waitingForAgent = selectedChat.value.waitingForAgent;
-        chatMapeado.phoneFlowsBlocked = selectedChat.value.phoneFlowsBlocked;
-        chatMapeado.cliente = selectedChat.value.cliente;
+        // Prioriza os dados frescos do backend (enriquecimento completo); cai no
+        // estado local anterior apenas quando o backend não retornar o dado.
+        chatMapeado.waitingForAgent = chatMapeado.waitingForAgent || selectedChat.value.waitingForAgent;
+        chatMapeado.phoneFlowsBlocked = chatMapeado.phoneFlowsBlocked || selectedChat.value.phoneFlowsBlocked;
+        chatMapeado.cliente = chatMapeado.cliente || selectedChat.value.cliente;
         selectedChat.value = chatMapeado;
         allChats.value[index] = { ...allChats.value[index], ...chatMapeado };
 
+        // Reset cache + reindex para o chat recém-carregado
+        _momentCache.clear();
+        indexarMensagens(mensagens);
+
         carregarJanela(id);
-        rolarFimChat();
+        rolarFimChat(false);
       } else {
         const jaExiste = allChats.value.some(c => c.id == chatMapeado.id);
         if (!jaExiste) {
@@ -240,13 +308,25 @@
     }
   };
 
-  const rolarFimChat = () => {
-    setTimeout(() => {
-      const chatBox = document.querySelector(".mensagem-box");
-      if (chatBox) {
-        chatBox.scrollTop = chatBox.scrollHeight;
-      }
-    }, 500);
+  // Scroll para o fim usando rAF para coincidir com paint do Vue.
+  // Comportamento "smooth" só após o primeiro snap inicial (instant), evitando
+  // animações longas quando muitas mensagens chegam em rápida sucessão.
+  const _scrollPending = { instant: false, smooth: false };
+  const _doScroll = (behavior) => {
+    const chatBox = document.querySelector(".mensagem-box");
+    if (!chatBox) return;
+    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior });
+  };
+  const rolarFimChat = (smooth = true) => {
+    const key = smooth ? "smooth" : "instant";
+    if (_scrollPending[key]) return;
+    _scrollPending[key] = true;
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        _scrollPending[key] = false;
+        _doScroll(smooth ? "smooth" : "instant");
+      });
+    });
   };
 
   const selecionarChat = async (chat) => {
@@ -257,10 +337,62 @@
     allChats.value[index].loadingChat = true;
     selectedChat.value = allChats.value[index];
 
+    // Em mobile, deslizar para o painel da conversa
+    if (mobile.value) showChatPanel.value = true;
+
     getChat(chat.id, index);
   };
 
+  const voltarParaLista = () => {
+    showChatPanel.value = false;
+    viewDadosCliente.value = false;
+    // Mantém selectedChat para preservar contexto ao voltar
+  };
+
+  // Abre dados do cliente — em mobile precisa voltar ao painel da esquerda
+  // (a card de DadosCliente é renderizada no chat-list-pane).
+  const abrirDadosCliente = () => {
+    if (!selectedChat.value || !selectedChat.value?.cliente) return;
+    viewDadosCliente.value = !viewDadosCliente.value;
+    if (mobile.value && viewDadosCliente.value) {
+      showChatPanel.value = false;
+    }
+  };
+
   const _pendingChatLoads = new Set();
+
+  // Índices de IDs para dedup O(1) no chat selecionado.
+  // Reconstruídos sempre que `selectedChat` muda em `selecionarChat`/`getChat`.
+  const _msgIds = new Set();
+  const _msgWamids = new Set();
+
+  const indexarMensagens = (mensagens) => {
+    _msgIds.clear();
+    _msgWamids.clear();
+    for (const m of mensagens) {
+      if (m.id != null) _msgIds.add(m.id);
+      if (m.wamid) _msgWamids.add(m.wamid);
+    }
+  };
+
+  // Inserção mantendo a ordem cronológica.
+  // Em 99% dos casos a mensagem chega após a última (apenas push); só fazemos
+  // varredura O(n) reversa quando o timestamp vier desordenado (raro).
+  const inserirMensagemOrdenada = (lista, msg) => {
+    const tMsg = getMoment(msg.data).valueOf();
+    const ult = lista[lista.length - 1];
+    if (!ult || getMoment(ult.data).valueOf() <= tMsg) {
+      lista.push(msg);
+      return;
+    }
+    for (let i = lista.length - 1; i >= 0; i--) {
+      if (getMoment(lista[i].data).valueOf() <= tMsg) {
+        lista.splice(i + 1, 0, msg);
+        return;
+      }
+    }
+    lista.unshift(msg);
+  };
 
   const handleNewMessage = (payload) => {
     if (!payload) return;
@@ -282,28 +414,34 @@
     }
 
     if (chatIndex >= 0) {
-      allChats.value[chatIndex].ultimaMensagem = msgMapeada;
-      allChats.value[chatIndex].ultimaAcao = msgMapeada.data || msgMapeada.created_at;
-      if (!msgMapeada.fromMe) allChats.value[chatIndex].naoLida = (allChats.value[chatIndex].naoLida || 0) + 1;
+      const c = allChats.value[chatIndex];
+      c.ultimaMensagem = msgMapeada;
+      c.ultimaAcao = msgMapeada.data || msgMapeada.created_at;
+      // Mensagem inbound reabre/reinicia a janela de 24h
+      if (!msgMapeada.fromMe) {
+        c.naoLida = (c.naoLida || 0) + 1;
+        c.janela = calcJanela(new Date());
+      }
 
-      // Reordenar para o topo
-      const chatItem = allChats.value.splice(chatIndex, 1)[0];
-      allChats.value.unshift(chatItem);
+      // Reordenar para o topo (mutação in-place — Vue rastreia)
+      if (chatIndex > 0) {
+        const chatItem = allChats.value.splice(chatIndex, 1)[0];
+        allChats.value.unshift(chatItem);
+      }
       chatIndex = 0;
     }
 
-    if (selectedChat?.value?.id == chatId) {
-      const jaExiste = selectedChat.value.messagens.some(m => m.id == msgMapeada.id || (msgMapeada.wamid && m.wamid == msgMapeada.wamid));
-      if (!jaExiste) {
-        selectedChat.value.messagens = [
-          ...selectedChat.value.messagens,
-          msgMapeada,
-        ].sort((a, b) => {
-          return moment(a.data, "DD/MM/YYYY HH:mm:ss") - moment(b.data, "DD/MM/YYYY HH:mm:ss");
-        });
+    if (selectedChat.value?.id == chatId) {
+      // Dedup O(1) via Set ao invés de .some() O(n)
+      const dupId = msgMapeada.id != null && _msgIds.has(msgMapeada.id);
+      const dupWamid = msgMapeada.wamid && _msgWamids.has(msgMapeada.wamid);
+      if (!dupId && !dupWamid) {
+        if (msgMapeada.id != null) _msgIds.add(msgMapeada.id);
+        if (msgMapeada.wamid) _msgWamids.add(msgMapeada.wamid);
+        inserirMensagemOrdenada(selectedChat.value.messagens, msgMapeada);
+        rolarFimChat();
       }
       if (chatIndex >= 0) allChats.value[chatIndex].naoLida = 0;
-      rolarFimChat();
 
       // Recarrega janela ao receber msg inbound
       if (!msgMapeada.fromMe) carregarJanela(chatId);
@@ -426,19 +564,36 @@
     }
   });
 
+  // Memoização: formatação da sidebar é chamada N vezes por render — cache
+  // por chave (data + short) evita reparseamento moment a cada update.
+  const _handleDataCache = new Map();
+  let _handleDataCacheDay = moment().format("YYYY-MM-DD");
   const handleData = (dataChat, short = true) => {
-    const data = moment(dataChat, "DD/MM/YYYY HH:mm:ss");
-    const now = moment();
-
-    if (data.isSame(now, "day")) {
-      return short ? data.format("HH:mm") : "Hoje";
-    } else if (data.isSame(now.subtract(1, "day"), "day")) {
-      return short ? data.format("HH:mm") : "Ontem";
-    } else if (data.isSame(now.subtract(2, "day"), "day")) {
-      return short ? data.format("HH:mm") : "Anteontem";
-    } else {
-      return short ? data.format("DD/MM/YYYY") : data.format("DD/MM/YYYY");
+    if (!dataChat) return "";
+    // Invalida cache se o dia mudou (chat aberto madrugada adentro)
+    const hoje = moment().format("YYYY-MM-DD");
+    if (hoje !== _handleDataCacheDay) {
+      _handleDataCache.clear();
+      _handleDataCacheDay = hoje;
     }
+    const key = dataChat + "|" + (short ? "s" : "l");
+    const hit = _handleDataCache.get(key);
+    if (hit !== undefined) return hit;
+
+    const data = getMoment(dataChat);
+    const now = moment();
+    let out;
+    if (data.isSame(now, "day")) {
+      out = short ? data.format("HH:mm") : "Hoje";
+    } else if (data.isSame(now.clone().subtract(1, "day"), "day")) {
+      out = short ? data.format("HH:mm") : "Ontem";
+    } else if (data.isSame(now.clone().subtract(2, "day"), "day")) {
+      out = short ? data.format("HH:mm") : "Anteontem";
+    } else {
+      out = data.format("DD/MM/YYYY");
+    }
+    _handleDataCache.set(key, out);
+    return out;
   };
 
   /* Status possíveis:
@@ -483,13 +638,18 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // escolhe OGG/Opus se for suportado, senão WEBM
+      // Estratégia: Chrome MENTE com isTypeSupported("audio/mp4") (sem AAC, grava lixo
+      // que a Meta rejeita como application/octet-stream). Por isso preferimos webm/opus,
+      // que Chrome/Firefox produzem corretamente — o backend remuxa para ogg antes do Meta.
+      // Para o mp4, exigimos o codec AAC explicitamente: só o Safari aceita de verdade.
       let mimeType;
-      /*if (MediaRecorder.isTypeSupported("audio/mpeg")) {
-        mimeType = "audio/mpeg";
-      }  else if (MediaRecorder.isTypeSupported("audio/ogg; codecs=opus")) {
+      if (MediaRecorder.isTypeSupported("audio/webm; codecs=opus")) {
+        mimeType = "audio/webm; codecs=opus";
+      } else if (MediaRecorder.isTypeSupported("audio/ogg; codecs=opus")) {
         mimeType = "audio/ogg; codecs=opus";
-      }  else*/ if (MediaRecorder.isTypeSupported("audio/webm")) {
+      } else if (MediaRecorder.isTypeSupported("audio/mp4; codecs=mp4a.40.2")) {
+        mimeType = "audio/mp4; codecs=mp4a.40.2";
+      } else if (MediaRecorder.isTypeSupported("audio/webm")) {
         mimeType = "audio/webm";
       } else {
         throw new Error("Nenhum formato de gravação suportado");
@@ -541,51 +701,62 @@
   const filesToSend = ref([]);
   const inputFiles = ref(null);
 
+  const limparEntrada = () => {
+    message.value = "";
+    filesToSend.value = [];
+    if (inputFiles.value) inputFiles.value.value = null;
+    audioUrl.value = null;
+    audioBlob.value = null;
+    viewReply.value = false;
+    msgReply.value = null;
+  };
+
+  /**
+   * Envia mensagem do compositor. Três modos:
+   *  - "audio": grava e envia áudio (com legenda opcional).
+   *  - arquivo(s) no input: envia cada arquivo via /save-anexo;
+   *    o texto digitado vira legenda do PRIMEIRO arquivo (convenção do WhatsApp).
+   *  - apenas texto: envia via /send-message-chat.
+   * NÃO chama /send-message-chat com texto vazio (causava 400 "text é obrigatório").
+   */
   const sendMessage = async (type = "default") => {
-    if (
-      type == "default" &&
-      (!message.value || message.value == "") &&
-      (!filesToSend.value || filesToSend.value.length == 0)
-    ) {
+    const texto = (message.value || "").trim();
+    const arquivos = inputFiles.value?.files?.length > 0
+      ? Array.from(inputFiles.value.files)
+      : [];
+
+    if (type === "default" && !texto && arquivos.length === 0) {
       setAlert("Digite uma mensagem ou anexo para enviar.", "error");
       return;
     }
 
     loadingSendMessage.value = true;
 
-    let filePath;
-
-    if (type == "audio") {
-      pararGravacao();
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      const send = await sendAnexo("audio");
-
-      if (send) {
-        filePath = send;
-      }
-    } else if (inputFiles.value?.files?.length > 0) {
-      const files = Array.from(inputFiles.value.files);
-
-      if (files.length > 0) {
-        filePath = [];
-
-        for (const file of files) {
-          const send = await sendAnexo(file);
-
-          if (send) {
-            filePath.push(send);
-          }
-        }
-      }
-    }
-
     try {
+      if (type === "audio") {
+        pararGravacao();
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await sendAnexo("audio", texto || "");
+        limparEntrada();
+        return;
+      }
+
+      if (arquivos.length > 0) {
+        // Legenda só na primeira mídia (padrão WhatsApp). Demais arquivos vão sem caption.
+        for (let i = 0; i < arquivos.length; i++) {
+          const caption = i === 0 ? texto : "";
+          await sendAnexo(arquivos[i], caption);
+        }
+        limparEntrada();
+        return;
+      }
+
+      // Apenas texto
       const res = await $api("/zap/send-message-chat", {
         method: "POST",
         body: {
           conversationId: selectedChat.value.id,
-          text: message.value,
+          text: texto,
           replyToWamid: viewReply.value && msgReply.value ? (msgReply.value.wamid || null) : null,
         },
       });
@@ -599,22 +770,17 @@
         return;
       }
 
-      message.value = "";
-      filesToSend.value = [];
-      if (inputFiles.value) {
-        inputFiles.value.value = null;
-      }
-      audioUrl.value = null;
-      audioBlob.value = null;
-      viewReply.value = false;
-      msgReply.value = null;
+      limparEntrada();
 
       // Append otimista da mensagem retornada
       if (res.message) {
         const msgMapeada = mapMsgFront(res.message);
-        const jaExiste = selectedChat.value.messagens.some((m) => m.id == msgMapeada.id || (msgMapeada.wamid && m.wamid == msgMapeada.wamid));
-        if (!jaExiste) {
-          selectedChat.value.messagens = [...selectedChat.value.messagens, msgMapeada];
+        const dupId = msgMapeada.id != null && _msgIds.has(msgMapeada.id);
+        const dupWamid = msgMapeada.wamid && _msgWamids.has(msgMapeada.wamid);
+        if (!dupId && !dupWamid) {
+          if (msgMapeada.id != null) _msgIds.add(msgMapeada.id);
+          if (msgMapeada.wamid) _msgWamids.add(msgMapeada.wamid);
+          inserirMensagemOrdenada(selectedChat.value.messagens, msgMapeada);
           rolarFimChat();
         }
       }
@@ -668,12 +834,18 @@
 
       if (!res) return;
 
-      // Append otimista se retornar mensagem
+      // Append otimista se retornar mensagem.
+      // Importante: save-anexo retorna msgObj só com `wamid` (sem `id`), então
+      // o dedup precisa cobrir wamid — senão duplica quando o socket
+      // "nova-mensagem" chega antes da resposta HTTP.
       if (res.message) {
         const msgMapeada = mapMsgFront(res.message);
-        const jaExiste = selectedChat.value.messagens.some((m) => m.id == msgMapeada.id);
-        if (!jaExiste) {
-          selectedChat.value.messagens = [...selectedChat.value.messagens, msgMapeada];
+        const dupId = msgMapeada.id != null && _msgIds.has(msgMapeada.id);
+        const dupWamid = msgMapeada.wamid && _msgWamids.has(msgMapeada.wamid);
+        if (!dupId && !dupWamid) {
+          if (msgMapeada.id != null) _msgIds.add(msgMapeada.id);
+          if (msgMapeada.wamid) _msgWamids.add(msgMapeada.wamid);
+          inserirMensagemOrdenada(selectedChat.value.messagens, msgMapeada);
           rolarFimChat();
         }
       }
@@ -719,114 +891,6 @@
     return "tabler-file";
   };
 
-  const actionsChat = (chat) => [
-    {
-      title: "Deletar",
-      icon: "tabler-trash",
-      action: "delete",
-    },
-    {
-      title: chat.pinned ? "Desfixar" : "Fixar",
-      icon: chat.pinned ? "tabler-pinned-off" : "tabler-pin",
-      action: chat.pinned ? "unpin" : "pin",
-    },
-    {
-      title:
-        chat.naoLida < 0 || chat.naoLida > 0
-          ? "Marcar como lido"
-          : "Marcar como não lido",
-      icon:
-        chat.naoLida < 0 || chat.naoLida > 0
-          ? "tabler-circle-x"
-          : "tabler-circle-check",
-      action:
-        chat.naoLida < 0 || chat.naoLida > 0 ? "markAsRead" : "markAsUnread",
-    },
-  ];
-
-  const handleActionChat = async (action, chat) => {
-    if (!action || !chat) return;
-
-    const indexChat = allChats.value.findIndex((c) => c.id == chat.id);
-
-    if (indexChat < 0) return;
-
-    try {
-      const res = await $api("/zap/actions-chat/" + chat.id, {
-        method: "GET",
-        query: {
-          action,
-          type: 'atendimento'
-        },
-      });
-
-      if (!res) return;
-
-      console.log("res actionChat", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível realizar a ação, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
-        return;
-      }
-
-      if (action == "delete") {
-        if (selectedChat.value?.id == chat.id) {
-          selectedChat.value = null;
-        }
-
-        allChats.value.splice(indexChat, 1);
-      } else if (action == "pin") {
-        allChats.value[indexChat].pinned = true;
-      } else if (action == "unpin") {
-        allChats.value[indexChat].pinned = false;
-      } else if (action == "markAsUnread") {
-        allChats.value[indexChat].naoLida = -1;
-      } else if (action == "markAsRead") {
-        allChats.value[indexChat].naoLida = 0;
-      }
-
-      setAlert("Ação realizada com sucesso.", "success", "tabler-checks", 5000);
-    } catch (error) {
-      console.error("Error actionChat:", error, error.response);
-
-      setAlert(
-        error?.response?._data?.message ||
-          error?.response?._data?.error ||
-          "Erro ao realizar ação. Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        5000
-      );
-    } finally {
-      allChats.value[indexChat].viewMenu = false;
-    }
-  };
-
-  const viewMenuChat = ref(false);
-  const chatMenu = ref(null);
-
-  const handleMenuChat = (event, chat) => {
-    if (!chat) return;
-
-    chatMenu.value = chat;
-    viewMenuChat.value = true;
-
-    //Posiciona o menu na posição do clique
-    const menu = document.querySelector(".menu-chat");
-    if (menu) {
-      console.log("menu", menu, event.clientX, event.clientY);
-      menu.style.left = event.clientX + "px";
-      menu.style.top = event.clientY + "px";
-    }
-  };
-
   const viewMenuMsg = ref(false);
   const msgMenu = ref(null);
 
@@ -845,184 +909,15 @@
     }
   };
 
-  const actionsMsg = (msg) => {
-    let arr = [
-      {
-        title: "Responder",
-        icon: "tabler-corner-up-left",
-        action: "reply",
-      },
-    ];
-    if (!msg.hasMedia) {
-      arr.push({
-        title: "Editar",
-        icon: "tabler-edit",
-        action: "edit",
-      });
-    }
-
-    if (msg.fromMe) {
-      arr.push(
-        {
-          title: "Deletar (todos)",
-          icon: "tabler-trash",
-          action: "deleteTodos",
-        },
-        {
-          title: "Deletar (eu)",
-          icon: "tabler-trash",
-          action: "deleteMe",
-        }
-      );
-    } else {
-      arr.push({
-        title: "Deletar",
-        icon: "tabler-trash",
-        action: "deleteMe",
-      });
-    }
-
-    console.log("actionsMsg", arr);
-
-    return arr;
-  };
-
-  const handleActionMsg = async (action, msg) => {
-    if (!action || !msg) return;
-
-    const indexMsg = selectedChat.value.messagens.findIndex(
-      (c) => c.id == msg.id
-    );
-
-    if (indexMsg < 0) return;
-
-    try {
-      const res = await $api("/zap/actions-msg/" + msg.id, {
-        method: "GET",
-        query: {
-          action,
-          type: 'atendimento'
-        },
-      });
-
-      if (!res) return;
-
-      console.log("res actionMsg", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível realizar a ação, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
-        return;
-      }
-
-      if (action.includes("delete")) {
-        selectedChat.value.messagens.splice(indexMsg, 1);
-      } else if (action == "edit") {
-        //TODO
-      } else if (action == "reply") {
-        //TODO
-      }
-
-      setAlert("Ação realizada com sucesso.", "success", "tabler-checks", 5000);
-    } catch (error) {
-      console.error("Error actionMsg:", error, error.response);
-
-      setAlert(
-        error?.response?._data?.message ||
-          error?.response?._data?.error ||
-          "Erro ao realizar ação. Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        5000
-      );
-    }
-  };
-
-  function formatHtmlMensagem(mensagem) {
-    if (!mensagem) return "";
-
-    return mensagem
-      .replace(/<strong>(.*?)<\/strong>/g, "*$1*") // <strong>negrito</strong>
-      .replace(/<em>(.*?)<\/em>/g, "_$1_") // <em>itálico</em>
-      .replace(/<s>(.*?)<\/s>/g, "~$1~") // <s>riscado</s>
-      .replace(/<br>/g, "\n"); // <br> quebras de linha
-  }
-
-  const openEdit = (msg) => {
-    if (!msg) return;
-
-    const index = selectedChat.value.messagens.findIndex((c) => c.id == msg.id);
-
-    if (index < 0) return;
-
-    selectedChat.value.messagens[index].viewEdit = true;
-    selectedChat.value.messagens[index].textoEdit = formatHtmlMensagem(
-      selectedChat.value.messagens[index].texto
-    );
-  };
-  
-  const loadingEditMsg = ref(false);
-  const editMsg = async (msg) => {
-    if (!msg) return;
-
-    const index = selectedChat.value.messagens.findIndex((c) => c.id == msg.id);
-
-    if (index < 0) return;
-
-    loadingEditMsg.value = true;
-
-    const body = {
-      msgId: msg.id,
-      texto: msg.textoEdit,
-      type: 'atendimento'
-    };
-
-    console.log("body editMsg", body);
-    try {
-      const res = await $api("/zap/editar-msg", {
-        method: "POST",
-        body,
-      });
-
-      if (!res) return;
-
-      console.log("res editMsg", res);
-
-      if (res == "Desconectado") {
-        setAlert(
-          "Não foi possível editar a mensagem, verifique se o WhatsApp está conectado.",
-          "error"
-        );
-
-        setTimeout(() => {
-          router.push('/crm/config');
-        }, 2000);
-        return;
-      }
-
-      selectedChat.value.messagens[index].texto = msg.textoEdit;
-      selectedChat.value.messagens[index].viewEdit = false;
-    } catch (error) {
-      console.error("Error editMsg:", error, error.response);
-
-      setAlert(
-        error?.response?._data?.message ||
-          error?.response?._data?.error ||
-          "Erro ao editar mensagem. Tente novamente.",
-        "error",
-        "tabler-alert-triangle",
-        5000
-      );
-    } finally {
-      loadingEditMsg.value = false;
-    }
-  };
+  // A Cloud API só permite responder (citar) mensagens — editar/deletar/fixar
+  // não existem na API oficial e foram removidos.
+  const actionsMsg = () => [
+    {
+      title: "Responder",
+      icon: "tabler-corner-up-left",
+      action: "reply",
+    },
+  ];
 
   const viewReply = ref(false);
   const msgReply = ref(null);
@@ -1076,12 +971,17 @@
 
       const novas = (res.messages || []).map(mapMsgFront);
       if (novas.length > 0) {
-        // Prepend evitando duplicatas
-        const idsExistentes = new Set(selectedChat.value.messagens.map((m) => m.id));
-        const semDup = novas.filter((m) => !idsExistentes.has(m.id));
-        selectedChat.value.messagens = [...semDup, ...selectedChat.value.messagens].sort((a, b) => {
-          return moment(a.data, "DD/MM/YYYY HH:mm:ss") - moment(b.data, "DD/MM/YYYY HH:mm:ss");
-        });
+        // Prepend evitando duplicatas (usa Set já mantido)
+        const semDup = novas.filter((m) => !_msgIds.has(m.id));
+        for (const m of semDup) {
+          if (m.id != null) _msgIds.add(m.id);
+          if (m.wamid) _msgWamids.add(m.wamid);
+        }
+        // Histórico vem ordenado do backend; basta concatenar e reordenar apenas
+        // se necessário (pagina anterior pode sobrepor cronologia).
+        const merged = semDup.concat(selectedChat.value.messagens);
+        merged.sort((a, b) => getMoment(a.data).valueOf() - getMoment(b.data).valueOf());
+        selectedChat.value.messagens = merged;
       }
     } catch (error) {
       console.error("Error fetching more msgs:", error, error.response);
@@ -1308,23 +1208,11 @@
     @sent="onTemplateEnviado"
   />
 
-  <div class="menu-chat position-absolute">
-    <VMenu v-model="viewMenuChat" location="top" contained>
-      <VList>
-        <VListItem
-          class="item-action"
-          v-for="action in actionsChat(chatMenu)"
-          :key="action.title"
-          @click="handleActionChat(action.action, chatMenu)"
-        >
-          <p class="mb-0">
-            <VIcon :icon="action.icon" class="mr-2" />
-            {{ action.title }}
-          </p>
-        </VListItem>
-      </VList>
-    </VMenu>
-  </div>
+  <MetaTemplateDialog
+    v-model="novaConversaDialog"
+    :new-conversation="true"
+    @started="onConversaIniciada"
+  />
 
   <div class="menu-msg position-absolute">
     <VMenu v-model="viewMenuMsg" location="top" contained>
@@ -1333,13 +1221,7 @@
           class="item-action"
           v-for="action in actionsMsg(msgMenu)"
           :key="action.title"
-          @click="
-            action.action == 'edit'
-              ? openEdit(msgMenu)
-              : action.action == 'reply'
-              ? openReply(msgMenu)
-              : handleActionMsg(action.action, msgMenu)
-          "
+          @click="openReply(msgMenu)"
         >
           <p class="mb-0">
             <VIcon :icon="action.icon" class="mr-2" />
@@ -1349,12 +1231,12 @@
       </VList>
     </VMenu>
   </div>
-  <VRow style="max-height: 94vh; overflow: hidden">
-    <VCol cols="4" class="pa-0">
+  <div class="chat-shell" :class="{ 'is-mobile': mobile, 'show-chat': showChatPanel }">
+    <div class="chat-pane chat-list-pane">
       <VCard
         rounded="0"
         v-if="viewDadosCliente && selectedChat?.cliente"
-        class="h-100"
+        class="h-100 dados-cliente-card"
       >
         <DadosCliente
           :dados="selectedChat"
@@ -1362,20 +1244,32 @@
           @close="viewDadosCliente = false"
         />
       </VCard>
-      <VCard rounded="0" v-else>
+      <VCard rounded="0" v-else class="h-100 d-flex flex-column chat-list-card">
         <div class="header-messages pa-3">
           <h2 class="text-h5">Chat</h2>
 
-          <VTextField
-            v-model="searchQuery"
-            label="Pesquisar"
-            placeholder="Pesquise uma conversa pelo nome ou número do contato"
-            class="mt-4"
-            prepend-inner-icon="tabler-search"
-            clearable
-            :loading="loading"
-            @update:modelValue="getAllChats"
-          />
+          <div class="d-flex align-center gap-2 mt-4">
+            <VTextField
+              v-model="searchQuery"
+              label="Pesquisar"
+              placeholder="Pesquise uma conversa pelo nome ou número do contato"
+              prepend-inner-icon="tabler-search"
+              clearable
+              :loading="loading"
+              @update:modelValue="getAllChats"
+            />
+            <IconBtn
+              color="primary"
+              variant="tonal"
+              @click="novaConversaDialog = true"
+            >
+              <VIcon icon="tabler-message-plus" />
+              <VTooltip
+                text="Iniciar nova conversa por telefone (envia template)"
+                activator="parent"
+              />
+            </IconBtn>
+          </div>
         </div>
 
         <div class="text-center py-3 px-2" v-if="loading">
@@ -1391,7 +1285,6 @@
                 'chat-naoLido': chat.naoLida > 0 || chat.naoLida < 0,
               }"
               @click="selecionarChat(chat)"
-              @contextmenu.prevent="handleMenuChat($event, chat)"
             >
               <VAvatar
                 :color="chat.contato?.avatar ? undefined : 'primary'"
@@ -1401,8 +1294,8 @@
                 <VImg :src="chat.contato?.avatar" v-if="chat.contato?.avatar" />
                 <VIcon icon="tabler-user-filled" v-else />
               </VAvatar>
-              <div class="w-100">
-                <div class="d-flex">
+              <div class="chat-item-body">
+                <div class="d-flex align-center gap-1">
                   <p class="chat-name">
                     {{ chat.nome }}
                   </p>
@@ -1434,14 +1327,35 @@
                     Bloqueado
                   </VChip>
                   <p class="ml-auto mb-0 text-disabled text-caption">
-                    <VIcon icon="tabler-pin-filled" v-if="chat.pinned" />
                     {{ chat.ultimaAcao ? handleData(chat.ultimaAcao) : "" }}
                   </p>
                 </div>
-                <div
-                  class="chat-last-message"
-                  v-html="formatShortMsg(chat.ultimaMensagem ?? '--')"
-                />
+                <div class="d-flex align-center justify-space-between gap-2">
+                  <div
+                    class="chat-last-message"
+                    v-html="formatShortMsg(chat.ultimaMensagem ?? '--')"
+                  />
+                  <VChip
+                    v-if="chat.janela && !chat.janela.windowOpen"
+                    color="warning"
+                    size="x-small"
+                    variant="tonal"
+                    label
+                  >
+                    <VIcon icon="tabler-clock-off" size="11" class="mr-1" />
+                    Fechada
+                  </VChip>
+                  <VChip
+                    v-else-if="chat.janela && chat.janela.hoursRemaining !== null"
+                    color="success"
+                    size="x-small"
+                    variant="tonal"
+                    label
+                  >
+                    <VIcon icon="tabler-clock" size="11" class="mr-1" />
+                    {{ chat.janela.hoursRemaining }}h
+                  </VChip>
+                </div>
               </div>
               <div
                 v-if="chat.naoLida > 0 || chat.naoLida < 0"
@@ -1474,12 +1388,11 @@
           </div>
         </div>
       </VCard>
-    </VCol>
+    </div>
 
-    <VCol cols="8" class="pa-0" v-if="selectedChat">
+    <div class="chat-pane chat-conv-pane" v-if="selectedChat">
       <div
-        class="mensagem-box overflow-y-auto"
-        style="max-height: calc(95vh - 16px); min-height: calc(95vh - 16px)"
+        class="mensagem-box"
         @scroll="handleScrollMsgs"
       >
         <div class="carregando" v-if="selectedChat?.loadingChat">
@@ -1489,36 +1402,26 @@
             :width="5"
           ></v-progress-circular>
         </div>
-        <div
-          class="contact-header"
-          style="
-            border-width: 0 0 1px 0;
-            position: sticky;
-            top: 0px;
-            z-index: 5;
-          "
-        >
-          <VIcon
-            icon="tabler-chevron-left"
-            color="primary"
-            @click="
-              selectedChat = null;
-              viewDadosCliente = false;
-            "
-          />
+        <div class="contact-header">
+          <IconBtn
+            variant="text"
+            size="small"
+            class="back-btn"
+            @click="mobile ? voltarParaLista() : (selectedChat = null, viewDadosCliente = false)"
+          >
+            <VIcon icon="tabler-chevron-left" />
+          </IconBtn>
 
           <div
             class="contact-box"
             :class="{ 'cursor-pointer': selectedChat?.cliente }"
-            @click="
-              selectedChat && selectedChat?.cliente
-                ? (viewDadosCliente = !viewDadosCliente)
-                : ''
-            "
+            @click="abrirDadosCliente"
           >
             <VAvatar
-              :color="selectedChat?.contato?.avatar ? undefined : 'secondary'"
+              :color="selectedChat?.contato?.avatar ? undefined : 'primary'"
+              :variant="selectedChat?.contato?.avatar ? undefined : 'tonal'"
               size="40"
+              class="contact-avatar"
             >
               <VImg
                 :src="selectedChat?.contato?.avatar"
@@ -1527,11 +1430,33 @@
               <VIcon icon="tabler-user-filled" v-else />
             </VAvatar>
             <div class="contact-info">
-              <p class="mb-0 contact-name">
-                {{
-                  selectedChat?.contato?.nome || selectedChat?.nome || "Cliente"
-                }}
-              </p>
+              <div class="d-flex align-center gap-2 flex-wrap">
+                <p class="mb-0 contact-name">
+                  {{
+                    selectedChat?.contato?.nome || selectedChat?.nome || "Cliente"
+                  }}
+                </p>
+                <VChip
+                  v-if="!janela.windowOpen"
+                  color="warning"
+                  size="x-small"
+                  variant="tonal"
+                  label
+                >
+                  <VIcon icon="tabler-clock-off" size="12" class="mr-1" />
+                  Janela fechada
+                </VChip>
+                <VChip
+                  v-else-if="janela.hoursRemaining !== null"
+                  color="success"
+                  size="x-small"
+                  variant="tonal"
+                  label
+                >
+                  <VIcon icon="tabler-clock" size="12" class="mr-1" />
+                  {{ smAndDown ? `${janela.hoursRemaining}h` : `Janela: ${janela.hoursRemaining}h` }}
+                </VChip>
+              </div>
               <p class="mb-0 online-msg">
                 {{
                   selectedChat && !selectedChat?.loadingChat
@@ -1544,13 +1469,14 @@
             </div>
           </div>
 
-          <div class="ml-auto d-flex gap-2">
+          <!-- Ações inline em desktop -->
+          <div class="ml-auto contact-actions d-none d-md-flex gap-2">
             <VChip
               v-if="agentStatus === 'in_attendance'"
               color="info"
               size="small"
               label
-              style="height: 30px;"
+              class="action-chip"
             >
               <VIcon icon="tabler-headset" class="mr-1" />
               Em atendimento
@@ -1564,7 +1490,7 @@
               @click="iniciarAtendimento"
               :loading="loadingIniciarAtendimento"
               rounded="lg"
-              style="height: 30px;"
+              class="action-btn"
             >
               <VIcon icon="tabler-headset" class="mr-1" />
               Iniciar
@@ -1583,7 +1509,7 @@
               @click="finalizarAtendimento"
               :loading="loadingFinalizarAtendimento"
               rounded="lg"
-              style="height: 30px;"
+              class="action-btn"
             >
               <VIcon icon="tabler-check" class="mr-1" />
               Finalizar
@@ -1598,7 +1524,7 @@
               @click="toggleFlowsBlock"
               :loading="loadingToggleFlows"
               rounded="lg"
-              style="height: 30px;"
+              class="action-btn"
             >
               <VIcon
                 :icon="isFlowsBlocked ? 'tabler-lock' : 'tabler-lock-open'"
@@ -1609,11 +1535,74 @@
               <VTooltip :text="isFlowsBlocked ? 'Desbloquear fluxos' : 'Bloquear fluxos'" activator="parent" />
             </VBtn>
           </div>
+
+          <!-- Menu compacto em mobile -->
+          <div class="ml-auto d-flex d-md-none align-center gap-1">
+            <VChip
+              v-if="agentStatus === 'in_attendance'"
+              color="info"
+              size="x-small"
+              label
+            >
+              <VIcon icon="tabler-headset" size="12" />
+            </VChip>
+            <IconBtn variant="text" size="small">
+              <VIcon icon="tabler-dots-vertical" />
+              <VMenu activator="parent" location="bottom end">
+                <VList density="compact" min-width="220">
+                  <VListItem
+                    v-if="agentStatus !== 'in_attendance'"
+                    @click="iniciarAtendimento"
+                    :disabled="loadingIniciarAtendimento"
+                  >
+                    <template #prepend>
+                      <VIcon icon="tabler-headset" size="18" />
+                    </template>
+                    <VListItemTitle>Iniciar atendimento</VListItemTitle>
+                  </VListItem>
+                  <VListItem
+                    v-if="selectedChat?.waitingForAgent"
+                    @click="finalizarAtendimento"
+                    :disabled="loadingFinalizarAtendimento"
+                  >
+                    <template #prepend>
+                      <VIcon icon="tabler-check" size="18" color="success" />
+                    </template>
+                    <VListItemTitle>Finalizar atendimento</VListItemTitle>
+                  </VListItem>
+                  <VListItem
+                    @click="toggleFlowsBlock"
+                    :disabled="loadingToggleFlows"
+                  >
+                    <template #prepend>
+                      <VIcon
+                        :icon="isFlowsBlocked ? 'tabler-lock' : 'tabler-lock-open'"
+                        size="18"
+                        :color="isFlowsBlocked ? 'error' : undefined"
+                      />
+                    </template>
+                    <VListItemTitle>
+                      {{ isFlowsBlocked ? 'Desbloquear fluxos' : 'Bloquear fluxos' }}
+                    </VListItemTitle>
+                  </VListItem>
+                  <VListItem
+                    v-if="selectedChat?.cliente"
+                    @click="abrirDadosCliente"
+                  >
+                    <template #prepend>
+                      <VIcon icon="tabler-id-badge-2" size="18" />
+                    </template>
+                    <VListItemTitle>Ver dados do cliente</VListItemTitle>
+                  </VListItem>
+                </VList>
+              </VMenu>
+            </IconBtn>
+          </div>
         </div>
 
-        <div class="messages-list mt-3" style="min-height: calc(-150px + 95vh)">
+        <div class="messages-list mt-3">
           <div
-            class="w-100 d-flex justify-center align-center"
+            class="w-100 d-flex justify-center align-center load-more-msgs"
             v-if="loadingMoreMsgs"
           >
             <v-progress-circular
@@ -1624,54 +1613,11 @@
             ></v-progress-circular>
           </div>
 
+          <TransitionGroup name="msg" tag="div" class="messages-stream">
           <template
             v-for="(msg, index) in selectedChat?.messagens"
-            :key="index"
+            :key="msg.id ?? msg.wamid ?? `idx-${index}`"
           >
-            <VDialog max-width="600" v-model="msg.viewEdit" persistent>
-              <VCard>
-                <VCardText>
-                  <div
-                    class="d-flex flex-row align-center justify-space-between"
-                  >
-                    <p class="mb-0">Editar mensagem</p>
-                    <VIcon
-                      icon="tabler-x"
-                      class="cursor-pointer"
-                      @click="msg.viewEdit = false"
-                    />
-                  </div>
-
-                  <VTextarea
-                    v-model="msg.textoEdit"
-                    bg-color="white"
-                    active
-                    placeholder="Digite uma mensagem"
-                    class="w-100 mt-3"
-                    rows="3"
-                  />
-
-                  <div class="d-flex flex-row justify-end mt-3">
-                    <VBtn
-                      variant="outlined"
-                      color="secondary"
-                      class="mr-2"
-                      @click="msg.viewEdit = false"
-                    >
-                      Cancelar
-                    </VBtn>
-                    <VBtn
-                      color="primary"
-                      @click="editMsg(msg)"
-                      :loading="loadingEditMsg"
-                    >
-                      Salvar
-                    </VBtn>
-                  </div>
-                </VCardText>
-              </VCard>
-            </VDialog>
-
             <div
               @contextmenu.prevent="handleMenuMsg($event, msg)"
               v-if="
@@ -1828,20 +1774,16 @@
               <VImg
                 :src="msg.media.url"
                 v-if="msg.media?.mime?.includes('image')"
-                width="250"
-                height="250"
                 cover
-                class="rounded"
+                class="rounded msg-media-image"
                 @click="goToImg(msg.media.url)"
               />
 
               <!--video-->
               <video
                 v-if="msg.media?.mime?.includes('video')"
-                width="250"
-                height="250"
                 controls
-                class="rounded"
+                class="rounded msg-media-video"
               >
                 <source :src="msg.media.url" type="video/mp4" />
                 Seu navegador não suporta o elemento de vídeo.
@@ -1907,7 +1849,7 @@
                     : 'right: 10px; bottom: 5px'
                 "
               >
-                {{ moment(msg.data, "DD/MM/AAA HH:mm:ss").format("HH:mm") }}
+                {{ moment(msg.data, "DD/MM/YYYY HH:mm:ss").format("HH:mm") }}
 
                 <VIcon
                   v-if="msg.fromMe"
@@ -1930,6 +1872,7 @@
               <div class="message-data">{{ msg.data }}</div>
             </div>
           </template>
+          </TransitionGroup>
         </div>
 
         <!-- Banner janela 24h -->
@@ -1955,14 +1898,6 @@
               </VBtn>
             </div>
           </VAlert>
-        </div>
-        <div v-else-if="selectedChat && janela.windowOpen && janela.hoursRemaining !== null" class="px-3 pt-1">
-          <div class="d-flex align-center justify-end">
-            <VChip size="x-small" color="success" variant="tonal" label class="mb-1">
-              <VIcon icon="tabler-clock" size="12" class="mr-1" />
-              Janela: {{ janela.hoursRemaining }}h restantes
-            </VChip>
-          </div>
         </div>
 
         <div class="message-send">
@@ -2175,21 +2110,378 @@
           </div>
         </div>
       </div>
-    </VCol>
-  </VRow>
+    </div>
+
+    <!-- Empty state em desktop quando nenhum chat está selecionado -->
+    <div v-if="!selectedChat && !mobile" class="chat-empty-state">
+      <div class="chat-empty-inner">
+        <div class="chat-empty-icon">
+          <VIcon icon="tabler-messages" size="48" />
+        </div>
+        <h3 class="text-h6 mt-4 mb-1">Selecione uma conversa</h3>
+        <p class="text-body-2 text-disabled mb-0">
+          Escolha um contato à esquerda para começar
+        </p>
+      </div>
+    </div>
+  </div>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
+  /* =========================================================
+     Layout shell — dvh para lidar com URL bar / teclado mobile.
+     Desktop: split horizontal 4/8. Mobile: pilha 100% com
+     transição entre lista e conversa.
+     ========================================================= */
+  .chat-shell {
+    display: grid;
+    grid-template-columns: minmax(280px, 30%) 1fr;
+    height: calc(100dvh - 70px);
+    max-height: calc(100dvh - 70px);
+    overflow: hidden;
+    background-color: rgb(var(--v-theme-background));
+    border-radius: 8px;
+    position: relative;
+  }
+
+  .chat-pane {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .chat-list-pane {
+    border-right: 1px solid rgba(var(--v-border-color), 0.12);
+  }
+
+  .chat-list-card {
+    background-color: rgb(var(--v-theme-surface));
+  }
+
+  .chat-conv-pane {
+    background-color: rgb(var(--v-theme-background));
+    position: relative;
+  }
+
+  .chat-empty-state {
+    grid-column: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+  }
+
+  .chat-empty-inner {
+    text-align: center;
+    opacity: 0.65;
+  }
+
+  .chat-empty-icon {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: linear-gradient(135deg,
+      rgba(var(--v-theme-primary), 0.10),
+      rgba(var(--v-theme-primary), 0.04));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    color: rgb(var(--v-theme-primary));
+  }
+
+  /* =========================================================
+     Mobile: comportamento de painéis empilhados com slide
+     ========================================================= */
+  .chat-shell.is-mobile {
+    grid-template-columns: 1fr;
+    border-radius: 0;
+    height: calc(100dvh - 140px);
+    max-height: calc(100dvh - 140px);
+  }
+
+  .chat-shell.is-mobile .chat-list-pane,
+  .chat-shell.is-mobile .chat-conv-pane {
+    grid-column: 1;
+    grid-row: 1;
+    transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+  }
+
+  .chat-shell.is-mobile .chat-conv-pane {
+    transform: translateX(100%);
+    z-index: 2;
+  }
+
+  .chat-shell.is-mobile.show-chat .chat-list-pane {
+    transform: translateX(-12%);
+    pointer-events: none;
+  }
+
+  .chat-shell.is-mobile.show-chat .chat-conv-pane {
+    transform: translateX(0);
+  }
+
+  /* =========================================================
+     Sidebar — Header + lista de chats
+     ========================================================= */
+  .header-messages {
+    border-bottom: 1px solid rgba(var(--v-border-color), 0.10);
+    background-color: rgb(var(--v-theme-surface));
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
+
+  .chats {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--v-border-color), 0.25) transparent;
+  }
+
+  .chats::-webkit-scrollbar { width: 6px; }
+  .chats::-webkit-scrollbar-thumb {
+    background-color: rgba(var(--v-border-color), 0.25);
+    border-radius: 4px;
+  }
+
+  .chat-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    cursor: pointer;
+    gap: 12px;
+    position: relative;
+    border-left: 2px solid transparent;
+    transition: background-color 160ms ease, border-color 160ms ease;
+  }
+
+  .chat-item + .chat-item {
+    border-top: 1px solid rgba(var(--v-border-color), 0.06);
+  }
+
+  .chat-item:hover {
+    background-color: rgba(var(--v-theme-primary), 0.06);
+  }
+
+  .chat-item.chat-selected {
+    background-color: rgba(var(--v-theme-primary), 0.10);
+    border-left-color: rgb(var(--v-theme-primary));
+  }
+
+  .chat-item.chat-naoLido .chat-name {
+    font-weight: 600;
+  }
+
+  .chat-item.chat-naoLido .chat-last-message {
+    color: rgba(var(--v-theme-on-surface), 0.85);
+    font-weight: 500;
+  }
+
+  .chat-item-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .chat-name {
+    font-weight: 500;
+    margin: 0;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.94rem;
+  }
+
+  .chat-last-message {
+    color: rgba(var(--v-theme-on-surface), 0.55);
+    margin: 0;
+    min-width: 0;
+    flex: 1 1 auto;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    font-size: 0.825rem;
+    line-height: 1.3;
+  }
+
+  .circle-naoLida {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    position: absolute;
+    right: 14px;
+    top: 12px;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(var(--v-theme-error), 0.35);
+  }
+
+  /* =========================================================
+     Conversa — header + box + composer
+     ========================================================= */
+  .mensagem-box {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    position: relative;
+    background-color: rgb(var(--v-theme-background));
+    background-image:
+      radial-gradient(circle at 20% 0%, rgba(var(--v-theme-primary), 0.04), transparent 40%),
+      radial-gradient(circle at 80% 100%, rgba(var(--v-theme-info), 0.03), transparent 40%);
+  }
+
+  .mensagem-box::-webkit-scrollbar { width: 6px; }
+  .mensagem-box::-webkit-scrollbar-thumb {
+    background-color: rgba(var(--v-border-color), 0.25);
+    border-radius: 4px;
+  }
+
+  .contact-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background-color: rgb(var(--v-theme-surface));
+    border: none;
+    border-bottom: 1px solid rgba(var(--v-border-color), 0.10);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    min-height: 64px;
+  }
+
+  .back-btn {
+    flex-shrink: 0;
+  }
+
+  .contact-box {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 0 1 auto;
+    padding: 4px 6px;
+    border-radius: 8px;
+    transition: background-color 160ms ease;
+    /* Sobrescreve regra global .contact-box { margin-left: 40px } legada */
+    margin-left: 0 !important;
+  }
+
+  .contact-box.cursor-pointer:hover {
+    background-color: rgba(var(--v-theme-primary), 0.06);
+  }
+
+  .contact-avatar {
+    flex-shrink: 0;
+  }
+
+  .contact-info {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .contact-name {
+    font-weight: 600;
+    font-size: 0.98rem;
+    line-height: 1.25;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+  }
+
+  .online-msg {
+    font-size: 0.78rem;
+    color: rgba(var(--v-theme-on-surface), 0.55);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+    line-height: 1.25;
+    margin: 0;
+  }
+
+  .contact-actions .action-btn,
+  .contact-actions .action-chip {
+    height: 32px;
+  }
+
+  /* =========================================================
+     Lista de mensagens + bolhas
+     ========================================================= */
+  .messages-list {
+    flex: 1 1 auto;
+    padding: 0 16px 8px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .messages-stream {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .load-more-msgs {
+    padding: 8px 0;
+  }
+
+  /* As classes .message-item / .message-cliente / .message-sistema vêm do
+     SCSS global (styles.scss); aqui complementamos o comportamento. */
+  :deep(.message-item) {
+    max-width: min(560px, 78%);
+    word-break: break-word;
+  }
+
+  .msg-media-image,
+  .msg-media-video {
+    width: 100%;
+    max-width: 320px;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+  }
+
+  .message-data {
+    background-color: rgba(var(--v-theme-surface), 0.95);
+    color: rgba(var(--v-theme-on-surface), 0.7);
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    border-radius: 999px;
+    margin: 12px 0;
+  }
+
+  /* =========================================================
+     Reply preview + arquivos pendentes
+     ========================================================= */
   .div-resposta {
     min-height: 50px;
     max-height: 50px;
     width: 100%;
-    border-radius: 5px;
+    border-radius: 6px;
     display: flex;
     justify-content: flex-start;
     align-items: center;
     overflow: hidden;
-    padding: 0px 10px;
+    padding: 0 10px;
     border-left: solid 4px;
   }
 
@@ -2200,136 +2492,195 @@
     flex-direction: row;
     overflow-x: auto;
     left: 10px;
+    right: 10px;
     gap: 10px;
-    width: 95%;
-    background-color: #f0f2f5;
+    background-color: rgb(var(--v-theme-surface-variant, var(--v-theme-surface)));
     min-height: 80px;
     max-height: 80px;
-    border-radius: 10px 10px 0px 0px;
+    border-radius: 12px 12px 0 0;
     align-items: center;
-    padding: 0px 15px;
-    box-shadow: 0px -2px 4px #00000021;
+    padding: 0 16px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.12);
   }
 
   .msg-reply-content {
-    background-color: white;
+    background-color: rgb(var(--v-theme-surface));
     width: 100%;
     height: 100%;
-    border-left: 5px #0085005c solid;
-    padding-left: 7px;
+    border-left: 4px solid rgb(var(--v-theme-primary));
+    padding-left: 10px;
     display: flex;
     min-height: 50px;
-    border-radius: 5px;
+    border-radius: 6px;
     align-items: center;
+    gap: 8px;
   }
 
-  .menu-chat,
   .menu-msg {
     z-index: 9999;
     width: 230px;
   }
+
   .file {
-    background-color: #ffffffd4;
-    padding: 10px 15px;
+    background-color: rgba(var(--v-theme-surface), 0.98);
+    padding: 8px 14px;
     display: flex;
     gap: 10px;
-    border-radius: 5px;
+    border-radius: 8px;
     align-items: center;
     flex-direction: row;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    font-size: 0.85rem;
   }
 
   .send-files {
     position: absolute;
-    top: -100%;
+    top: -64px;
     display: flex;
     flex-direction: row;
     overflow-x: auto;
     left: 10px;
+    right: 10px;
     gap: 10px;
   }
 
-  .message-data {
-    background-color: #fffffff2;
-    padding: 2px 8px;
-    font-size: 12px;
-    box-shadow: 0 1px 0.5px #0b141a21;
-    border-radius: 4px;
-    text-shadow: 0 1px 0 #ffffff66;
-    margin: 10px 0px;
-  }
-
-  .v-theme--dark .message-data {
-    background-color: #1f2c32;
-  }
-
+  /* =========================================================
+     Composer
+     ========================================================= */
   .message-send {
     display: flex;
     flex-direction: row;
     align-items: center;
     gap: 10px;
     position: sticky;
-    padding: 10px;
+    padding: 10px 12px;
     justify-content: center;
-    background-color: #f0f2f5;
-    bottom: 0px;
+    background-color: rgb(var(--v-theme-surface));
+    border-top: 1px solid rgba(var(--v-border-color), 0.10);
+    bottom: 0;
+    z-index: 4;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
-  .v-theme--dark .message-send {
-    background-color: rgba(var(--v-theme-surface));
-  }
-
-  .chats {
-    max-height: calc(95vh - 120px);
-    overflow-y: auto;
-  }
-
-  .chat-item {
-    display: flex;
-    align-items: center;
-    padding: 15px 12px;
-    cursor: pointer;
-    border-bottom: 1px solid rgba(var(--v-theme-secondary), .1);
-    gap: 13px;
-    position: relative;
-    flex-direction: row;
-    flex-wrap: nowrap;
-  }
-
-  .chat-item.chat-naoLido {
-    font-weight: bold;
-  }
-
-  .chat-item:hover {
-    background-color: rgba(var(--v-theme-primary), .2);
-  }
-
-  .chat-name {
-    font-weight: medium;
-    margin: 0;
-  }
-  
-  .chat-item.chat-naoLido .chat-name {
-    font-weight: bold;
-  }
-
-  .chat-last-message {
-    color: #a7a6a6;
-    margin: 0;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    max-width: 260px;
-    overflow: hidden;
-  }
-
-  .circle-naoLida {
-    width: 20px;
-    height: 20px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 12px;
+  .carregando {
     position: absolute;
-    right: 20px;
-    top: 40px;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(var(--v-theme-surface), 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 10;
+  }
+
+  /* =========================================================
+     Transições — mensagens entrando, painéis
+     ========================================================= */
+  .msg-enter-active {
+    transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 200ms ease-out;
+  }
+  .msg-enter-from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  .msg-enter-to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  .msg-leave-active {
+    transition: opacity 140ms ease-in;
+  }
+  .msg-leave-to {
+    opacity: 0;
+  }
+  .msg-move {
+    transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  /* Respeitar usuários com preferência reduce-motion */
+  @media (prefers-reduced-motion: reduce) {
+    .msg-enter-active,
+    .msg-leave-active,
+    .msg-move,
+    .chat-shell.is-mobile .chat-list-pane,
+    .chat-shell.is-mobile .chat-conv-pane {
+      transition: none !important;
+    }
+  }
+
+  /* =========================================================
+     Breakpoints
+     ========================================================= */
+  @media (max-width: 960px) {
+    .chat-shell {
+      grid-template-columns: 1fr;
+      border-radius: 0;
+    }
+
+    .contact-header {
+      min-height: 56px;
+      padding: 8px 8px 8px 4px;
+    }
+
+    .contact-name {
+      max-width: 60vw;
+      font-size: 0.95rem;
+    }
+
+    .online-msg {
+      max-width: 60vw;
+      font-size: 0.72rem;
+    }
+
+    .messages-list {
+      padding: 0 10px 6px;
+    }
+
+    :deep(.message-item) {
+      max-width: 86%;
+    }
+
+    .msg-media-image,
+    .msg-media-video {
+      max-width: 75vw;
+    }
+
+    .message-send {
+      padding: 8px 8px;
+      gap: 6px;
+    }
+
+    .msg-reply {
+      left: 4px;
+      right: 4px;
+    }
+
+    .send-files {
+      left: 4px;
+      right: 4px;
+    }
+
+    .chat-item {
+      padding: 10px 12px;
+    }
+
+    .circle-naoLida {
+      right: 12px;
+      top: 10px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .contact-name {
+      max-width: 48vw;
+    }
+    .online-msg {
+      max-width: 48vw;
+    }
+    .msg-media-image,
+    .msg-media-video {
+      max-width: 70vw;
+    }
   }
 </style>
