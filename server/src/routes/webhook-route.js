@@ -110,6 +110,43 @@ function extrairMediaId(msg) {
   return null;
 }
 
+/**
+ * Extrai o objeto `referral` de uma mensagem inbound vinda de um anúncio
+ * Click-to-WhatsApp ("iniciar conversa no WhatsApp"). Só está presente na(s)
+ * primeira(s) mensagem(ns) originadas do clique no anúncio.
+ *
+ * Campos possíveis (guardados BRUTOS para não perder nada que a Meta envie):
+ *  - source_url   : link do anúncio/post
+ *  - source_id    : ID do anúncio ou post no Meta
+ *  - source_type  : "ad" | "post"
+ *  - headline     : título do criativo
+ *  - body         : texto do criativo
+ *  - media_type   : "image" | "video"
+ *  - image_url / video_url / thumbnail_url
+ *  - ctwa_clid    : Click ID p/ a Conversions API (atribuição de volta à Meta)
+ * @param {Object} msg
+ * @returns {Object|null}
+ */
+function extrairReferral(msg) {
+  if (msg && msg.referral && typeof msg.referral === 'object') {
+    return msg.referral;
+  }
+  return null;
+}
+
+/**
+ * Extrai `context.referred_product` — presente quando o cliente inicia a conversa
+ * a partir de uma mensagem de produto do catálogo (Multi/Single Product Message).
+ * @param {Object} msg
+ * @returns {Object|null} { catalog_id, product_retailer_id } ou null
+ */
+function extrairReferredProduct(msg) {
+  if (msg && msg.context && msg.context.referred_product) {
+    return msg.context.referred_product;
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────
 // GET /whatsapp — handshake de verificação do Meta
 // ─────────────────────────────────────────────
@@ -240,9 +277,15 @@ router.post('/whatsapp', async (req, res) => {
         for (const msg of messages) {
           try {
             const contactName = (contacts[0] && contacts[0].profile && contacts[0].profile.name) || null;
+            const referral = extrairReferral(msg);
+            const referredProduct = extrairReferredProduct(msg);
             log('webhook.msg.inbound', {
               empresa_id: empresaId, wamid: msg.id, type: msg.type, from: msg.from,
               hasMedia: !!extrairMediaId(msg), hasContext: !!msg.context,
+              // PII-safe: apenas a origem/ids do anúncio, sem corpo da mensagem
+              hasReferral: !!referral,
+              referralSource: referral ? { source_type: referral.source_type, source_id: referral.source_id, ctwa_clid: referral.ctwa_clid } : null,
+              hasReferredProduct: !!referredProduct,
             });
 
             // Reação: NÃO é uma mensagem nova — aplica o emoji à mensagem-alvo
@@ -278,6 +321,8 @@ router.post('/whatsapp', async (req, res) => {
               // unread incrementado só depois, apenas se a mensagem for nova
               // (evita inflar o contador em reentregas do Meta)
               unread_count: 0,
+              // Promove a origem do anúncio ao nível da conversa (se houver)
+              referral,
             });
 
             // 4b. Inserir mensagem (idempotente via wamid UNIQUE)
@@ -292,6 +337,9 @@ router.post('/whatsapp', async (req, res) => {
               sender_name: contactName,
               timestamp_ms: parseInt(msg.timestamp, 10) * 1000,
               status: 'delivered',
+              // Origem da mensagem (anúncio CTWA / produto do catálogo)
+              referral,
+              referred_product: referredProduct,
             });
 
             // wamid duplicado — não emitir socket duplicado nem incrementar unread
@@ -322,6 +370,9 @@ router.post('/whatsapp', async (req, res) => {
                   sender_name: contactName,
                   timestamp_ms: parseInt(msg.timestamp, 10) * 1000,
                   status: 'delivered',
+                  // Origem do anúncio/catálogo já vai para o frontend em tempo real
+                  referral: referral || null,
+                  referred_product: referredProduct || null,
                 },
               });
             } catch (socketErr) {

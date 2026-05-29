@@ -76,7 +76,12 @@ function mapConversaToChat(c) {
   const cliente = c.cliente || null;
   return {
     id: c.id,
-    nome: c.contact_name || cliente?.cli_nome || c.contact_wa_id || "Contato",
+    nome:
+      c.contact_name_custom ||
+      c.contact_name ||
+      cliente?.cli_nome ||
+      c.contact_wa_id ||
+      "Contato",
     naoLida: c.unread_count || 0,
     pinned: false,
     ultimaAcao: ultima,
@@ -88,11 +93,17 @@ function mapConversaToChat(c) {
     // Sem coluna de foto em CLIENTES, o avatar fica nulo e o VAvatar exibe o ícone padrão.
     contato: {
       numero: c.contact_wa_id,
-      nome: c.contact_name,
+      // Exibição prioriza o nome editado manualmente; guardamos as duas origens
+      // para o dialog de dados poder mostrar/editar separadamente.
+      nome: c.contact_name_custom || c.contact_name,
+      nomeCustom: c.contact_name_custom || null,
+      nomePerfil: c.contact_name || null,
       avatar: cliente?.avatar || null,
     },
     phoneFlowsBlocked: c.phoneFlowsBlocked || false,
     waitingForAgent: c.waitingForAgent || null,
+    // Origem da conversa (anúncio Click-to-WhatsApp), quando houver
+    referral: c.referral || null,
     _conv: c,
   };
 }
@@ -116,6 +127,9 @@ function mapMsgFront(m) {
   } else {
     out.data = normalizarData(m.data || m.created_at);
   }
+  // Origem da mensagem: anúncio Click-to-WhatsApp / produto do catálogo
+  out.referral = m.referral || null;
+  out.referred_product = m.referred_product || null;
   return out;
 }
 
@@ -372,8 +386,32 @@ const voltarParaLista = () => {
 
 // Abre dados do cliente — em mobile precisa voltar ao painel da esquerda
 // (a card de DadosCliente é renderizada no chat-list-pane).
+// Reflete o nome de contato editado no dialog em todo o estado local do chat
+// (cabeçalho + item da lista), sem refazer requisições.
+const onContatoRenomeado = (novoNome) => {
+  const nome = novoNome || null;
+  const exibicao =
+    nome || selectedChat.value?.contato?.nomePerfil || selectedChat.value?.nome;
+  if (selectedChat.value) {
+    selectedChat.value.nome = exibicao;
+    if (selectedChat.value.contato) {
+      selectedChat.value.contato.nome = exibicao;
+      selectedChat.value.contato.nomeCustom = nome;
+    }
+    const idx = allChats.value.findIndex((c) => c.id == selectedChat.value.id);
+    if (idx >= 0) {
+      allChats.value[idx].nome = exibicao;
+      if (allChats.value[idx].contato) {
+        allChats.value[idx].contato.nome = exibicao;
+        allChats.value[idx].contato.nomeCustom = nome;
+      }
+    }
+  }
+};
+
 const abrirDadosCliente = () => {
-  if (!selectedChat.value || !selectedChat.value?.cliente) return;
+  // Abre para qualquer contato selecionado, mesmo sem cadastro de cliente.
+  if (!selectedChat.value) return;
   viewDadosCliente.value = !viewDadosCliente.value;
   if (mobile.value && viewDadosCliente.value) {
     showChatPanel.value = false;
@@ -639,6 +677,26 @@ const handleData = (dataChat, short = true) => {
   _handleDataCache.set(key, out);
   return out;
 };
+
+// Lista de mensagens com separadores de data injetados (pills "Hoje" / "Ontem"
+// / "25/05/2026"), no estilo do WhatsApp. Um separador entra sempre que o dia
+// da mensagem difere do da mensagem anterior. Derivado de `messagens` apenas
+// para exibição — todas as operações por índice/ID continuam no array original.
+const mensagensComData = computed(() => {
+  const msgs = selectedChat.value?.messagens || [];
+  const out = [];
+  let ultimoDia = null;
+  for (const m of msgs) {
+    const mm = getMoment(m.data);
+    const dia = mm.isValid() ? mm.format("YYYY-MM-DD") : null;
+    if (dia && dia !== ultimoDia) {
+      out.push({ tipo: "data", data: handleData(m.data, false), _sep: dia });
+      ultimoDia = dia;
+    }
+    out.push(m);
+  }
+  return out;
+});
 
 /* Status possíveis:
  * 0: A mensagem foi enviada, mas ainda não chegou ao servidor (pendente).
@@ -1457,13 +1515,13 @@ onBeforeUnmount(() => {
     <div class="chat-pane chat-list-pane">
       <VCard
         rounded="0"
-        v-if="viewDadosCliente && selectedChat?.cliente"
+        v-if="viewDadosCliente && selectedChat"
         class="h-100 dados-cliente-card"
       >
         <DadosCliente
           :dados="selectedChat"
-          v-if="selectedChat?.cliente"
           @close="viewDadosCliente = false"
+          @rename="onContatoRenomeado"
         />
       </VCard>
       <VCard rounded="0" v-else class="h-100 d-flex flex-column chat-list-card">
@@ -1644,7 +1702,7 @@ onBeforeUnmount(() => {
 
           <div
             class="contact-box"
-            :class="{ 'cursor-pointer': selectedChat?.cliente }"
+            :class="{ 'cursor-pointer': selectedChat }"
             @click="abrirDadosCliente"
           >
             <VAvatar
@@ -1837,13 +1895,13 @@ onBeforeUnmount(() => {
                     </VListItemTitle>
                   </VListItem>
                   <VListItem
-                    v-if="selectedChat?.cliente"
+                    v-if="selectedChat"
                     @click="abrirDadosCliente"
                   >
                     <template #prepend>
                       <VIcon icon="tabler-id-badge-2" size="18" />
                     </template>
-                    <VListItemTitle>Ver dados do cliente</VListItemTitle>
+                    <VListItemTitle>Ver dados do contato</VListItemTitle>
                   </VListItem>
                 </VList>
               </VMenu>
@@ -1866,8 +1924,12 @@ onBeforeUnmount(() => {
 
           <TransitionGroup name="msg" tag="div" class="messages-stream">
             <template
-              v-for="(msg, index) in selectedChat?.messagens"
-              :key="msg.id ?? msg.wamid ?? `idx-${index}`"
+              v-for="(msg, index) in mensagensComData"
+              :key="
+                msg.tipo === 'data'
+                  ? `sep-${msg._sep}`
+                  : msg.id ?? msg.wamid ?? `idx-${index}`
+              "
             >
               <div
                 @contextmenu.prevent="handleMenuMsg($event, msg)"
@@ -1892,6 +1954,78 @@ onBeforeUnmount(() => {
                   'message-sistema': msg.fromMe,
                 }"
               >
+                <!-- Origem da mensagem: anúncio Click-to-WhatsApp / publicação -->
+                <component
+                  :is="msg.referral.source_url ? 'a' : 'div'"
+                  v-if="msg.referral"
+                  class="referral-card"
+                  :class="{ 'cursor-pointer': msg.referral.source_url }"
+                  :href="msg.referral.source_url || undefined"
+                  :target="msg.referral.source_url ? '_blank' : undefined"
+                  rel="noopener noreferrer"
+                >
+                  <VImg
+                    v-if="msg.referral.image_url || msg.referral.thumbnail_url"
+                    :src="msg.referral.image_url || msg.referral.thumbnail_url"
+                    width="46"
+                    height="46"
+                    cover
+                    class="rounded referral-thumb"
+                  />
+                  <VAvatar
+                    v-else
+                    color="primary"
+                    variant="tonal"
+                    size="46"
+                    class="rounded referral-thumb"
+                  >
+                    <VIcon
+                      :icon="
+                        msg.referral.media_type === 'video'
+                          ? 'tabler-video'
+                          : 'tabler-speakerphone'
+                      "
+                    />
+                  </VAvatar>
+                  <div class="referral-info">
+                    <span class="referral-tag">
+                      <VIcon icon="tabler-speakerphone" size="12" />
+                      {{
+                        msg.referral.source_type === "post"
+                          ? "Veio de uma publicação"
+                          : "Veio de um anúncio"
+                      }}
+                    </span>
+                    <p v-if="msg.referral.headline" class="referral-headline">
+                      {{ msg.referral.headline }}
+                    </p>
+                    <p v-if="msg.referral.body" class="referral-body">
+                      {{ msg.referral.body }}
+                    </p>
+                  </div>
+                </component>
+
+                <!-- Origem: produto do catálogo -->
+                <div v-if="msg.referred_product" class="referral-card">
+                  <VAvatar
+                    color="success"
+                    variant="tonal"
+                    size="46"
+                    class="rounded referral-thumb"
+                  >
+                    <VIcon icon="tabler-package" />
+                  </VAvatar>
+                  <div class="referral-info">
+                    <span class="referral-tag">
+                      <VIcon icon="tabler-package" size="12" />
+                      Sobre um produto
+                    </span>
+                    <p class="referral-body">
+                      {{ msg.referred_product.product_retailer_id }}
+                    </p>
+                  </div>
+                </div>
+
                 <div
                   v-if="msg.hasResposta"
                   class="div-resposta cursor-pointer"
@@ -2752,6 +2886,66 @@ onBeforeUnmount(() => {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   border-radius: 999px;
   margin: 12px 0;
+}
+
+/* =========================================================
+     Origem da conversa — anúncio Click-to-WhatsApp / produto
+     ========================================================= */
+.referral-card {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 6px;
+  border-radius: 8px;
+  background-color: rgba(var(--v-theme-on-surface), 0.05);
+  border-left: solid 3px rgba(var(--v-theme-primary), 0.7);
+  text-decoration: none;
+  color: inherit;
+  margin-bottom: 4px;
+}
+
+.referral-card .referral-thumb {
+  flex-shrink: 0;
+}
+
+.referral-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.referral-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: rgba(var(--v-theme-primary), 1);
+}
+
+.referral-headline {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.referral-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 15px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* =========================================================

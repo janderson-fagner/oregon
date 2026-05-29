@@ -18,7 +18,61 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["close"]);
+const emit = defineEmits(["close", "rename"]);
+
+const { setAlert } = useAlert();
+
+// ---- Edição do nome do contato (WhatsApp) ----
+const editandoNome = ref(false);
+const nomeEdit = ref("");
+const salvandoNome = ref(false);
+
+const iniciarEdicaoNome = () => {
+  nomeEdit.value =
+    props.dados?.contato?.nomeCustom || props.dados?.contato?.nome || "";
+  editandoNome.value = true;
+};
+
+const salvarNome = async () => {
+  const convId = props.dados?.id;
+  if (!convId) {
+    editandoNome.value = false;
+    return;
+  }
+  salvandoNome.value = true;
+  try {
+    const res = await $api(`/zap/contact-name/${convId}`, {
+      method: "PUT",
+      body: { name: nomeEdit.value },
+    });
+    // Propaga ao chat pai (cabeçalho + lista) o nome efetivo salvo
+    emit("rename", res?.contact_name_custom ?? nomeEdit.value ?? null);
+    editandoNome.value = false;
+  } catch (error) {
+    console.error("Erro ao salvar nome do contato:", error, error.response);
+    setAlert("Não foi possível salvar o nome do contato.", "error");
+  } finally {
+    salvandoNome.value = false;
+  }
+};
+
+// Formata um número WhatsApp (E.164 BR) como +55 (DDD) 00000-0000.
+// Tolera 8 ou 9 dígitos no número local; se não reconhecer, devolve o original.
+const formatPhone = (raw) => {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (!d) return raw || "";
+  let cc = "55";
+  if (d.startsWith("55") && d.length >= 12) {
+    d = d.slice(2);
+  }
+  const ddd = d.slice(0, 2);
+  const num = d.slice(2);
+  let numFmt = num;
+  if (num.length === 9) numFmt = `${num.slice(0, 5)}-${num.slice(5)}`;
+  else if (num.length === 8) numFmt = `${num.slice(0, 4)}-${num.slice(4)}`;
+  if (!ddd) return `+${cc} ${num}`;
+  return `+${cc} (${ddd}) ${numFmt}`;
+};
 
 const agendamentoSelected = ref(null);
 const agendamentos = ref([]);
@@ -123,7 +177,9 @@ const viewClienteAvancado = ref(false);
     <div
       class="header-messages d-flex flex-row justify-space-between align-center"
     >
-      <h2 class="text-h5 mb-4">Dados do Cliente</h2>
+      <h2 class="text-h5 mb-4">
+        {{ dados?.cliente?.cli_Id ? "Dados do Cliente" : "Dados do Contato" }}
+      </h2>
 
       <VIcon icon="tabler-x" class="cursor-pointer" @click="closeDados" />
     </div>
@@ -138,16 +194,108 @@ const viewClienteAvancado = ref(false);
         <VImg :src="dados?.contato?.avatar" v-if="dados?.contato?.avatar" />
         <VIcon icon="tabler-user-filled" v-else />
       </VAvatar>
-      <div class="contact-info">
-        <p class="mb-0 contact-name">
-          {{ dados?.contato?.nome || dados?.nome || "Cliente" }}
-        </p>
+      <div class="contact-info" style="min-width: 0; flex: 1">
+        <!-- Nome do contato: visualização (com lápis) ou edição inline -->
+        <div v-if="!editandoNome" class="d-flex align-center gap-1">
+          <p class="mb-0 contact-name text-truncate">
+            {{ dados?.contato?.nome || dados?.nome || "Contato" }}
+          </p>
+          <VIcon
+            icon="tabler-pencil"
+            size="16"
+            class="cursor-pointer text-disabled flex-shrink-0"
+            @click="iniciarEdicaoNome"
+          />
+        </div>
+        <div v-else class="d-flex align-center gap-1">
+          <VTextField
+            v-model="nomeEdit"
+            density="compact"
+            hide-details
+            autofocus
+            placeholder="Nome do contato"
+            style="min-width: 140px"
+            @keyup.enter="salvarNome"
+          />
+          <IconBtn :loading="salvandoNome" @click="salvarNome">
+            <VIcon icon="tabler-check" color="success" />
+          </IconBtn>
+          <IconBtn :disabled="salvandoNome" @click="editandoNome = false">
+            <VIcon icon="tabler-x" />
+          </IconBtn>
+        </div>
         <p class="mb-0 online-msg">
-          {{ dados?.contato?.numero }}
+          {{ formatPhone(dados?.contato?.numero) }}
         </p>
       </div>
     </div>
 
+    <!-- Origem da conversa (anúncio Click-to-WhatsApp / publicação) -->
+    <template v-if="dados?.referral">
+      <VDivider class="my-3" />
+      <p class="mb-2">Origem da conversa</p>
+      <component
+        :is="dados.referral.source_url ? 'a' : 'div'"
+        class="origem-card"
+        :class="{ 'cursor-pointer': dados.referral.source_url }"
+        :href="dados.referral.source_url || undefined"
+        :target="dados.referral.source_url ? '_blank' : undefined"
+        rel="noopener noreferrer"
+      >
+        <VImg
+          v-if="dados.referral.image_url || dados.referral.thumbnail_url"
+          :src="dados.referral.image_url || dados.referral.thumbnail_url"
+          width="52"
+          height="52"
+          cover
+          class="rounded flex-shrink-0"
+        />
+        <VAvatar
+          v-else
+          color="primary"
+          variant="tonal"
+          size="52"
+          class="rounded flex-shrink-0"
+        >
+          <VIcon icon="tabler-speakerphone" />
+        </VAvatar>
+        <div style="min-width: 0">
+          <span class="origem-tag">
+            <VIcon icon="tabler-speakerphone" size="12" />
+            {{
+              dados.referral.source_type === "post"
+                ? "Publicação"
+                : "Anúncio"
+            }}
+          </span>
+          <p v-if="dados.referral.headline" class="origem-headline">
+            {{ dados.referral.headline }}
+          </p>
+          <p v-if="dados.referral.body" class="origem-body">
+            {{ dados.referral.body }}
+          </p>
+        </div>
+      </component>
+      <div class="text-caption text-disabled mt-1">
+        <span v-if="dados.referral.source_id">
+          ID: {{ dados.referral.source_id }}
+        </span>
+        <span v-if="dados.referral.ctwa_clid" class="d-block">
+          Click ID: {{ dados.referral.ctwa_clid }}
+        </span>
+      </div>
+    </template>
+
+    <!-- Contato sem cadastro de cliente no sistema -->
+    <template v-if="!dados?.cliente?.cli_Id">
+      <VDivider class="my-3" />
+      <VAlert type="info" variant="tonal" density="compact">
+        Este contato ainda não possui cadastro de cliente no sistema.
+      </VAlert>
+    </template>
+
+    <!-- Cliente cadastrado: dados completos + agendamentos -->
+    <template v-else>
     <VDivider class="my-3" />
 
     <p class="mb-1 d-flex flex-row gap-2 align-center">
@@ -294,6 +442,7 @@ const viewClienteAvancado = ref(false);
         </div>
       </div>
     </v-fade-transition>
+    </template>
   </div>
 
   <VDialog v-model="viewClienteAvancado">
@@ -306,3 +455,47 @@ const viewClienteAvancado = ref(false);
     </VCard>
   </VDialog>
 </template>
+
+<style scoped>
+.origem-card {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  background-color: rgba(var(--v-theme-on-surface), 0.05);
+  border-left: solid 3px rgba(var(--v-theme-primary), 0.7);
+  text-decoration: none;
+  color: inherit;
+}
+
+.origem-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: rgba(var(--v-theme-primary), 1);
+}
+
+.origem-headline {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.origem-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 15px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+</style>

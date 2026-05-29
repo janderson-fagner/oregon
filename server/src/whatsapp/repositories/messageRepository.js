@@ -11,7 +11,7 @@ const dbQuery = require('../../utils/dbHelper');
  * Insere nova mensagem.
  * Idempotente: se wamid já existir (UNIQUE KEY), ignora a inserção e retorna null.
  * Se wamid for null (mensagem outbound ainda sem confirmação), sempre insere.
- * @param {Object} dados - { empresa_id, conversation_id, wamid?, direction, type, body?, media_path?, media_mime?, media_filename?, status, reply_to_wamid?, sender_name?, timestamp_ms? }
+ * @param {Object} dados - { empresa_id, conversation_id, wamid?, direction, type, body?, media_path?, media_mime?, media_filename?, status, reply_to_wamid?, sender_name?, timestamp_ms?, referral?, referred_product? }
  * @returns {Promise<number|null>} id inserido ou null se wamid duplicado
  */
 async function insertMessage(dados) {
@@ -29,14 +29,22 @@ async function insertMessage(dados) {
     reply_to_wamid = null,
     sender_name = null,
     timestamp_ms = null,
+    // Origem da mensagem (Click-to-WhatsApp Ads / produto do catálogo).
+    // Aceita objeto (serializado aqui) ou null. Guardado bruto em coluna JSON.
+    referral = null,
+    referred_product = null,
   } = dados;
+
+  const referralJson = referral ? JSON.stringify(referral) : null;
+  const referredProductJson = referred_product ? JSON.stringify(referred_product) : null;
 
   const resultado = await dbQuery(
     `INSERT IGNORE INTO Messages
        (empresa_id, conversation_id, wamid, direction, type,
         body, media_path, media_mime, media_filename,
-        status, reply_to_wamid, sender_name, timestamp_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        status, reply_to_wamid, sender_name, timestamp_ms,
+        referral, referred_product)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresa_id,
       conversation_id,
@@ -51,6 +59,8 @@ async function insertMessage(dados) {
       reply_to_wamid,
       sender_name,
       timestamp_ms,
+      referralJson,
+      referredProductJson,
     ]
   );
 

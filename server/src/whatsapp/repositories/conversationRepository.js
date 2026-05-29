@@ -12,7 +12,7 @@ const dbQuery = require('../../utils/dbHelper');
  * Atualiza last_message_at, last_message_preview, unread_count e,
  * quando for mensagem inbound, last_inbound_at.
  * Usa LAST_INSERT_ID(id) no ON DUPLICATE KEY para retornar o id correto tanto em insert quanto update.
- * @param {Object} dados - { empresa_id, phone_number_id, contact_wa_id, contact_name, last_inbound_at?, last_message_at, last_message_preview, unread_count? }
+ * @param {Object} dados - { empresa_id, phone_number_id, contact_wa_id, contact_name, last_inbound_at?, last_message_at, last_message_preview, unread_count?, referral? }
  * @returns {Promise<number>} id da conversa
  */
 async function upsertConversation(dados) {
@@ -25,15 +25,22 @@ async function upsertConversation(dados) {
     last_message_at,
     last_message_preview = null,
     unread_count = 0,
+    // Origem (Click-to-WhatsApp Ads): quando a mensagem inbound vem de um anúncio,
+    // promovemos o referral ao nível da conversa para exibir "veio do anúncio X".
+    // Atualiza para o referral mais recente; mantém o anterior quando vier null.
+    referral = null,
   } = dados;
+
+  const referralJson = referral ? JSON.stringify(referral) : null;
 
   // unread_count: incrementa no inbound, mantém no outbound
   // A expressão usa VALUES() para referenciar o valor proposto do INSERT
   const resultado = await dbQuery(
     `INSERT INTO Conversations
        (empresa_id, phone_number_id, contact_wa_id, contact_name,
-        last_message_at, last_message_preview, last_inbound_at, unread_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        last_message_at, last_message_preview, last_inbound_at, unread_count,
+        referral, referral_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        id                   = LAST_INSERT_ID(id),
        phone_number_id      = VALUES(phone_number_id),
@@ -41,7 +48,10 @@ async function upsertConversation(dados) {
        last_message_preview = VALUES(last_message_preview),
        contact_name         = COALESCE(VALUES(contact_name), contact_name),
        last_inbound_at      = COALESCE(?, last_inbound_at),
-       unread_count         = unread_count + ?`,
+       unread_count         = unread_count + ?,
+       referral             = COALESCE(VALUES(referral), referral),
+       referral_at          = CASE WHEN VALUES(referral) IS NOT NULL
+                                   THEN VALUES(referral_at) ELSE referral_at END`,
     [
       empresa_id,
       phone_number_id,
@@ -51,6 +61,8 @@ async function upsertConversation(dados) {
       last_message_preview,
       last_inbound_at,
       unread_count,
+      referralJson,
+      referralJson ? (last_inbound_at || new Date()) : null,
       // Parâmetros extras para o ON DUPLICATE KEY UPDATE
       last_inbound_at,
       unread_count,
@@ -145,10 +157,29 @@ async function markConversationRead(conversationId, empresaId) {
   );
 }
 
+/**
+ * Define (ou limpa) o nome de contato editado manualmente. Tem precedência sobre
+ * o `contact_name` do perfil Meta e nunca é sobrescrito pelo webhook.
+ * Isolado por empresa_id. Passar nome vazio/null limpa o personalizado.
+ * @param {number} conversationId
+ * @param {number} empresaId
+ * @param {string|null} nome
+ * @returns {Promise<number>} linhas afetadas
+ */
+async function updateContactNameCustom(conversationId, empresaId, nome) {
+  const valor = nome && String(nome).trim() ? String(nome).trim().slice(0, 255) : null;
+  const resultado = await dbQuery(
+    'UPDATE Conversations SET contact_name_custom = ? WHERE id = ? AND empresa_id = ?',
+    [valor, conversationId, empresaId]
+  );
+  return resultado.affectedRows || 0;
+}
+
 module.exports = {
   upsertConversation,
   listConversations,
   getById,
   incrementUnread,
   markConversationRead,
+  updateContactNameCustom,
 };

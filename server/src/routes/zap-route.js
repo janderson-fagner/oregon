@@ -461,6 +461,23 @@ function mapearAckStatus(status) {
 }
 
 /**
+ * Parse seguro de coluna JSON — o driver `mysql` pode devolver objeto já parseado
+ * ou string crua dependendo da versão. Retorna o fallback em qualquer erro.
+ * @param {*} value
+ * @param {*} fallback
+ * @returns {*}
+ */
+function safeJson(value, fallback = null) {
+    if (value === null || value === undefined || value === '') return fallback;
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        return fallback;
+    }
+}
+
+/**
  * Mapeia objeto de mensagem do banco para o shape que o frontend espera.
  * Mantém retrocompatibilidade com os campos do wwebjs (tipo, texto, hasMedia, media, ack, data).
  * media_url: usa msg.media_url (já preenchida pelo webhook) ou deriva de media_path.
@@ -489,6 +506,9 @@ function mapearMsgCloud(msg) {
         status: msg.status,
         reaction: msg.reaction || null,
         reply_to_wamid: msg.reply_to_wamid || null,
+        // Origem da mensagem: anúncio Click-to-WhatsApp / produto do catálogo
+        referral: safeJson(msg.referral, null),
+        referred_product: safeJson(msg.referred_product, null),
         data: msg.timestamp_ms ? new Date(Number(msg.timestamp_ms)).toISOString() : msg.created_at,
         timestamp_ms: msg.timestamp_ms,
         created_at: msg.created_at,
@@ -708,6 +728,37 @@ router.get('/window-status/:conversationId', async (req, res) => {
     } catch (error) {
         console.error('Erro ao verificar status da janela:', error);
         return res.status(500).json({ error: 'Erro interno ao verificar janela de atendimento.' });
+    }
+});
+
+/**
+ * PUT /zap/contact-name/:conversationId
+ * Define o nome de contato editado manualmente (precedência sobre o perfil Meta).
+ * Body: { name } — vazio/null limpa o personalizado (volta ao nome do perfil).
+ * Retorna: { success, contact_name_custom }
+ */
+router.put('/contact-name/:conversationId', async (req, res) => {
+    try {
+        const empresaId = req.user.empresa_id;
+        const conversationId = parseInt(req.params.conversationId);
+
+        if (!conversationId || conversationId <= 0) {
+            return res.status(400).json({ error: 'ID da conversa inválido.' });
+        }
+
+        const conversa = await conversationRepository.getById(conversationId, empresaId);
+        if (!conversa) {
+            return res.status(404).json({ error: 'Conversa não encontrada.' });
+        }
+
+        const nome = (req.body && req.body.name) || null;
+        await conversationRepository.updateContactNameCustom(conversationId, empresaId, nome);
+
+        const valor = nome && String(nome).trim() ? String(nome).trim().slice(0, 255) : null;
+        return res.json({ success: true, contact_name_custom: valor });
+    } catch (error) {
+        console.error('Erro ao atualizar nome do contato:', error);
+        return res.status(500).json({ error: 'Erro interno ao atualizar nome do contato.' });
     }
 });
 

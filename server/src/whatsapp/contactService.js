@@ -54,6 +54,8 @@ async function enrichConversation(conv, empresaId) {
   conv.cliente = null;
   conv.waitingForAgent = null;
   conv.phoneFlowsBlocked = false;
+  // Origem da conversa (anúncio Click-to-WhatsApp) — coluna JSON → objeto
+  conv.referral = safeJson(conv.referral, null);
 
   const key = last8(conv.contact_wa_id);
   if (!key) return conv;
@@ -164,6 +166,8 @@ async function enrichConversationsBulk(convs, empresaId) {
     c.cliente = null;
     c.waitingForAgent = null;
     c.phoneFlowsBlocked = false;
+    // Origem da conversa (anúncio Click-to-WhatsApp) — coluna JSON → objeto
+    c.referral = safeJson(c.referral, null);
   }
 
   if (keys.length === 0) return;
