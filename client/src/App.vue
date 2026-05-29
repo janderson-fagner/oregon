@@ -1,6 +1,7 @@
 <script setup>
 import { useTheme } from 'vuetify'
 import ScrollToTop from '@core/components/ScrollToTop.vue'
+import AppUpdateNotification from '@/components/AppUpdateNotification.vue'
 import initCore from '@core/initCore'
 import {
   initConfigStore,
@@ -37,6 +38,9 @@ const configStore = useConfigStore()
 
       <RouterView />
       <ScrollToTop />
+
+      <!-- Aviso de nova versão publicada (build) -->
+      <AppUpdateNotification />
     </VApp>
   </VLocaleProvider>
 </template>

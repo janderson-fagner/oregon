@@ -23,6 +23,11 @@ export default defineConfig(({ command, mode }) => {
 
   dotenv.config({ path: path })
 
+  // Identificador único deste build. É embutido no bundle (__APP_BUILD_ID__) e
+  // também gravado em /version.json. O app em execução compara os dois para
+  // detectar quando um novo build foi publicado e avisar o usuário a atualizar.
+  const buildId = Date.now().toString()
+
   return {
     plugins: [
       // Docs: https://github.com/posva/unplugin-vue-router
@@ -99,6 +104,21 @@ export default defineConfig(({ command, mode }) => {
         ],
       }),
       removeConsole(),
+
+      // Grava /version.json no dist a cada build (somente em `vite build`).
+      // O conteúdo carrega o mesmo buildId embutido no bundle, permitindo ao
+      // app detectar publicações novas e sinalizar "atualize a página".
+      {
+        name: 'app-build-version',
+        apply: 'build',
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'version.json',
+            source: JSON.stringify({ buildId, builtAt: new Date().toISOString() }),
+          })
+        },
+      },
     ],
     server: {
       host: '0.0.0.0',
@@ -128,6 +148,8 @@ export default defineConfig(({ command, mode }) => {
         VITE_APP_URL: process.env.VITE_APP_URL,
         MODO: process.env.MODO,
       },
+      // Versão embutida no bundle — comparada com /version.json em runtime
+      __APP_BUILD_ID__: JSON.stringify(buildId),
     },
     resolve: {
       alias: {

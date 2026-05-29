@@ -386,6 +386,7 @@
     "formatWhatsAppText": true,
     "stripWhatsAppMarks": true,
     "temFormatacao": true,
-    "htmlToWhatsApp": true
+    "htmlToWhatsApp": true,
+    "useAppVersion": true
   }
 }
