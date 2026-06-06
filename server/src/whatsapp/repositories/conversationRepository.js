@@ -85,14 +85,15 @@ async function listConversations(empresaId, opcoes) {
   const offset = (page - 1) * limit;
   const busca = opcoes.busca ? `%${opcoes.busca}%` : null;
 
-  let whereExtra = '';
+  // deleted_at IS NULL: oculta conversas apagadas (soft-delete, só no sistema)
+  let whereExtra = ' AND deleted_at IS NULL';
   const params = [empresaId];
   const paramsCount = [empresaId];
 
   if (busca) {
-    whereExtra = ' AND (contact_name LIKE ? OR contact_wa_id LIKE ?)';
-    params.push(busca, busca);
-    paramsCount.push(busca, busca);
+    whereExtra += ' AND (contact_name LIKE ? OR contact_name_custom LIKE ? OR contact_wa_id LIKE ?)';
+    params.push(busca, busca, busca);
+    paramsCount.push(busca, busca, busca);
   }
 
   const [rowsTotal] = await dbQuery(
@@ -102,9 +103,10 @@ async function listConversations(empresaId, opcoes) {
 
   params.push(limit, offset);
 
+  // pinned DESC primeiro: conversas fixadas sempre no topo; depois recentes.
   const rows = await dbQuery(
     `SELECT * FROM Conversations WHERE empresa_id = ?${whereExtra}
-     ORDER BY last_message_at DESC
+     ORDER BY pinned DESC, last_message_at DESC
      LIMIT ? OFFSET ?`,
     params
   );
@@ -175,6 +177,38 @@ async function updateContactNameCustom(conversationId, empresaId, nome) {
   return resultado.affectedRows || 0;
 }
 
+/**
+ * Fixa/desafixa a conversa (pinned). Conversas fixadas aparecem no topo da lista.
+ * Isolado por empresa_id.
+ * @param {number} conversationId
+ * @param {number} empresaId
+ * @param {boolean} pinned
+ * @returns {Promise<number>} linhas afetadas
+ */
+async function setPinned(conversationId, empresaId, pinned) {
+  const resultado = await dbQuery(
+    'UPDATE Conversations SET pinned = ? WHERE id = ? AND empresa_id = ?',
+    [pinned ? 1 : 0, conversationId, empresaId]
+  );
+  return resultado.affectedRows || 0;
+}
+
+/**
+ * Soft-delete da conversa (apenas no sistema; a Cloud API não apaga no WhatsApp).
+ * Marca deleted_at; a conversa some das listagens mas o histórico permanece no banco.
+ * Isolado por empresa_id.
+ * @param {number} conversationId
+ * @param {number} empresaId
+ * @returns {Promise<number>} linhas afetadas
+ */
+async function softDeleteConversation(conversationId, empresaId) {
+  const resultado = await dbQuery(
+    'UPDATE Conversations SET deleted_at = NOW() WHERE id = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [conversationId, empresaId]
+  );
+  return resultado.affectedRows || 0;
+}
+
 module.exports = {
   upsertConversation,
   listConversations,
@@ -182,4 +216,6 @@ module.exports = {
   incrementUnread,
   markConversationRead,
   updateContactNameCustom,
+  setPinned,
+  softDeleteConversation,
 };

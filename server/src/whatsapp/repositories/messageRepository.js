@@ -11,7 +11,7 @@ const dbQuery = require('../../utils/dbHelper');
  * Insere nova mensagem.
  * Idempotente: se wamid já existir (UNIQUE KEY), ignora a inserção e retorna null.
  * Se wamid for null (mensagem outbound ainda sem confirmação), sempre insere.
- * @param {Object} dados - { empresa_id, conversation_id, wamid?, direction, type, body?, media_path?, media_mime?, media_filename?, status, reply_to_wamid?, sender_name?, timestamp_ms?, referral?, referred_product? }
+ * @param {Object} dados - { empresa_id, conversation_id, wamid?, direction, type, body?, media_path?, media_mime?, media_filename?, status, reply_to_wamid?, sender_name?, timestamp_ms?, referral?, referred_product?, contacts? }
  * @returns {Promise<number|null>} id inserido ou null se wamid duplicado
  */
 async function insertMessage(dados) {
@@ -33,18 +33,21 @@ async function insertMessage(dados) {
     // Aceita objeto (serializado aqui) ou null. Guardado bruto em coluna JSON.
     referral = null,
     referred_product = null,
+    // Cartão de contato compartilhado (vCard) — array bruto da Meta ou null.
+    contacts = null,
   } = dados;
 
   const referralJson = referral ? JSON.stringify(referral) : null;
   const referredProductJson = referred_product ? JSON.stringify(referred_product) : null;
+  const contactsJson = contacts ? JSON.stringify(contacts) : null;
 
   const resultado = await dbQuery(
     `INSERT IGNORE INTO Messages
        (empresa_id, conversation_id, wamid, direction, type,
         body, media_path, media_mime, media_filename,
         status, reply_to_wamid, sender_name, timestamp_ms,
-        referral, referred_product)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        referral, referred_product, contacts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresa_id,
       conversation_id,
@@ -61,6 +64,7 @@ async function insertMessage(dados) {
       timestamp_ms,
       referralJson,
       referredProductJson,
+      contactsJson,
     ]
   );
 
@@ -125,14 +129,15 @@ async function getMessages(conversationId, empresaId, opcoes) {
   const limit = Math.min(100, Math.max(1, parseInt((opcoes || {}).limit) || 50));
   const offset = (page - 1) * limit;
 
+  // deleted_at IS NULL: oculta mensagens apagadas (soft-delete, só no sistema)
   const [rowTotal] = await dbQuery(
-    'SELECT COUNT(*) AS total FROM Messages WHERE conversation_id = ? AND empresa_id = ?',
+    'SELECT COUNT(*) AS total FROM Messages WHERE conversation_id = ? AND empresa_id = ? AND deleted_at IS NULL',
     [conversationId, empresaId]
   );
 
   const rows = await dbQuery(
     `SELECT * FROM Messages
-     WHERE conversation_id = ? AND empresa_id = ?
+     WHERE conversation_id = ? AND empresa_id = ? AND deleted_at IS NULL
      ORDER BY COALESCE(timestamp_ms, UNIX_TIMESTAMP(created_at) * 1000) ASC
      LIMIT ? OFFSET ?`,
     [conversationId, empresaId, limit, offset]
@@ -178,6 +183,55 @@ async function getByWamid(wamid, empresaId) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+/**
+ * Busca mensagem pelo id primário, validando tenant.
+ * @param {number} msgId
+ * @param {number} empresaId
+ * @returns {Promise<Object|null>}
+ */
+async function getById(msgId, empresaId) {
+  const rows = await dbQuery(
+    'SELECT * FROM Messages WHERE id = ? AND empresa_id = ? LIMIT 1',
+    [msgId, empresaId]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
+/**
+ * Soft-delete de uma mensagem (apenas no sistema; a Cloud API não apaga no WhatsApp).
+ * Marca deleted_at; a mensagem some das listagens mas permanece no banco.
+ * Isolado por empresa_id.
+ * @param {number} msgId
+ * @param {number} empresaId
+ * @returns {Promise<number>} linhas afetadas
+ */
+async function softDeleteMessage(msgId, empresaId) {
+  const resultado = await dbQuery(
+    'UPDATE Messages SET deleted_at = NOW() WHERE id = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [msgId, empresaId]
+  );
+  return resultado.affectedRows || 0;
+}
+
+/**
+ * Retorna o wamid da última mensagem inbound da conversa (para enviar recibo de
+ * leitura "lido" à Cloud API ao marcar a conversa como lida). Ignora apagadas.
+ * @param {number} conversationId
+ * @param {number} empresaId
+ * @returns {Promise<string|null>}
+ */
+async function getLastInboundWamid(conversationId, empresaId) {
+  const rows = await dbQuery(
+    `SELECT wamid FROM Messages
+     WHERE conversation_id = ? AND empresa_id = ? AND direction = 'inbound'
+       AND wamid IS NOT NULL AND deleted_at IS NULL
+     ORDER BY COALESCE(timestamp_ms, UNIX_TIMESTAMP(created_at) * 1000) DESC
+     LIMIT 1`,
+    [conversationId, empresaId]
+  );
+  return rows.length > 0 ? rows[0].wamid : null;
+}
+
 module.exports = {
   insertMessage,
   updateMessageStatusByWamid,
@@ -185,4 +239,7 @@ module.exports = {
   updateMediaPath,
   getMessages,
   getByWamid,
+  getById,
+  softDeleteMessage,
+  getLastInboundWamid,
 };

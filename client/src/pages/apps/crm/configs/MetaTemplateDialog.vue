@@ -13,6 +13,12 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  // Telefone para pré-preencher o campo no modo nova conversa (ex.: vindo de um
+  // cartão de contato compartilhado).
+  initialPhone: {
+    type: [String, Number],
+    default: "",
+  },
 });
 
 const emit = defineEmits(["update:modelValue", "sent", "started"]);
@@ -198,7 +204,7 @@ watch(visible, (v) => {
   if (v) {
     selectedTemplate.value = null;
     bodyParams.value = [];
-    phone.value = "";
+    phone.value = props.initialPhone ? String(props.initialPhone) : "";
     carregarTemplates();
   }
 });

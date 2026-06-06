@@ -49,7 +49,45 @@ function extrairBody(msg) {
     return (msg[msg.type] && msg[msg.type].caption) || '';
   }
 
+  // Cartão de contato (vCard): gera um texto legível como fallback/busca.
+  // O card visual no frontend usa o objeto estruturado (coluna `contacts`),
+  // mas o body garante preview, pesquisa e compatibilidade.
+  if (msg.type === 'contacts' && Array.isArray(msg.contacts)) {
+    return formatarContatosTexto(msg.contacts);
+  }
+
   return '';
+}
+
+/**
+ * Monta um texto legível a partir do array de contatos de uma mensagem
+ * `type: 'contacts'` (ex.: "Colorindo Tintas — +55 48 9174-2130").
+ * Vários contatos são separados por quebra de linha.
+ * @param {Array} contacts
+ * @returns {string}
+ */
+function formatarContatosTexto(contacts) {
+  if (!Array.isArray(contacts) || contacts.length === 0) return '';
+  return contacts
+    .map((c) => {
+      const nome = (c.name && (c.name.formatted_name || c.name.first_name)) || 'Contato';
+      const tel = (c.phones && c.phones[0] && c.phones[0].phone) || '';
+      return tel ? `${nome} — ${tel}` : nome;
+    })
+    .join('\n');
+}
+
+/**
+ * Extrai o array de contatos compartilhados de uma mensagem `type: 'contacts'`.
+ * Guardado BRUTO em coluna JSON para não perder campos (emails, org, endereços).
+ * @param {Object} msg
+ * @returns {Array|null}
+ */
+function extrairContacts(msg) {
+  if (msg && msg.type === 'contacts' && Array.isArray(msg.contacts) && msg.contacts.length) {
+    return msg.contacts;
+  }
+  return null;
 }
 
 /**
@@ -279,6 +317,7 @@ router.post('/whatsapp', async (req, res) => {
             const contactName = (contacts[0] && contacts[0].profile && contacts[0].profile.name) || null;
             const referral = extrairReferral(msg);
             const referredProduct = extrairReferredProduct(msg);
+            const contactCard = extrairContacts(msg);
             log('webhook.msg.inbound', {
               empresa_id: empresaId, wamid: msg.id, type: msg.type, from: msg.from,
               hasMedia: !!extrairMediaId(msg), hasContext: !!msg.context,
@@ -340,6 +379,8 @@ router.post('/whatsapp', async (req, res) => {
               // Origem da mensagem (anúncio CTWA / produto do catálogo)
               referral,
               referred_product: referredProduct,
+              // Cartão de contato compartilhado (vCard)
+              contacts: contactCard,
             });
 
             // wamid duplicado — não emitir socket duplicado nem incrementar unread
@@ -373,6 +414,8 @@ router.post('/whatsapp', async (req, res) => {
                   // Origem do anúncio/catálogo já vai para o frontend em tempo real
                   referral: referral || null,
                   referred_product: referredProduct || null,
+                  // Cartão de contato (vCard) renderizado em tempo real
+                  contacts: contactCard || null,
                 },
               });
             } catch (socketErr) {

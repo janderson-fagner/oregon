@@ -42,7 +42,7 @@ const MIME_PARA_EXTENSAO = {
  * @returns {string}
  */
 function obterVersaoApi(config) {
-  return config.graph_api_version || process.env.GRAPH_API_VERSION || 'v23.0';
+  return config.graph_api_version || process.env.GRAPH_API_VERSION || 'v25.0';
 }
 
 /**
@@ -274,6 +274,12 @@ async function sendMedia(config, to, mediaType, mediaParams, replyToWamid = null
     objetoMidia.id = mediaParams.id;
   } else if (mediaParams.link) {
     objetoMidia.link = mediaParams.link;
+  }
+  // voice: true marca o áudio como NOTA DE VOZ (ícone de microfone, foto de
+  // perfil, download automático e transcrição). Sem isso vira "áudio básico".
+  // Exige arquivo OGG/OPUS mono — que é o que o backend gera no save-anexo.
+  if (mediaType === 'audio') {
+    objetoMidia.voice = true;
   }
   // caption: válido para image/video/document (NÃO para audio — Meta retorna erro 100)
   if (mediaParams.caption && mediaType !== 'audio') {

@@ -75,9 +75,9 @@ app.use(cors({
     'http://app.oregonservicos.com.br:5174', 'https://app.oregonservicos.com.br:5174', 'http://app.oregonservicos.com.br:5173',
     'https://app.oregonservicos.com.br:5173', 'https://dev.oregonservicos.com.br', 'http://dev.oregonservicos.com.br:5174',
     'https://dev.oregonservicos.com.br:5174', 'http://dev.oregonservicos.com.br:5173', 'https://dev.oregonservicos.com.br:5173',
-    'https://daviot.com.br', 'https://app.daviot.com.br',
-    'http://app.daviot.com.br:5173', 'https://app.daviot.com.br:5173',
-    'http://app.daviot.com.br:5174', 'https://app.daviot.com.br:5174'
+    'https://daviot.com.br',
+    'http://daviot.com.br:5173', 'https://daviot.com.br:5173',
+    'http://daviot.com.br:5174', 'https://daviot.com.br:5174'
   ]
 }));
 

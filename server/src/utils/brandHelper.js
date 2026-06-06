@@ -20,7 +20,7 @@ function getBrandFromHost(hostname) {
   return {
     isOregon,
     appName: isOregon ? 'Oregon' : 'Daviot',
-    appUrl: isOregon ? 'https://app.oregonservicos.com.br' : 'https://app.daviot.com.br',
+    appUrl: isOregon ? 'https://app.oregonservicos.com.br' : 'https://daviot.com.br',
     logoUrl: isOregon ? '/uploads/logo.png' : '/uploads/daviot-logo.png',
     emailFrom: isOregon
       ? `"Oregon Sistema" <${smtpFrom}>`

@@ -13,8 +13,28 @@ import {
 
 import DadosCliente from "@/views/apps/crm/dadosCliente.vue";
 import MetaTemplateDialog from "@/pages/apps/crm/configs/MetaTemplateDialog.vue";
+import notificationSound from "@/assets/notification-zap.mp3";
 
 const { setAlert } = useAlert();
+
+// ---- Som de notificação (toca só de 0 a 1.5s ao chegar mensagem inbound) ----
+const notifAudio = new Audio(notificationSound);
+notifAudio.preload = "auto";
+let _notifTimer = null;
+const tocarNotificacao = () => {
+  try {
+    notifAudio.currentTime = 0;
+    const p = notifAudio.play();
+    if (p && p.catch) p.catch(() => {}); // navegador pode bloquear sem interação prévia
+    clearTimeout(_notifTimer);
+    _notifTimer = setTimeout(() => {
+      try {
+        notifAudio.pause();
+        notifAudio.currentTime = 0;
+      } catch (_) {}
+    }, 1500);
+  } catch (_) {}
+};
 
 const userData = useCookie("userData").value;
 
@@ -83,7 +103,7 @@ function mapConversaToChat(c) {
       c.contact_wa_id ||
       "Contato",
     naoLida: c.unread_count || 0,
-    pinned: false,
+    pinned: !!c.pinned,
     ultimaAcao: ultima,
     ultimaMensagem: { texto: c.last_message_preview || "", data: ultima },
     messagens: [],
@@ -130,7 +150,32 @@ function mapMsgFront(m) {
   // Origem da mensagem: anúncio Click-to-WhatsApp / produto do catálogo
   out.referral = m.referral || null;
   out.referred_product = m.referred_product || null;
+  // Cartão de contato compartilhado (vCard)
+  out.contacts = Array.isArray(m.contacts) ? m.contacts : null;
   return out;
+}
+
+/**
+ * Nome de exibição de um contato compartilhado (vCard).
+ */
+function nomeContato(ct) {
+  if (!ct) return "Contato";
+  return (
+    (ct.name && (ct.name.formatted_name || ct.name.first_name)) ||
+    (ct.phones && ct.phones[0] && ct.phones[0].phone) ||
+    "Contato"
+  );
+}
+
+/**
+ * Número (apenas dígitos) do primeiro telefone de um contato, para montar o
+ * link wa.me. Prioriza o wa_id (já normalizado pela Meta).
+ */
+function telContato(ct) {
+  const ph = ct && ct.phones && ct.phones[0];
+  if (!ph) return "";
+  const raw = ph.wa_id || ph.phone || "";
+  return String(raw).replace(/\D/g, "");
 }
 
 function ackFromStatus(status) {
@@ -169,6 +214,18 @@ const onTemplateEnviado = async () => {
 
 // ---- Nova conversa (iniciar por template) ----
 const novaConversaDialog = ref(false);
+// Telefone pré-preenchido ao abrir o dialog de nova conversa (ex.: vindo de um
+// cartão de contato compartilhado).
+const novaConversaPhone = ref("");
+
+// Abre o dialog de nova conversa já com o telefone do contato compartilhado,
+// para iniciar o atendimento dentro do próprio sistema.
+const iniciarConversaContato = (ct) => {
+  const tel = telContato(ct);
+  if (!tel) return;
+  novaConversaPhone.value = tel;
+  novaConversaDialog.value = true;
+};
 
 const onConversaIniciada = async (res) => {
   await getAllChats();
@@ -226,6 +283,47 @@ const handleScrollChats = (event) => {
   }
 };
 
+// ---- Templates aprovados (para renderizar conteúdo real em vez de "[template: nome]") ----
+const templatesCache = ref([]);
+
+const carregarTemplates = async () => {
+  try {
+    const res = await $api("/whatsapp/templates", { method: "GET" });
+    templatesCache.value = res?.templates || [];
+  } catch {
+    templatesCache.value = [];
+  }
+};
+
+// Extrai o nome do template a partir do body/texto da mensagem ("[template: nome]" ou só "nome").
+const extrairNomeTemplate = (msg) => {
+  if (!msg) return "";
+  const fonte = msg.body || msg.texto || "";
+  const m = String(fonte).match(/^\[template:\s*(.+?)\]\s*$/i);
+  return (m ? m[1] : fonte).trim();
+};
+
+// Resolve o CONTEÚDO real de um template (texto do componente BODY) a partir do
+// cache. Quando não encontra, cai num rótulo amigável "Template: nome".
+const resolverConteudoTemplate = (msg) => {
+  const nome = extrairNomeTemplate(msg);
+  const tpl = templatesCache.value.find((t) => t.name === nome);
+  if (tpl) {
+    const body = (tpl.components || []).find(
+      (c) => String(c.type || "").toUpperCase() === "BODY"
+    );
+    if (body?.text) return body.text;
+  }
+  return nome ? `Template: ${nome}` : "Template";
+};
+
+// Texto a exibir no balão: para template, mostra o conteúdo real; senão, o texto normal.
+const textoExibicaoMsg = (msg) => {
+  if (!msg) return "";
+  if ((msg.tipo || msg.type) === "template") return resolverConteudoTemplate(msg);
+  return msg.texto;
+};
+
 const getAllChats = async () => {
   loading.value = true;
 
@@ -251,6 +349,7 @@ const getAllChats = async () => {
 };
 
 getAllChats();
+carregarTemplates();
 
 const formatShortMsg = (msg, midia = true) => {
   if (!msg) return "";
@@ -265,6 +364,31 @@ const formatShortMsg = (msg, midia = true) => {
   // Remove marcadores de formatação do WhatsApp (*, _, ~, `) para o preview
   // curto da lista — renderizar HTML aqui poderia cortar tags no substring.
   msgText = stripWhatsAppMarks(msgText);
+
+  // Template (item 7): mostra o conteúdo real em vez de "[template: nome]"/nome.
+  // Cobre tanto o tempo real (msg.tipo='template') quanto o reload (preview "[template: x]").
+  const ehTemplate =
+    (msg.tipo || msg.type) === "template" || /^\[template:/i.test(msgText.trim());
+  if (ehTemplate) {
+    const conteudo = stripWhatsAppMarks(resolverConteudoTemplate(msg)).replace(
+      /<br>/g,
+      " "
+    );
+    return ('<i class="tabler-file-text"></i> ' + conteudo).substring(0, 80);
+  }
+
+  // Preview de mídia vindo do backend como token (outbound só tem o token, sem
+  // objeto de mídia): "[audio]", "[image]", "[video]", "[document]".
+  if (!(msg.hasMedia && msg.media)) {
+    const tokenMap = {
+      "[audio]": '<i class="tabler-microphone"></i> Áudio',
+      "[image]": '<i class="tabler-photo"></i> Imagem',
+      "[video]": '<i class="tabler-video"></i> Vídeo',
+      "[document]": '<i class="tabler-file-text"></i> Documento',
+    };
+    const low = msgText.trim().toLowerCase();
+    if (tokenMap[low]) return tokenMap[low];
+  }
 
   if (msg.hasMedia && msg.media) {
     let media = msg.media;
@@ -376,6 +500,10 @@ const selecionarChat = async (chat) => {
   if (mobile.value) showChatPanel.value = true;
 
   getChat(chat.id, index);
+
+  // Marca como lida no backend (zera contador no servidor + envia recibo de
+  // leitura ao contato). getChat já zera localmente, isto garante o servidor.
+  if (chat.naoLida) marcarLidaBackend(chat.id);
 };
 
 const voltarParaLista = () => {
@@ -464,6 +592,9 @@ const handleNewMessage = (payload) => {
 
   const msgMapeada = mapMsgFront(msg);
 
+  // Toca o som de notificação apenas para mensagens recebidas (não as próprias).
+  if (!msgMapeada.fromMe) tocarNotificacao();
+
   let chatIndex = allChats.value.findIndex((c) => c.id == chatId);
 
   if (chatIndex < 0 && (!searchQuery.value || searchQuery.value == "")) {
@@ -484,12 +615,18 @@ const handleNewMessage = (payload) => {
       c.janela = calcJanela(new Date());
     }
 
-    // Reordenar para o topo (mutação in-place — Vue rastreia)
+    // Reordenar para o topo, mas respeitando conversas fixadas (que ficam acima).
+    // Conversa não fixada entra logo após o bloco de fixadas; fixada vai ao topo.
     if (chatIndex > 0) {
       const chatItem = allChats.value.splice(chatIndex, 1)[0];
-      allChats.value.unshift(chatItem);
+      const pos = chatItem.pinned
+        ? 0
+        : allChats.value.filter((c) => c.pinned).length;
+      allChats.value.splice(pos, 0, chatItem);
+      chatIndex = pos;
+    } else {
+      chatIndex = 0;
     }
-    chatIndex = 0;
   }
 
   if (selectedChat.value?.id == chatId) {
@@ -504,9 +641,21 @@ const handleNewMessage = (payload) => {
     }
     if (chatIndex >= 0) allChats.value[chatIndex].naoLida = 0;
 
-    // Recarrega janela ao receber msg inbound
-    if (!msgMapeada.fromMe) carregarJanela(chatId);
+    // Recarrega janela ao receber msg inbound e marca como lida no backend
+    // (a conversa está aberta na tela; sem isso o unread_count do servidor ficaria
+    // acumulando e reapareceria como não lida ao recarregar).
+    if (!msgMapeada.fromMe) {
+      carregarJanela(chatId);
+      marcarLidaBackend(chatId);
+    }
   }
+};
+
+// Marca a conversa como lida no backend (zera unread_count + recibo de leitura).
+// Fire-and-forget: falha não impacta a UI.
+const marcarLidaBackend = (chatId) => {
+  if (!chatId) return;
+  $api(`/zap/mark-read/${chatId}`, { method: "POST" }).catch(() => {});
 };
 
 const goToImg = (url) => {
@@ -519,8 +668,21 @@ socket.on("nova-mensagem", (payload) => {
   handleNewMessage(payload);
 });
 
+// Conversa apagada em outra sessão (soft-delete) — remove da lista local.
+socket.on("conversa-apagada", (payload) => {
+  const id = payload?.conversation_id;
+  if (id != null) removerConversaLocal(id);
+});
+
 socket.on("update-mensagem", (payload) => {
   if (!payload) return;
+
+  // Mensagem apagada (soft-delete no sistema): { id, deleted: true }.
+  // Removida ANTES do early-return de mensagens carregadas.
+  if (payload.deleted && payload.id != null) {
+    removerMensagemLocal(payload.id);
+    return;
+  }
 
   if (!selectedChat.value || !selectedChat.value?.messagens?.length) return;
 
@@ -666,11 +828,12 @@ const handleData = (dataChat, short = true) => {
   const now = moment();
   let out;
   if (data.isSame(now, "day")) {
+    // Hoje: na listagem mostra a hora; no chip da conversa mostra "Hoje"
     out = short ? data.format("HH:mm") : "Hoje";
   } else if (data.isSame(now.clone().subtract(1, "day"), "day")) {
-    out = short ? data.format("HH:mm") : "Ontem";
+    out = "Ontem";
   } else if (data.isSame(now.clone().subtract(2, "day"), "day")) {
-    out = short ? data.format("HH:mm") : "Anteontem";
+    out = "Anteontem";
   } else {
     out = data.format("DD/MM/YYYY");
   }
@@ -718,6 +881,10 @@ const chunks = [];
 const timeGravando = ref(0);
 const audioBlob = ref(null);
 let intervalGravando = null;
+// Resolver de uma promise resolvida quando o MediaRecorder termina de montar o
+// blob (evento onstop). Substitui o antigo setTimeout(2000) fixo: paramos de
+// esperar um tempo arbitrário e seguimos assim que o áudio está realmente pronto.
+let onStopResolver = null;
 
 const initTimer = () => {
   timeGravando.value = 0;
@@ -738,7 +905,16 @@ const stopTimer = () => {
 
 const iniciarGravacao = async () => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Constraints melhoram a captação de voz: autoGainControl levanta o nível de
+    // microfones fracos (ajuda no "áudio baixo"), além de reduzir ruído e eco.
+    // NÃO mexer em bitrate aqui (audioBitsPerSecond zerava o áudio em alguns navegadores).
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
     // Estratégia: Chrome MENTE com isTypeSupported("audio/mp4") (sem AAC, grava lixo
     // que a Meta rejeita como application/octet-stream). Por isso preferimos webm/opus,
@@ -757,6 +933,10 @@ const iniciarGravacao = async () => {
       throw new Error("Nenhum formato de gravação suportado");
     }
 
+    // IMPORTANTE: NÃO forçar audioBitsPerSecond aqui. Em alguns navegadores,
+    // limitar o bitrate do MediaRecorder produz um webm sem áudio (faixa muda).
+    // A compressão para nota de voz é feita no backend (re-encode para 32k mono
+    // OGG), que preserva o áudio. Mantemos o bitrate padrão do navegador.
     mediaRecorder.value = new MediaRecorder(stream, { mimeType });
 
     mediaRecorder.value.ondataavailable = (e) => {
@@ -768,6 +948,11 @@ const iniciarGravacao = async () => {
       audioBlob.value = blob; // armazena o blob
       audioUrl.value = URL.createObjectURL(blob); // URL para player
       chunks.length = 0;
+      // Libera quem aguarda o áudio ficar pronto (ver pararGravacao).
+      if (onStopResolver) {
+        onStopResolver();
+        onStopResolver = null;
+      }
     };
 
     mediaRecorder.value.start();
@@ -779,13 +964,31 @@ const iniciarGravacao = async () => {
   }
 };
 
+// Para a gravação e resolve assim que o blob estiver montado (evento onstop).
+// Retorna uma promise para o chamador aguardar o áudio ficar pronto sem usar
+// um setTimeout fixo. Timeout de segurança de 3s evita travar caso onstop não
+// dispare por algum motivo.
 const pararGravacao = () => {
-  if (mediaRecorder.value && gravando.value) {
+  return new Promise((resolve) => {
+    if (!(mediaRecorder.value && gravando.value)) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(seguranca);
+      resolve();
+    };
+    // onstop chama finish quando o blob estiver pronto; o timeout é só salvaguarda.
+    const seguranca = setTimeout(finish, 3000);
+    onStopResolver = finish;
     mediaRecorder.value.stop();
     gravando.value = false;
     stopTimer();
     console.log("Gravação parada.");
-  }
+  });
 };
 
 const formatTime = (seconds) => {
@@ -908,13 +1111,29 @@ const sendMessage = async (type = "default") => {
     return;
   }
 
+  // Captura a conversa-alvo AGORA. Durante o upload (que pode levar alguns
+  // segundos) o atendente pode trocar de conversa; sem isso o `selectedChat`
+  // mudaria e a mensagem iria para o contato errado. Tudo abaixo usa estes
+  // valores fixos, não o `selectedChat.value` "vivo".
+  const targetChat = selectedChat.value;
+  const targetConvId = targetChat?.id;
+  if (!targetConvId) {
+    setAlert("Selecione uma conversa para enviar.", "error");
+    return;
+  }
+  const replyWamid =
+    viewReply.value && msgReply.value ? msgReply.value.wamid || null : null;
+
   loadingSendMessage.value = true;
 
   try {
     if (type === "audio") {
-      pararGravacao();
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      await sendAnexo("audio", texto || "");
+      await pararGravacao(); // aguarda o blob ficar pronto (sem setTimeout fixo)
+      if (!audioBlob.value || audioBlob.value.size === 0) {
+        setAlert("Não foi possível processar o áudio gravado.", "error");
+        return;
+      }
+      await sendAnexo("audio", texto || "", targetConvId, targetChat);
       limparEntrada();
       return;
     }
@@ -923,7 +1142,7 @@ const sendMessage = async (type = "default") => {
       // Legenda só na primeira mídia (padrão WhatsApp). Demais arquivos vão sem caption.
       for (let i = 0; i < arquivos.length; i++) {
         const caption = i === 0 ? texto : "";
-        await sendAnexo(arquivos[i], caption);
+        await sendAnexo(arquivos[i], caption, targetConvId, targetChat);
       }
       limparEntrada();
       return;
@@ -933,12 +1152,9 @@ const sendMessage = async (type = "default") => {
     const res = await $api("/zap/send-message-chat", {
       method: "POST",
       body: {
-        conversationId: selectedChat.value.id,
+        conversationId: targetConvId,
         text: texto,
-        replyToWamid:
-          viewReply.value && msgReply.value
-            ? msgReply.value.wamid || null
-            : null,
+        replyToWamid: replyWamid,
       },
     });
 
@@ -958,7 +1174,8 @@ const sendMessage = async (type = "default") => {
 
     limparEntrada();
 
-    // Append otimista da mensagem retornada
+    // Append otimista da mensagem retornada — sempre na conversa-alvo capturada,
+    // não no selectedChat "vivo" (que pode ter mudado durante o request).
     if (res.message) {
       const msgMapeada = mapMsgFront(res.message);
       const dupId = msgMapeada.id != null && _msgIds.has(msgMapeada.id);
@@ -966,8 +1183,8 @@ const sendMessage = async (type = "default") => {
       if (!dupId && !dupWamid) {
         if (msgMapeada.id != null) _msgIds.add(msgMapeada.id);
         if (msgMapeada.wamid) _msgWamids.add(msgMapeada.wamid);
-        inserirMensagemOrdenada(selectedChat.value.messagens, msgMapeada);
-        rolarFimChat();
+        inserirMensagemOrdenada(targetChat.messagens, msgMapeada);
+        if (selectedChat.value?.id === targetConvId) rolarFimChat();
       }
     }
   } catch (error) {
@@ -1001,8 +1218,14 @@ const sendMessage = async (type = "default") => {
   }
 };
 
-const sendAnexo = async (anexo, caption = "") => {
+// convIdOverride/targetChat: conversa-alvo capturada no início do envio. Quando
+// informados, o anexo vai sempre para essa conversa mesmo que o atendente troque
+// de chat durante o upload (corrige o bug de enviar áudio ao contato errado).
+const sendAnexo = async (anexo, caption = "", convIdOverride = null, targetChat = null) => {
   if (!anexo) return;
+
+  const convId = convIdOverride ?? selectedChat.value?.id;
+  const chatRef = targetChat ?? selectedChat.value;
 
   try {
     const formData = new FormData();
@@ -1018,7 +1241,7 @@ const sendAnexo = async (anexo, caption = "") => {
       formData.append("file", anexo);
     }
 
-    formData.append("conversationId", selectedChat.value.id);
+    formData.append("conversationId", convId);
     if (caption) formData.append("caption", caption);
 
     const res = await $api("/zap/save-anexo", {
@@ -1039,8 +1262,8 @@ const sendAnexo = async (anexo, caption = "") => {
       if (!dupId && !dupWamid) {
         if (msgMapeada.id != null) _msgIds.add(msgMapeada.id);
         if (msgMapeada.wamid) _msgWamids.add(msgMapeada.wamid);
-        inserirMensagemOrdenada(selectedChat.value.messagens, msgMapeada);
-        rolarFimChat();
+        inserirMensagemOrdenada(chatRef.messagens, msgMapeada);
+        if (selectedChat.value?.id === convId) rolarFimChat();
       }
     }
 
@@ -1111,15 +1334,280 @@ const handleMenuMsg = (event, msg) => {
   }
 };
 
-// A Cloud API só permite responder (citar) mensagens — editar/deletar/fixar
-// não existem na API oficial e foram removidos.
-const actionsMsg = () => [
-  {
-    title: "Responder",
-    icon: "tabler-corner-up-left",
-    action: "reply",
-  },
-];
+// Ações do menu de contexto da mensagem. Montadas conforme o tipo da mensagem.
+// Obs: Apagar é só no sistema (a Cloud API não apaga no WhatsApp do contato).
+const actionsMsg = (msg) => {
+  const acoes = [];
+  if (msg?.wamid) {
+    acoes.push({ title: "Responder", icon: "tabler-corner-up-left", action: "reply" });
+  }
+  if (textoExibicaoMsg(msg)) {
+    acoes.push({ title: "Copiar", icon: "tabler-copy", action: "copy" });
+  }
+  // Encaminhar: texto ou mídia (templates não — não há conteúdo reenviável fiel).
+  if ((msg?.tipo || msg?.type) !== "template" && (msg?.media?.url || textoExibicaoMsg(msg))) {
+    acoes.push({ title: "Encaminhar", icon: "tabler-arrow-forward", action: "forward" });
+  }
+  acoes.push({ title: "Apagar", icon: "tabler-trash", action: "delete" });
+  return acoes;
+};
+
+// Dispatcher das ações do menu da mensagem.
+const onActionMsg = (action, msg) => {
+  viewMenuMsg.value = false;
+  if (!msg) return;
+  if (action === "reply") return openReply(msg);
+  if (action === "copy") return copiarMensagem(msg);
+  if (action === "forward") return abrirEncaminhar(msg);
+  if (action === "delete") return abrirApagarMsg(msg);
+};
+
+// Copia o texto em formato WhatsApp (a marcação já é armazenada com *, _, ~).
+const copiarMensagem = async (msg) => {
+  const texto = textoExibicaoMsg(msg) || "";
+  if (!texto) return;
+  try {
+    await navigator.clipboard.writeText(texto);
+    setAlert("Mensagem copiada.", "success", "tabler-copy", 2000);
+  } catch {
+    setAlert("Não foi possível copiar a mensagem.", "error");
+  }
+};
+
+// ---- Apagar mensagem (somente no sistema) ----
+const viewApagarMsg = ref(false);
+const msgApagar = ref(null);
+const loadingApagarMsg = ref(false);
+
+const abrirApagarMsg = (msg) => {
+  msgApagar.value = msg;
+  viewApagarMsg.value = true;
+};
+
+const confirmarApagarMsg = async () => {
+  const msg = msgApagar.value;
+  if (!msg?.id) {
+    viewApagarMsg.value = false;
+    return;
+  }
+  loadingApagarMsg.value = true;
+  try {
+    await $api(`/zap/message/${msg.id}`, { method: "DELETE" });
+    removerMensagemLocal(msg.id);
+    viewApagarMsg.value = false;
+    setAlert("Mensagem apagada (somente no sistema).", "success", "tabler-trash", 3000);
+  } catch {
+    setAlert("Não foi possível apagar a mensagem.", "error");
+  } finally {
+    loadingApagarMsg.value = false;
+  }
+};
+
+// Remove a bolha localmente (também usado pelo socket update-mensagem deleted).
+const removerMensagemLocal = (msgId) => {
+  if (!selectedChat.value?.messagens) return;
+  const idx = selectedChat.value.messagens.findIndex((m) => m.id == msgId);
+  if (idx >= 0) {
+    const m = selectedChat.value.messagens[idx];
+    if (m.id != null) _msgIds.delete(m.id);
+    if (m.wamid) _msgWamids.delete(m.wamid);
+    selectedChat.value.messagens.splice(idx, 1);
+  }
+};
+
+// ---- Encaminhar mensagem ----
+const viewEncaminhar = ref(false);
+const msgEncaminhar = ref(null);
+const buscaEncaminhar = ref("");
+const telefoneEncaminhar = ref("");
+const loadingEncaminhar = ref(false);
+
+const abrirEncaminhar = (msg) => {
+  msgEncaminhar.value = msg;
+  buscaEncaminhar.value = "";
+  telefoneEncaminhar.value = "";
+  viewEncaminhar.value = true;
+};
+
+// Conversas filtradas para o dialog de encaminhar (por nome/número).
+const conversasEncaminhar = computed(() => {
+  const q = (buscaEncaminhar.value || "").trim().toLowerCase();
+  const lista = allChats.value || [];
+  if (!q) return lista.slice(0, 50);
+  return lista
+    .filter(
+      (c) =>
+        String(c.nome || "").toLowerCase().includes(q) ||
+        String(c.contato?.numero || "").includes(q)
+    )
+    .slice(0, 50);
+});
+
+const encaminharPara = async ({ conversationId, phone }) => {
+  const msg = msgEncaminhar.value;
+  if (!msg?.id) return;
+  loadingEncaminhar.value = true;
+  try {
+    const res = await $api("/zap/forward", {
+      method: "POST",
+      body: {
+        messageId: msg.id,
+        toConversationId: conversationId || undefined,
+        toPhone: phone || undefined,
+      },
+    });
+    if (res?.success) {
+      viewEncaminhar.value = false;
+      setAlert("Mensagem encaminhada.", "success", "tabler-arrow-forward", 2500);
+    }
+  } catch (error) {
+    if (error?.response?.status === 422) {
+      setAlert(
+        "Janela de 24h fechada nesse contato. Use um template para reabrir.",
+        "warning",
+        "tabler-clock",
+        5000
+      );
+    } else {
+      setAlert(
+        error?.response?._data?.error || "Não foi possível encaminhar.",
+        "error"
+      );
+    }
+  } finally {
+    loadingEncaminhar.value = false;
+  }
+};
+
+// ===================== MENU DE CONTEXTO DO CONTATO =====================
+const viewMenuContato = ref(false);
+const contatoMenu = ref(null);
+
+const handleMenuContato = (event, chat) => {
+  if (!chat) return;
+  contatoMenu.value = chat;
+  viewMenuContato.value = true;
+  // Posiciona o menu no ponto do clique
+  nextTick(() => {
+    const menu = document.querySelector(".menu-contato");
+    if (menu) {
+      menu.style.left = event.clientX + "px";
+      menu.style.top = event.clientY + "px";
+    }
+  });
+};
+
+// Reordena a lista mantendo conversas fixadas no topo (partição estável).
+const reordenarChats = () => {
+  const fixados = allChats.value.filter((c) => c.pinned);
+  const resto = allChats.value.filter((c) => !c.pinned);
+  allChats.value = [...fixados, ...resto];
+};
+
+// Fixar/desafixar conversa (somente no sistema).
+const toggleFixar = async (chat) => {
+  viewMenuContato.value = false;
+  if (!chat?.id) return;
+  const novo = !chat.pinned;
+  chat.pinned = novo; // otimista
+  reordenarChats();
+  try {
+    await $api(`/zap/pin/${chat.id}`, { method: "PUT", body: { pinned: novo } });
+  } catch {
+    chat.pinned = !novo; // reverte
+    reordenarChats();
+    setAlert("Não foi possível fixar a conversa.", "error");
+  }
+};
+
+// ---- Apagar conversa (somente no sistema) ----
+const viewApagarContato = ref(false);
+const contatoApagar = ref(null);
+const loadingApagarContato = ref(false);
+
+const abrirApagarContato = (chat) => {
+  viewMenuContato.value = false;
+  contatoApagar.value = chat;
+  viewApagarContato.value = true;
+};
+
+const confirmarApagarContato = async () => {
+  const chat = contatoApagar.value;
+  if (!chat?.id) {
+    viewApagarContato.value = false;
+    return;
+  }
+  loadingApagarContato.value = true;
+  try {
+    await $api(`/zap/conversation/${chat.id}`, { method: "DELETE" });
+    removerConversaLocal(chat.id);
+    viewApagarContato.value = false;
+    setAlert("Conversa apagada (somente no sistema).", "success", "tabler-trash", 3000);
+  } catch {
+    setAlert("Não foi possível apagar a conversa.", "error");
+  } finally {
+    loadingApagarContato.value = false;
+  }
+};
+
+// Remove a conversa da lista localmente (também usado pelo socket conversa-apagada).
+const removerConversaLocal = (chatId) => {
+  const idx = allChats.value.findIndex((c) => c.id == chatId);
+  if (idx >= 0) allChats.value.splice(idx, 1);
+  if (selectedChat.value?.id == chatId) {
+    selectedChat.value = null;
+    showChatPanel.value = false;
+  }
+};
+
+// ---- Renomear contato (usa endpoint existente PUT /zap/contact-name/:id) ----
+const viewRenomear = ref(false);
+const contatoRenomear = ref(null);
+const nomeRenomear = ref("");
+const loadingRenomear = ref(false);
+
+const abrirRenomear = (chat) => {
+  viewMenuContato.value = false;
+  contatoRenomear.value = chat;
+  nomeRenomear.value = chat?.contato?.nomeCustom || chat?.contato?.nomePerfil || "";
+  viewRenomear.value = true;
+};
+
+const confirmarRenomear = async () => {
+  const chat = contatoRenomear.value;
+  if (!chat?.id) {
+    viewRenomear.value = false;
+    return;
+  }
+  loadingRenomear.value = true;
+  try {
+    const nome = (nomeRenomear.value || "").trim();
+    await $api(`/zap/contact-name/${chat.id}`, {
+      method: "PUT",
+      body: { name: nome },
+    });
+    // Atualiza estado local (lista + cabeçalho se for a conversa aberta)
+    const exibicao = nome || chat.contato?.nomePerfil || chat.contato?.numero || "Contato";
+    chat.nome = exibicao;
+    if (chat.contato) {
+      chat.contato.nome = exibicao;
+      chat.contato.nomeCustom = nome || null;
+    }
+    if (selectedChat.value?.id == chat.id) {
+      selectedChat.value.nome = exibicao;
+      if (selectedChat.value.contato) {
+        selectedChat.value.contato.nome = exibicao;
+        selectedChat.value.contato.nomeCustom = nome || null;
+      }
+    }
+    viewRenomear.value = false;
+    setAlert("Contato renomeado.", "success", "tabler-edit", 2500);
+  } catch {
+    setAlert("Não foi possível renomear o contato.", "error");
+  } finally {
+    loadingRenomear.value = false;
+  }
+};
 
 // Reações rápidas disponíveis no menu da mensagem.
 const reacoesRapidas = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -1459,6 +1947,7 @@ onBeforeUnmount(() => {
   socket.off("nova-mensagem");
   socket.off("update-mensagem");
   socket.off("chat:state-update");
+  socket.off("conversa-apagada");
 });
 </script>
 
@@ -1472,8 +1961,163 @@ onBeforeUnmount(() => {
   <MetaTemplateDialog
     v-model="novaConversaDialog"
     :new-conversation="true"
+    :initial-phone="novaConversaPhone"
     @started="onConversaIniciada"
   />
+
+  <!-- Dialog: Encaminhar mensagem -->
+  <VDialog v-model="viewEncaminhar" max-width="460" scrollable>
+    <VCard>
+      <VCardText>
+        <AppDrawerHeaderSection
+          title="Encaminhar mensagem"
+          @cancel="viewEncaminhar = false"
+        />
+        <VTextField
+          v-model="buscaEncaminhar"
+          class="mt-3"
+          density="compact"
+          placeholder="Buscar contato..."
+          prepend-inner-icon="tabler-search"
+          clearable
+          hide-details
+        />
+
+        <VList class="mt-2" max-height="280" style="overflow-y: auto">
+          <VListItem
+            v-for="c in conversasEncaminhar"
+            :key="c.id"
+            :disabled="loadingEncaminhar"
+            @click="encaminharPara({ conversationId: c.id })"
+          >
+            <template #prepend>
+              <VAvatar size="34" color="primary" variant="tonal">
+                <VImg v-if="c.contato?.avatar" :src="c.contato.avatar" />
+                <VIcon v-else icon="tabler-user-filled" size="18" />
+              </VAvatar>
+            </template>
+            <VListItemTitle>{{ c.nome }}</VListItemTitle>
+            <VListItemSubtitle>{{ c.contato?.numero }}</VListItemSubtitle>
+          </VListItem>
+          <VListItem v-if="!conversasEncaminhar.length">
+            <VListItemTitle class="text-disabled">
+              Nenhuma conversa encontrada.
+            </VListItemTitle>
+          </VListItem>
+        </VList>
+
+        <VDivider class="my-3" />
+        <p class="text-caption mb-1">Ou encaminhar para um número novo:</p>
+        <div class="d-flex flex-row gap-2 align-center">
+          <VTextField
+            v-model="telefoneEncaminhar"
+            density="compact"
+            placeholder="DDD + número (ex: 41999998888)"
+            hide-details
+          />
+          <VBtn
+            :loading="loadingEncaminhar"
+            :disabled="!telefoneEncaminhar"
+            @click="encaminharPara({ phone: telefoneEncaminhar })"
+          >
+            Enviar
+          </VBtn>
+        </div>
+      </VCardText>
+    </VCard>
+  </VDialog>
+
+  <!-- Dialog: Apagar mensagem (somente no sistema) -->
+  <VDialog v-model="viewApagarMsg" max-width="420">
+    <VCard>
+      <VCardText>
+        <AppDrawerHeaderSection
+          title="Apagar mensagem"
+          @cancel="viewApagarMsg = false"
+        />
+        <VAlert type="info" variant="tonal" density="compact" class="mt-3">
+          A API oficial do WhatsApp não permite apagar a mensagem no aparelho do
+          contato. Ela será removida <strong>apenas do sistema</strong>.
+        </VAlert>
+        <p class="mt-3 mb-0">Deseja realmente apagar esta mensagem?</p>
+        <div class="d-flex flex-row align-center justify-end gap-2 mt-4">
+          <VBtn variant="tonal" color="secondary" @click="viewApagarMsg = false">
+            Cancelar
+          </VBtn>
+          <VBtn color="error" :loading="loadingApagarMsg" @click="confirmarApagarMsg">
+            Apagar
+          </VBtn>
+        </div>
+      </VCardText>
+    </VCard>
+  </VDialog>
+
+  <!-- Dialog: Apagar conversa (somente no sistema) -->
+  <VDialog v-model="viewApagarContato" max-width="420">
+    <VCard>
+      <VCardText>
+        <AppDrawerHeaderSection
+          title="Apagar conversa"
+          @cancel="viewApagarContato = false"
+        />
+        <VAlert type="info" variant="tonal" density="compact" class="mt-3">
+          A conversa será removida <strong>apenas do sistema</strong>. O contato
+          no WhatsApp não é afetado e novas mensagens reabrem a conversa.
+        </VAlert>
+        <p class="mt-3 mb-0">
+          Apagar a conversa com
+          <strong>{{ contatoApagar?.nome }}</strong>?
+        </p>
+        <div class="d-flex flex-row align-center justify-end gap-2 mt-4">
+          <VBtn
+            variant="tonal"
+            color="secondary"
+            @click="viewApagarContato = false"
+          >
+            Cancelar
+          </VBtn>
+          <VBtn
+            color="error"
+            :loading="loadingApagarContato"
+            @click="confirmarApagarContato"
+          >
+            Apagar
+          </VBtn>
+        </div>
+      </VCardText>
+    </VCard>
+  </VDialog>
+
+  <!-- Dialog: Renomear contato -->
+  <VDialog v-model="viewRenomear" max-width="420">
+    <VCard>
+      <VCardText>
+        <AppDrawerHeaderSection
+          title="Renomear contato"
+          @cancel="viewRenomear = false"
+        />
+        <VTextField
+          v-model="nomeRenomear"
+          class="mt-3"
+          label="Nome do contato"
+          placeholder="Digite o nome"
+          hide-details
+          @keyup.enter="confirmarRenomear"
+        />
+        <p class="text-caption text-disabled mt-1 mb-0">
+          Deixe vazio para voltar ao nome do perfil do WhatsApp.
+        </p>
+        <div class="d-flex flex-row align-center justify-end gap-2 mt-4">
+          <VBtn variant="tonal" color="secondary" @click="viewRenomear = false">
+            Cancelar
+          </VBtn>
+          <VBtn color="primary" :loading="loadingRenomear" @click="confirmarRenomear">
+            Salvar
+          </VBtn>
+        </div>
+      </VCardText>
+    </VCard>
+  </VDialog>
 
   <div class="menu-msg position-absolute">
     <VMenu v-model="viewMenuMsg" location="top" contained>
@@ -1498,9 +2142,9 @@ onBeforeUnmount(() => {
           class="item-action"
           v-for="action in actionsMsg(msgMenu)"
           :key="action.title"
-          @click="openReply(msgMenu)"
+          @click="onActionMsg(action.action, msgMenu)"
         >
-          <p class="mb-0">
+          <p class="mb-0" :class="{ 'text-error': action.action === 'delete' }">
             <VIcon :icon="action.icon" class="mr-2" />
             {{ action.title }}
           </p>
@@ -1508,6 +2152,37 @@ onBeforeUnmount(() => {
       </VList>
     </VMenu>
   </div>
+
+  <!-- Menu de contexto do CONTATO (clique direito na lista) -->
+  <div class="menu-contato position-absolute">
+    <VMenu v-model="viewMenuContato" location="top" contained>
+      <VList>
+        <VListItem class="item-action" @click="toggleFixar(contatoMenu)">
+          <p class="mb-0">
+            <VIcon
+              :icon="contatoMenu?.pinned ? 'tabler-pinned-off' : 'tabler-pin'"
+              class="mr-2"
+            />
+            {{ contatoMenu?.pinned ? "Desafixar" : "Fixar" }}
+          </p>
+        </VListItem>
+        <VListItem class="item-action" @click="abrirRenomear(contatoMenu)">
+          <p class="mb-0">
+            <VIcon icon="tabler-edit" class="mr-2" />
+            Renomear contato
+          </p>
+        </VListItem>
+        <VDivider class="my-1" />
+        <VListItem class="item-action" @click="abrirApagarContato(contatoMenu)">
+          <p class="mb-0 text-error">
+            <VIcon icon="tabler-trash" class="mr-2" />
+            Apagar conversa
+          </p>
+        </VListItem>
+      </VList>
+    </VMenu>
+  </div>
+
   <div
     class="chat-shell"
     :class="{ 'is-mobile': mobile, 'show-chat': showChatPanel }"
@@ -1565,6 +2240,7 @@ onBeforeUnmount(() => {
                 'chat-naoLido': chat.naoLida > 0 || chat.naoLida < 0,
               }"
               @click="selecionarChat(chat)"
+              @contextmenu.prevent="handleMenuContato($event, chat)"
             >
               <VAvatar
                 :color="chat.contato?.avatar ? undefined : 'primary'"
@@ -1574,6 +2250,12 @@ onBeforeUnmount(() => {
                 <VImg :src="chat.contato?.avatar" v-if="chat.contato?.avatar" />
                 <VIcon icon="tabler-user-filled" v-else />
               </VAvatar>
+              <VIcon
+                v-if="chat.pinned"
+                icon="tabler-pin-filled"
+                size="14"
+                class="chat-pin-icon"
+              />
               <div class="chat-item-body">
                 <div class="d-flex align-center gap-1">
                   <p class="chat-name">
@@ -1938,6 +2620,7 @@ onBeforeUnmount(() => {
                   (msg.texto ||
                     msg.media?.url ||
                     msg.resposta ||
+                    msg.contacts?.length ||
                     msg.tipo == 'call' ||
                     msg.tipo == 'call_log' ||
                     msg.tipo == 'ciphertext')
@@ -2023,6 +2706,74 @@ onBeforeUnmount(() => {
                     <p class="referral-body">
                       {{ msg.referred_product.product_retailer_id }}
                     </p>
+                  </div>
+                </div>
+
+                <!-- Cartão de contato compartilhado (mensagem type=contacts) -->
+                <div
+                  v-if="msg.contacts?.length"
+                  class="d-flex flex-column w-100 gap-2"
+                >
+                  <div
+                    v-for="(ct, ci) in msg.contacts"
+                    :key="ci"
+                    class="contact-card-wrap"
+                  >
+                    <div class="contact-card">
+                      <VAvatar
+                        color="primary"
+                        variant="tonal"
+                        size="46"
+                        class="rounded contact-thumb"
+                      >
+                        <VIcon icon="tabler-user" />
+                      </VAvatar>
+                      <div class="contact-info">
+                        <span class="contact-tag">
+                          <VIcon icon="tabler-address-book" size="12" />
+                          Contato
+                        </span>
+                        <p class="contact-name">{{ nomeContato(ct) }}</p>
+                        <p
+                          v-for="(ph, pi) in ct.phones || []"
+                          :key="pi"
+                          class="contact-phone"
+                        >
+                          <VIcon icon="tabler-phone" size="11" />
+                          {{ ph.phone }}
+                        </p>
+                      </div>
+                    </div>
+
+                    <!-- Ações do contato: iniciar no sistema ou abrir no WhatsApp -->
+                    <div
+                      v-if="telContato(ct)"
+                      class="d-flex flex-row gap-2 mt-1 contact-actions"
+                    >
+                      <VBtn
+                        size="small"
+                        variant="tonal"
+                        color="primary"
+                        prepend-icon="tabler-message-circle"
+                        class="flex-grow-1"
+                        @click.stop="iniciarConversaContato(ct)"
+                      >
+                        Iniciar conversa
+                      </VBtn>
+                      <VBtn
+                        size="small"
+                        variant="tonal"
+                        color="success"
+                        prepend-icon="tabler-brand-whatsapp"
+                        class="flex-grow-1"
+                        :href="`https://wa.me/${telContato(ct)}`"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        @click.stop
+                      >
+                        WhatsApp
+                      </VBtn>
+                    </div>
                   </div>
                 </div>
 
@@ -2226,8 +2977,9 @@ onBeforeUnmount(() => {
                 />
 
                 <p
+                  v-if="!msg.contacts?.length"
                   class="mb-0 html-content"
-                  v-html="formatWhatsAppText(msg.texto) || '...'"
+                  v-html="formatWhatsAppText(textoExibicaoMsg(msg)) || '...'"
                   style="
                     line-height: 18px;
                     word-break: break-word;
@@ -2949,6 +3701,73 @@ onBeforeUnmount(() => {
 }
 
 /* =========================================================
+     Cartão de contato compartilhado (mensagem type=contacts)
+     ========================================================= */
+.contact-card {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-width: 230px;
+  padding: 8px;
+  border-radius: 8px;
+  background-color: rgba(var(--v-theme-on-surface), 0.05);
+  border-left: solid 3px rgba(var(--v-theme-primary), 0.7);
+}
+
+.contact-card .contact-thumb {
+  flex-shrink: 0;
+}
+
+.contact-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.contact-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: rgba(var(--v-theme-primary), 1);
+}
+
+.contact-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contact-phone {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.contact-card-wrap {
+  min-width: 250px;
+}
+
+.contact-card-wrap .contact-actions {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+/* =========================================================
      Reply preview + arquivos pendentes
      ========================================================= */
 .div-resposta {
@@ -2998,6 +3817,19 @@ onBeforeUnmount(() => {
 .menu-msg {
   z-index: 9999;
   width: 230px;
+}
+
+.menu-contato {
+  z-index: 9999;
+  width: 220px;
+}
+
+/* Ícone de "fixado" no item da lista de conversas */
+.chat-pin-icon {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  color: rgba(var(--v-theme-primary), 0.85);
 }
 
 .file {
