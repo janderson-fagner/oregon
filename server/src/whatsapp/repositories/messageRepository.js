@@ -35,19 +35,23 @@ async function insertMessage(dados) {
     referred_product = null,
     // Cartão de contato compartilhado (vCard) — array bruto da Meta ou null.
     contacts = null,
+    // Localização compartilhada (type=location) — objeto bruto da Meta ou null:
+    // { latitude, longitude, name?, address? }. Guardado em coluna JSON.
+    location = null,
   } = dados;
 
   const referralJson = referral ? JSON.stringify(referral) : null;
   const referredProductJson = referred_product ? JSON.stringify(referred_product) : null;
   const contactsJson = contacts ? JSON.stringify(contacts) : null;
+  const locationJson = location ? JSON.stringify(location) : null;
 
   const resultado = await dbQuery(
     `INSERT IGNORE INTO Messages
        (empresa_id, conversation_id, wamid, direction, type,
         body, media_path, media_mime, media_filename,
         status, reply_to_wamid, sender_name, timestamp_ms,
-        referral, referred_product, contacts)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        referral, referred_product, contacts, location)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresa_id,
       conversation_id,
@@ -65,6 +69,7 @@ async function insertMessage(dados) {
       referralJson,
       referredProductJson,
       contactsJson,
+      locationJson,
     ]
   );
 
@@ -117,17 +122,31 @@ async function setReactionByWamid(targetWamid, emoji, empresaId) {
 }
 
 /**
- * Busca mensagens de uma conversa com paginação.
- * Ordenadas cronologicamente (mais antigas primeiro) via COALESCE para tratar timestamp_ms nulo.
+ * Busca mensagens de uma conversa.
+ *
+ * Princípio (corrige o bug de "mensagens sumindo"): a tela de chat precisa SEMPRE
+ * das mensagens MAIS RECENTES no carregamento inicial. Por isso buscamos em ordem
+ * DESC (recentes primeiro) com LIMIT e depois invertemos para ordem cronológica
+ * (ASC) na exibição. Antes, a query trazia ASC com OFFSET 0, devolvendo as 50
+ * mais ANTIGAS e escondendo as recentes em conversas com mais de `limit` mensagens.
+ *
+ * Ordenação estável: além da chave temporal, desempata por `id` DESC — o
+ * timestamp_ms de mensagens inbound só tem precisão de segundos, então várias
+ * mensagens no mesmo segundo ficavam em ordem não-determinística ("desorganizadas").
+ *
+ * Paginação ("carregar mais antigas") por CURSOR, imune a inserções em tempo real:
+ *  - beforeTs + beforeId: chave temporal e id da mensagem mais ANTIGA já carregada;
+ *    retorna apenas as estritamente anteriores a ela.
+ *  - Sem cursor, aceita page/limit (offset) como fallback retrocompatível.
+ *
  * @param {number} conversationId
  * @param {number} empresaId
- * @param {Object} opcoes - { page=1, limit=50 }
+ * @param {Object} opcoes - { limit=50, beforeTs?, beforeId?, page? }
  * @returns {Promise<{rows: Array, total: number}>}
  */
 async function getMessages(conversationId, empresaId, opcoes) {
-  const page = Math.max(1, parseInt((opcoes || {}).page) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt((opcoes || {}).limit) || 50));
-  const offset = (page - 1) * limit;
+  const o = opcoes || {};
+  const limit = Math.min(100, Math.max(1, parseInt(o.limit) || 50));
 
   // deleted_at IS NULL: oculta mensagens apagadas (soft-delete, só no sistema)
   const [rowTotal] = await dbQuery(
@@ -135,13 +154,36 @@ async function getMessages(conversationId, empresaId, opcoes) {
     [conversationId, empresaId]
   );
 
+  // Chave de ordenação cronológica (trata timestamp_ms nulo via created_at).
+  const KEY = 'COALESCE(timestamp_ms, UNIX_TIMESTAMP(created_at) * 1000)';
+
+  const where = ['conversation_id = ?', 'empresa_id = ?', 'deleted_at IS NULL'];
+  const params = [conversationId, empresaId];
+
+  const beforeTs = o.beforeTs != null ? parseInt(o.beforeTs) : null;
+  const beforeId = o.beforeId != null ? parseInt(o.beforeId) : null;
+  let offset = 0;
+
+  if (beforeTs != null && beforeId != null && !Number.isNaN(beforeTs) && !Number.isNaN(beforeId)) {
+    // Cursor: somente mensagens anteriores à mais antiga já carregada.
+    where.push(`(${KEY} < ? OR (${KEY} = ? AND id < ?))`);
+    params.push(beforeTs, beforeTs, beforeId);
+  } else {
+    // Fallback por página (offset). page=1 => 50 mais recentes.
+    const page = Math.max(1, parseInt(o.page) || 1);
+    offset = (page - 1) * limit;
+  }
+
   const rows = await dbQuery(
     `SELECT * FROM Messages
-     WHERE conversation_id = ? AND empresa_id = ? AND deleted_at IS NULL
-     ORDER BY COALESCE(timestamp_ms, UNIX_TIMESTAMP(created_at) * 1000) ASC
+     WHERE ${where.join(' AND ')}
+     ORDER BY ${KEY} DESC, id DESC
      LIMIT ? OFFSET ?`,
-    [conversationId, empresaId, limit, offset]
+    [...params, limit, offset]
   );
+
+  // Inverte para ordem cronológica ascendente (mais antigas no topo da bolha).
+  rows.reverse();
 
   return {
     rows,

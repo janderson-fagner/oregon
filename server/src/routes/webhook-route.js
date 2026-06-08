@@ -185,6 +185,31 @@ function extrairReferredProduct(msg) {
   return null;
 }
 
+/**
+ * Extrai o objeto de localização de uma mensagem `type: 'location'`.
+ * A Meta envia latitude/longitude (obrigatórios) e, opcionalmente, name/address.
+ * Guardado bruto na coluna JSON `location` para renderização do mapa no frontend.
+ * @param {Object} msg
+ * @returns {Object|null} { latitude, longitude, name?, address? } ou null
+ */
+function extrairLocation(msg) {
+  if (
+    msg &&
+    msg.type === 'location' &&
+    msg.location &&
+    typeof msg.location.latitude === 'number' &&
+    typeof msg.location.longitude === 'number'
+  ) {
+    return {
+      latitude: msg.location.latitude,
+      longitude: msg.location.longitude,
+      name: msg.location.name || null,
+      address: msg.location.address || null,
+    };
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────
 // GET /whatsapp — handshake de verificação do Meta
 // ─────────────────────────────────────────────
@@ -318,6 +343,7 @@ router.post('/whatsapp', async (req, res) => {
             const referral = extrairReferral(msg);
             const referredProduct = extrairReferredProduct(msg);
             const contactCard = extrairContacts(msg);
+            const location = extrairLocation(msg);
             log('webhook.msg.inbound', {
               empresa_id: empresaId, wamid: msg.id, type: msg.type, from: msg.from,
               hasMedia: !!extrairMediaId(msg), hasContext: !!msg.context,
@@ -381,6 +407,8 @@ router.post('/whatsapp', async (req, res) => {
               referred_product: referredProduct,
               // Cartão de contato compartilhado (vCard)
               contacts: contactCard,
+              // Localização compartilhada (type=location)
+              location,
             });
 
             // wamid duplicado — não emitir socket duplicado nem incrementar unread
@@ -416,6 +444,8 @@ router.post('/whatsapp', async (req, res) => {
                   referred_product: referredProduct || null,
                   // Cartão de contato (vCard) renderizado em tempo real
                   contacts: contactCard || null,
+                  // Localização renderizada em tempo real (mapa no frontend)
+                  location: location || null,
                 },
               });
             } catch (socketErr) {

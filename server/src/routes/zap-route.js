@@ -467,7 +467,10 @@ router.post('/save-anexo', (req, res, next) => {
  * @returns {number}
  */
 function mapearAckStatus(status) {
-    const mapa = { pending: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
+    // 'played' é enviado pela Meta quando o destinatário OUVE uma mensagem de voz.
+    // Sem mapeá-lo, áudios ouvidos caíam no default 0 (relógio "pendente") para sempre.
+    // Tratado como 'read' (ack 3) — entregue e visualizado.
+    const mapa = { pending: 0, sent: 1, delivered: 2, read: 3, played: 3, failed: -1 };
     return mapa[status] !== undefined ? mapa[status] : 0;
 }
 
@@ -522,6 +525,8 @@ function mapearMsgCloud(msg) {
         referred_product: safeJson(msg.referred_product, null),
         // Cartão de contato compartilhado (vCard)
         contacts: safeJson(msg.contacts, null),
+        // Localização compartilhada (type=location): { latitude, longitude, name?, address? }
+        location: safeJson(msg.location, null),
         data: msg.timestamp_ms ? new Date(Number(msg.timestamp_ms)).toISOString() : msg.created_at,
         timestamp_ms: msg.timestamp_ms,
         created_at: msg.created_at,
@@ -578,6 +583,9 @@ router.get('/getChat/:id', async (req, res) => {
 
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+        // Cursor para "carregar mensagens mais antigas" (paginação imune a tempo real)
+        const beforeTs = req.query.beforeTs;
+        const beforeId = req.query.beforeId;
 
         // Valida ownership (cross-tenant protection)
         const conversation = await conversationRepository.getById(conversationId, empresaId);
@@ -591,7 +599,7 @@ router.get('/getChat/:id', async (req, res) => {
         // Vincula cliente cadastrado + endereço + estado de atendimento/bloqueio à conversa
         await contactService.enrichConversation(conversation, empresaId);
 
-        const resultado = await messageRepository.getMessages(conversationId, empresaId, { page, limit });
+        const resultado = await messageRepository.getMessages(conversationId, empresaId, { page, limit, beforeTs, beforeId });
 
         return res.json({
             conversation,

@@ -168,6 +168,12 @@ function mapMsgFront(m) {
   // Cartão de contato compartilhado (vCard)
   out.contacts = Array.isArray(m.contacts) ? m.contacts : null
 
+  // Localização compartilhada (type=location): { latitude, longitude, name?, address? }
+  out.location =
+    m.location && m.location.latitude != null && m.location.longitude != null
+      ? m.location
+      : null
+
   return out
 }
 
@@ -197,7 +203,9 @@ function telContato(ct) {
 }
 
 function ackFromStatus(status) {
-  return { pending: 0, sent: 1, delivered: 2, read: 3, failed: -1 }[status] ?? 0
+  // 'played' (Meta) = mensagem de voz ouvida pelo destinatário → tratado como lido (3).
+  // Sem isso, áudios ouvidos exibiam o relógio de "pendente" indefinidamente.
+  return { pending: 0, sent: 1, delivered: 2, read: 3, played: 3, failed: -1 }[status] ?? 0
 }
 
 // ---- Estado da janela 24h ----
@@ -707,6 +715,33 @@ const goToImg = url => {
   if (!url) return
 
   window.open(url, "_blank")
+}
+
+// ---- Lightbox de imagem (zoom/pan/rotação) ----
+const lightboxOpen = ref(false)
+const lightboxSrc = ref("")
+
+const abrirImagem = url => {
+  if (!url) return
+  lightboxSrc.value = url
+  lightboxOpen.value = true
+}
+
+// ---- Helpers de localização (mensagem type=location) ----
+// Link universal que abre o ponto no Google Maps.
+const mapsLink = loc => {
+  if (!loc) return "#"
+
+  return `https://www.google.com/maps/search/?api=1&query=${loc.latitude},${loc.longitude}`
+}
+
+// Embed de mapa REAL e interativo (Google Maps, sem necessidade de API key).
+// Alternativa 100% OpenStreetMap (caso prefira):
+//   `https://www.openstreetmap.org/export/embed.html?bbox=${lng-0.006},${lat-0.0035},${lng+0.006},${lat+0.0035}&layer=mapnik&marker=${lat},${lng}`
+const mapEmbedUrl = loc => {
+  if (!loc) return ""
+
+  return `https://maps.google.com/maps?q=${loc.latitude},${loc.longitude}&z=16&output=embed`
 }
 
 socket.on("nova-mensagem", payload => {
@@ -1803,13 +1838,32 @@ const getMoreMsgs = async () => {
   loadingMoreMsgs.value = true
 
   try {
-    const currentCount = selectedChat.value.messagens?.length || 0
+    // Cursor = mensagem mais ANTIGA já carregada (topo da lista). A paginação por
+    // cursor é imune a inserções em tempo real (que mudariam a contagem e causariam
+    // saltos/lacunas numa paginação por página). Pula separadores de data.
+    const lista = selectedChat.value.messagens || []
+    const maisAntiga = lista.find(m => m && m.tipo !== "data" && m.id != null)
+    if (!maisAntiga) {
+      loadingMoreMsgs.value = false
+
+      return
+    }
+
+    const beforeTs =
+      maisAntiga.timestamp_ms != null
+        ? Number(maisAntiga.timestamp_ms)
+        : getMoment(maisAntiga.data).valueOf()
+
+    // Preserva a posição de scroll ao prepender (evita "pulo" da viewport).
+    const chatBox = document.querySelector(".mensagem-box")
+    const alturaAntes = chatBox ? chatBox.scrollHeight : 0
 
     const res = await $api("/zap/getChat/" + selectedChat.value.id, {
       method: "GET",
       query: {
-        page: Math.ceil(currentCount / 50) + 1,
         limit: 50,
+        beforeId: maisAntiga.id,
+        beforeTs,
       },
     })
 
@@ -1824,14 +1878,22 @@ const getMoreMsgs = async () => {
         if (m.wamid) _msgWamids.add(m.wamid)
       }
 
-      // Histórico vem ordenado do backend; basta concatenar e reordenar apenas
-      // se necessário (pagina anterior pode sobrepor cronologia).
+      // Histórico (mais antigas) vai ANTES do que já está na tela. Ordena com
+      // desempate por timestamp_ms/id para manter estabilidade no mesmo segundo.
       const merged = semDup.concat(selectedChat.value.messagens)
+      const chave = m =>
+        m.timestamp_ms != null
+          ? Number(m.timestamp_ms)
+          : getMoment(m.data).valueOf()
 
-      merged.sort(
-        (a, b) => getMoment(a.data).valueOf() - getMoment(b.data).valueOf(),
-      )
+      merged.sort((a, b) => chave(a) - chave(b) || (a.id || 0) - (b.id || 0))
       selectedChat.value.messagens = merged
+
+      // Mantém a viewport ancorada na mesma mensagem após o prepend.
+      nextTick(() => {
+        const box = document.querySelector(".mensagem-box")
+        if (box) box.scrollTop = box.scrollHeight - alturaAntes
+      })
     }
   } catch (error) {
     console.error("Error fetching more msgs:", error, error.response)
@@ -2088,6 +2150,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
+    <ImageLightbox
+      v-model="lightboxOpen"
+      :src="lightboxSrc"
+    />
+
     <MetaTemplateDialog
       v-model="templateDialog"
       :conversation-id="selectedChat?.id"
@@ -2938,6 +3005,8 @@ onBeforeUnmount(() => {
                         msg.media?.url ||
                         msg.resposta ||
                         msg.contacts?.length ||
+                        msg.location ||
+                        msg.tipo == 'location' ||
                         msg.tipo == 'call' ||
                         msg.tipo == 'call_log' ||
                         msg.tipo == 'ciphertext')
@@ -3122,6 +3191,73 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
+                  <!-- Localização compartilhada (type=location) — mapa real interativo -->
+                  <div
+                    v-if="msg.location"
+                    class="location-card"
+                  >
+                    <div class="location-map">
+                      <iframe
+                        class="location-iframe"
+                        :src="mapEmbedUrl(msg.location)"
+                        loading="lazy"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        title="Mapa da localização"
+                        allowfullscreen
+                      />
+                    </div>
+                    <div class="location-info">
+                      <div class="location-text">
+                        <VIcon
+                          icon="tabler-map-pin-filled"
+                          color="error"
+                          size="18"
+                          class="flex-shrink-0"
+                        />
+                        <div class="location-labels">
+                          <p class="location-title">
+                            {{ msg.location.name || "Localização compartilhada" }}
+                          </p>
+                          <p
+                            v-if="msg.location.address"
+                            class="location-address"
+                          >
+                            {{ msg.location.address }}
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        class="location-btn"
+                        :href="mapsLink(msg.location)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <VIcon
+                          icon="tabler-external-link"
+                          size="14"
+                        />
+                        Abrir
+                      </a>
+                    </div>
+                  </div>
+
+                  <!-- Localização sem coordenadas (mensagens antigas) -->
+                  <div
+                    v-else-if="msg.tipo == 'location'"
+                    class="w-100 d-flex flex-row gap-2 align-center"
+                  >
+                    <VAvatar
+                      size="40"
+                      color="error"
+                      variant="tonal"
+                    >
+                      <VIcon icon="tabler-map-pin" />
+                    </VAvatar>
+                    <p class="text-h6 mb-0">
+                      Localização recebida
+                    </p>
+                  </div>
+
                   <div
                     v-if="msg.hasResposta"
                     class="div-resposta cursor-pointer"
@@ -3281,8 +3417,8 @@ onBeforeUnmount(() => {
                     v-if="msg.media?.mime?.includes('image')"
                     :src="msg.media.url"
                     cover
-                    class="rounded msg-media-image"
-                    @click="goToImg(msg.media.url)"
+                    class="rounded msg-media-image cursor-pointer"
+                    @click="abrirImagem(msg.media.url)"
                   />
 
                   <!-- video -->
@@ -3346,7 +3482,10 @@ onBeforeUnmount(() => {
                   />
 
                   <p
-                    v-if="!msg.contacts?.length"
+                    v-if="
+                      !msg.contacts?.length &&
+                        !(msg.tipo == 'location' && !msg.texto)
+                    "
                     class="mb-0 html-content"
                     style="
                       line-height: 18px;
@@ -4189,6 +4328,94 @@ onBeforeUnmount(() => {
 }
 
 /* =========================================================
+     Card de localização (mensagem type=location)
+     ========================================================= */
+.location-card {
+  width: 290px;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+  background-color: rgba(var(--v-theme-surface), 1);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.location-map {
+  position: relative;
+  width: 100%;
+  height: 165px;
+  background: linear-gradient(135deg, #cfe0d0 0%, #aac4ad 100%);
+  overflow: hidden;
+}
+
+.location-iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.location-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+}
+
+.location-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.location-labels {
+  min-width: 0;
+}
+
+.location-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.location-address {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 15px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.location-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  color: rgba(var(--v-theme-primary), 1);
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.location-btn:hover {
+  background: rgba(var(--v-theme-primary), 0.22);
+}
+
+/* =========================================================
      Reply preview + arquivos pendentes
      ========================================================= */
 .div-resposta {
@@ -4496,6 +4723,7 @@ onBeforeUnmount(() => {
   .msg-media-image,
   .msg-media-video {
     max-width: 75vw;
+    min-width: 75vw;
   }
 
   .message-send {
@@ -4533,6 +4761,7 @@ onBeforeUnmount(() => {
   .msg-media-image,
   .msg-media-video {
     max-width: 70vw;
+    min-width: 70vw;
   }
 }
 </style>
